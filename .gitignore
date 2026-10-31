@@ -1,0 +1,14 @@
+**/bin/
+**/obj/
+.validation-data/
+artifacts/
+Collector/collector.config.json
+ScomMcp/appsettings.*.json
+!ScomMcp/appsettings.example.json
+snapshot.json
+collector-status.json
+last-error.txt
+.env
+*.key
+*.pfx
+*.p12

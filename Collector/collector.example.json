@@ -1,0 +1,18 @@
+{
+  "CollectorHost": "SCOM-TEST",
+  "ManagementServer": "scom.example.invalid",
+  "ManagementGroup": "ExampleManagementGroup",
+  "OperationsManagerModule": "C:\\Program Files\\Microsoft System Center\\Operations Manager\\Powershell\\OperationsManager\\OperationsManager.psd1",
+  "LocalDataDirectory": "C:\\ProgramData\\SCOMMCP-Collector\\Data",
+  "PublishDirectory": "\\\\mcp.example.invalid\\SCOMMCPData$",
+  "Computers": [
+    {
+      "Hostname": "server-a.example.invalid",
+      "EntityId": "00000000-0000-0000-0000-000000000001"
+    },
+    {
+      "Hostname": "server-b.example.invalid",
+      "EntityId": "00000000-0000-0000-0000-000000000002"
+    }
+  ]
+}
