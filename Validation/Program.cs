@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
@@ -127,6 +128,28 @@ static class Checks
         upnAuth.Callers = [new() { UserPrincipalName = "synthetic@example.invalid", Scopes = [Wire.ScopeId] }];
         var upn = Principal(oid: Guid.Empty.ToString(), extras: [new("upn", "SYNTHETIC@example.invalid")]);
         Check(CallerAuthorization.Resolve(upn, upnAuth) is not null, "UPN fallback explicit grant");
+        foreach (var field in new[] { "", "\"ObjectId\":null,", "\"ObjectId\":\"\",", "\"ObjectId\":\" \"," })
+        {
+            using var json = new MemoryStream(Encoding.UTF8.GetBytes(
+                "{\"Auth\":{\"Callers\":[{" + field +
+                "\"UserPrincipalName\":\"synthetic@example.invalid\",\"Scopes\":[\"scom-lab\"]}]}}"));
+            var configuration = new ConfigurationBuilder().AddJsonStream(json).Build();
+            var legacyGrant = Auth();
+            legacyGrant.Callers = [];
+            configuration.GetSection("Auth").Bind(legacyGrant);
+            legacyGrant.Validate();
+            Equal(null, legacyGrant.Callers[0].ObjectId, "blank optional object ID normalizes to null");
+            Check(CallerAuthorization.Resolve(upn, legacyGrant) is not null, "provider-bound legacy UPN grant accepted");
+            Equal(null, CallerAuthorization.Resolve(Principal(extras: [new("upn", "denied@example.invalid")]), legacyGrant),
+                "provider-bound legacy grant denies another UPN");
+            Throws<InvalidOperationException>(() => Hosting.AddScomServices(new ServiceCollection(), legacyGrant,
+                new SourceSettings { SnapshotEnabled = false }, new ReadModelSettings
+                {
+                    Enabled = true, DatabasePath = Path.GetFullPath("synthetic-unused.db"),
+                    ManagementGroupId = "22222222-2222-4222-8222-222222222222",
+                    ScopeKind = "managementGroup", PublisherObjectIds = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]
+                }), "indexed mode still rejects provider-bound UPN grants");
+        }
         var ambiguous = Principal(extras: [new("upn", "synthetic@example.invalid"), new("preferred_username", "other@example.invalid")]);
         Equal(null, CallerAuthorization.Resolve(ambiguous, upnAuth), "ambiguous identity denied");
         Check(Hosting.TokenValidation(auth).ValidateIssuer && Hosting.TokenValidation(auth).ValidateAudience &&

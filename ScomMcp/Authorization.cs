@@ -18,15 +18,20 @@ public sealed class AuthSettings
             string.IsNullOrWhiteSpace(RequiredScope) || RequiredScope.Any(char.IsWhiteSpace) ||
             RequiredScope.Contains('*') || Callers.Length == 0 ||
             Callers.Any(c => (string.IsNullOrWhiteSpace(c.ObjectId) == string.IsNullOrWhiteSpace(c.UserPrincipalName)) ||
-                (!string.IsNullOrEmpty(c.ObjectId) && !Guid.TryParse(c.ObjectId, out _)) ||
+                (!string.IsNullOrWhiteSpace(c.ObjectId) && !Guid.TryParse(c.ObjectId, out _)) ||
                 (!string.IsNullOrEmpty(c.UserPrincipalName) &&
                     (!c.UserPrincipalName.Contains('@') || c.UserPrincipalName.Contains('*') ||
                      c.UserPrincipalName.Any(char.IsWhiteSpace))) ||
                 c.Scopes.Length == 0 || c.Scopes.Any(s => s != Wire.ScopeId)))
             throw new InvalidOperationException("Auth configuration is missing or invalid. Refusing to start.");
         TenantId = tenantId.ToString("D");
-        foreach (var grant in Callers.Where(c => c.ObjectId is not null))
+        foreach (var grant in Callers)
         {
+            if (string.IsNullOrWhiteSpace(grant.ObjectId))
+            {
+                grant.ObjectId = null;
+                continue;
+            }
             var id = Guid.Parse(grant.ObjectId!);
             if (id == Guid.Empty)
                 throw new InvalidOperationException("Caller object ID must be nonzero. Refusing to start.");
