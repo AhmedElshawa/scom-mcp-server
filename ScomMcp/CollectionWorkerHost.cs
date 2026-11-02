@@ -21,6 +21,7 @@ public static class CollectionWorkerHost
     {
         using var logging = LoggerFactory.Create(builder => builder.AddSimpleConsole(options => options.SingleLine = true));
         var logger = logging.CreateLogger("ScomCollectionWorker");
+        var loadingConfiguration = true;
         try
         {
             if (!Path.IsPathFullyQualified(configurationPath))
@@ -38,10 +39,14 @@ public static class CollectionWorkerHost
                     throw new InvalidOperationException("Worker configuration exceeds its byte budget.");
                 bytes.Write(buffer, 0, read);
             }
-            using var document = JsonDocument.Parse(bytes.ToArray());
+            ReadOnlyMemory<byte> configurationBytes = bytes.ToArray();
+            if (configurationBytes.Span.StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }))
+                configurationBytes = configurationBytes[3..];
+            using var document = JsonDocument.Parse(configurationBytes);
             SnapshotReader.RejectDuplicateProperties(document.RootElement);
             var settings = document.RootElement.Deserialize<CollectionWorkerHostSettings>(Wire.Json) ??
                 throw new InvalidOperationException("Worker configuration is empty.");
+            loadingConfiguration = false;
             settings.Reconciliation.Validate();
             settings.Schedule.Validate();
             settings.Publisher.Validate();
@@ -77,6 +82,12 @@ public static class CollectionWorkerHost
         {
             logger.LogInformation("Worker stopped. Event={Event}", "SCOM_WORKER_CANCELLED");
             return 0;
+        }
+        catch (JsonException error) when (loadingConfiguration)
+        {
+            logger.LogError("Worker stopped. Event={Event} Code={Code} LineNumber={LineNumber} BytePositionInLine={BytePositionInLine}",
+                "SCOM_WORKER_FAILED", "WORKER_CONFIGURATION_JSON_INVALID", error.LineNumber, error.BytePositionInLine);
+            return 1;
         }
         catch (Exception error)
         {

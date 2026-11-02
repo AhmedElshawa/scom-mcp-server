@@ -14,6 +14,7 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.Data.Sqlite;
@@ -31,6 +32,58 @@ static class ReadModelChecks
 
     public static async Task Run(string root)
     {
+        var bindingSettings = Settings(Path.Combine(root, "binding-settings.db"));
+        using (var json = new MemoryStream(Encoding.UTF8.GetBytes("""
+            {"ReadModel":{"ScopeKind":"managementGroup","GroupId":null}}
+            """)))
+        {
+            var configuration = new ConfigurationBuilder().AddJsonStream(json).Build();
+            configuration.GetSection("ReadModel").Bind(bindingSettings);
+            Console.WriteLine("Read-model JSON-null binding: " +
+                (bindingSettings.GroupId is null ? "null" : bindingSettings.GroupId == "" ? "empty-string" : "other"));
+            bindingSettings.Validate();
+            if (bindingSettings.GroupId is not null)
+                throw new Exception("Management-group configuration must normalize an absent group.");
+            assertions++;
+        }
+        foreach (var groupId in new string?[] { null, "", " ", "null", Group })
+        {
+            foreach (var scopeKind in new[] { "group", "managementGroup" })
+            {
+                var candidate = Settings(Path.Combine(root, "scope-binding.db"));
+                candidate.ScopeKind = scopeKind;
+                candidate.GroupId = groupId;
+                var accepted = scopeKind == "managementGroup" ? groupId is null or "" : groupId == Group;
+                try
+                {
+                    candidate.Validate();
+                    if (!accepted) throw new Exception("Invalid scope configuration was accepted.");
+                }
+                catch (InvalidOperationException) when (!accepted) { }
+                assertions++;
+            }
+        }
+        var invalidSettings = Settings(Path.Combine(root, "invalid-settings.db"));
+        invalidSettings.AllowedPropertiesByClass = new() { [""] = ["private-sensitive-marker"] };
+        invalidSettings.AllowedMetricsByClass = new() { [""] = new() };
+        invalidSettings.MaxDatabaseBytes = 1;
+        try
+        {
+            invalidSettings.Validate();
+            throw new Exception("Invalid settings were accepted.");
+        }
+        catch (InvalidOperationException error)
+        {
+            foreach (var name in new[] { "AllowedPropertiesByClass", "AllowedMetricsByClass", "MaxDatabaseBytes" })
+            {
+                if (!error.Message.Contains(name, StringComparison.Ordinal))
+                    throw new Exception("Configuration diagnostic omitted a rejected setting.");
+                assertions++;
+            }
+            if (error.Message.Contains("private-sensitive-marker", StringComparison.Ordinal))
+                throw new Exception("Configuration diagnostic exposed a private value.");
+            assertions++;
+        }
         var settings = Settings(Path.Combine(root, "read-model.db"));
         var clock = new Clock { Now = Now };
         var source = new SourceSettings { SnapshotEnabled = false };

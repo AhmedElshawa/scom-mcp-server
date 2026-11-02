@@ -616,6 +616,8 @@ static class Checks
         var wrongSigning = new RsaSecurityKey(wrongRsa) { KeyId = "synthetic-wrong-key" };
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Production", Args = [] });
         builder.Logging.ClearProviders();
+        using var requestErrors = new RequestErrorLogger();
+        builder.Logging.AddProvider(requestErrors);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         Hosting.AddScomServices(builder.Services, auth, source);
         var memory = new MemoryReader(ds);
@@ -633,11 +635,22 @@ static class Checks
         });
         await using var app = builder.Build();
         Hosting.MapScom(app);
+        app.MapGet("/synthetic-storage-failure", (Func<string>)(() =>
+            throw new Microsoft.Data.Sqlite.SqliteException("private-sensitive-marker", 14, 14)));
         await app.StartAsync();
         try
         {
             var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
             using var client = new HttpClient { BaseAddress = new Uri(address), Timeout = TimeSpan.FromSeconds(20) };
+            using var storageFailure = await client.GetAsync("/synthetic-storage-failure");
+            Equal(HttpStatusCode.InternalServerError, storageFailure.StatusCode, "storage failure remains HTTP 500");
+            Equal("{\"error\":\"REQUEST_FAILED\"}", await storageFailure.Content.ReadAsStringAsync(),
+                "storage failure response remains sanitized");
+            Equal(true, requestErrors.Messages.Any(message => message.Contains("ErrorType=SqliteException") &&
+                message.Contains("SqliteErrorCode=14") && message.Contains("SqliteExtendedErrorCode=14")),
+                "storage diagnostic records safe exception and SQLite codes");
+            Equal(true, requestErrors.Messages.All(message => !message.Contains("private-sensitive-marker")),
+                "storage diagnostic excludes exception message");
             var health = await client.GetStringAsync("/healthz");
             using var healthJson = JsonDocument.Parse(health);
             Equal(2, healthJson.RootElement.EnumerateObject().Count(), "public health exposes service/version only");
@@ -729,6 +742,18 @@ static class Checks
                 Send(client, new { jsonrpc = "2.0", id = 3, method = "tools/call", @params = new { name, arguments } });
         }
         finally { await app.StopAsync(); }
+    }
+
+    private sealed class RequestErrorLogger : ILoggerProvider, ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
+        public ILogger CreateLogger(string categoryName) =>
+            categoryName == "ScomRequest" ? this : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Enqueue(formatter(state, exception));
+        public void Dispose() { }
     }
 
     private static Task<HttpResponseMessage> Send(HttpClient client, object payload)

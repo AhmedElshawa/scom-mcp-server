@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using ModelContextProtocol.Server;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.Data.Sqlite;
 
 namespace ScomMcp;
 
@@ -90,8 +92,11 @@ public static class Hosting
     {
         app.UseExceptionHandler(error => error.Run(async context =>
         {
+            var failure = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+            var sqlite = failure as SqliteException;
             context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ScomRequest").LogError(
-                "Request failed. TraceId={TraceId}", context.TraceIdentifier);
+                "Request failed. TraceId={TraceId} ErrorType={ErrorType} SqliteErrorCode={SqliteErrorCode} SqliteExtendedErrorCode={SqliteExtendedErrorCode}",
+                context.TraceIdentifier, failure?.GetType().Name, sqlite?.SqliteErrorCode, sqlite?.SqliteExtendedErrorCode);
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             await context.Response.WriteAsJsonAsync(new { error = "REQUEST_FAILED" });
         }));

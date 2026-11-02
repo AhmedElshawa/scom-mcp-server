@@ -76,7 +76,7 @@ that collector's scope as a substitute for configuring the indexed path.
    contain changes that are not yet available on the default branch.
 3. Use the [build and validation instructions](#build-and-validate) to run the
    synthetic checks and prepare a package.
-4. Follow the [two-server setup](#two-server-deployment-indexed-path) to configure
+4. Follow the [ordered deployment runbook](docs/indexed-deployment-runbook.md) to configure
    the receiving MCP server and source worker. Complete an authorized lab
    publication and reader check before connecting production data or publishing
    an agent.
@@ -100,6 +100,14 @@ certify metric timestamps, full-history source load, lifecycle answers or
 Copilot Studio authentication.
 
 ## Two-server deployment (indexed path)
+
+For one ordered procedure from host selection through activation, first commit
+and recurring execution, use the
+**[step-by-step indexed deployment runbook](docs/indexed-deployment-runbook.md)**.
+It includes host responsibilities, paired configuration checks, least-privilege
+permissions, explicit completion gates and error-specific recovery guidance.
+Confirmed deployment problems, corrections and outstanding verification are
+tracked in the [deployment issue and fix log](docs/deployment-issue-log.md).
 
 **Connecting an agent to MCP does not start collection or populate inventory.**
 The worker must publish a valid dataset before MCP can answer inventory questions.

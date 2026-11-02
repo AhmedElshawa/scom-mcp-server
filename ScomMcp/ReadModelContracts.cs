@@ -38,32 +38,50 @@ public sealed class ReadModelSettings
         if (WindowsToolsEnabled && !Enabled)
             throw new InvalidOperationException("Indexed Windows tools require the read model to be enabled.");
         if (!Enabled) return;
-        if (string.IsNullOrWhiteSpace(DatabasePath) || !Path.IsPathFullyQualified(DatabasePath) ||
-            DatabasePath.StartsWith(@"\\", StringComparison.Ordinal) ||
-            !ValidId(ManagementGroupId) || ScopeKind is not ("group" or "managementGroup") ||
-            (ScopeKind == "group" ? !ValidId(GroupId) : GroupId is not null) ||
-            PublisherObjectIds is null || PublisherObjectIds.Length == 0 || PublisherObjectIds.Any(id => !ValidId(id)) ||
-            AllowedPropertiesByClass is null || AllowedPropertiesByClass.Count > 256 ||
+        // The .NET 8 JSON configuration provider binds JSON null to an empty string.
+        if (ScopeKind == "managementGroup" && GroupId == "") GroupId = null;
+        var invalid = new List<string>();
+        Check(string.IsNullOrWhiteSpace(DatabasePath) || !Path.IsPathFullyQualified(DatabasePath) ||
+            DatabasePath.StartsWith(@"\\", StringComparison.Ordinal), nameof(DatabasePath));
+        Check(!ValidId(ManagementGroupId), nameof(ManagementGroupId));
+        Check(ScopeKind is not ("group" or "managementGroup"), nameof(ScopeKind));
+        Check(ScopeKind == "group" ? !ValidId(GroupId) : GroupId is not null, nameof(GroupId));
+        Check(PublisherObjectIds is null || PublisherObjectIds.Length == 0 ||
+            PublisherObjectIds.Any(id => !ValidId(id)), nameof(PublisherObjectIds));
+        Check(AllowedPropertiesByClass is null || AllowedPropertiesByClass.Count > 256 ||
             AllowedPropertiesByClass.Any(p => string.IsNullOrWhiteSpace(p.Key) || p.Key.Length > 256 ||
-                p.Value is null || p.Value.Length > 64 || p.Value.Any(n => string.IsNullOrWhiteSpace(n) || n.Length > 128)) ||
-            AllowedMetricsByClass is null || AllowedMetricsByClass.Count > 256 ||
+                p.Value is null || p.Value.Length > 64 || p.Value.Any(n => string.IsNullOrWhiteSpace(n) || n.Length > 128)),
+            nameof(AllowedPropertiesByClass));
+        Check(AllowedMetricsByClass is null || AllowedMetricsByClass.Count > 256 ||
             AllowedMetricsByClass.Any(p => string.IsNullOrWhiteSpace(p.Key) || p.Key.Length > 256 ||
                 p.Value is null || p.Value.Count > 64 || p.Value.Any(m => string.IsNullOrWhiteSpace(m.Key) ||
-                    m.Key.Length > 128 || string.IsNullOrWhiteSpace(m.Value) || m.Value.Length > 64)) ||
-            string.IsNullOrWhiteSpace(IngestionRole) || IngestionRole.Any(char.IsWhiteSpace) ||
-            MaxBatchBytes is < 1024 or > 1024 * 1024 ||
-            MaxDatasetBytes < MaxBatchBytes || MaxDatasetBytes > 32 * 1024 * 1024 ||
-            MaxRecords is < 1 or > 1000000 ||
-            MaxDatabaseBytes < 4L * MaxDatasetBytes || MaxDatabaseBytes > 1024 * 1024 * 1024 ||
-            FreshMinutes < 1 || UnavailableMinutes <= FreshMinutes || UnavailableMinutes > 1440 ||
-            SessionMinutes is < 1 or > 120 || RequestBodyTimeoutSeconds is < 1 or > 120)
-            throw new InvalidOperationException("Read model configuration is invalid. Use protected server-local storage.");
+                    m.Key.Length > 128 || string.IsNullOrWhiteSpace(m.Value) || m.Value.Length > 64)),
+            nameof(AllowedMetricsByClass));
+        Check(string.IsNullOrWhiteSpace(IngestionRole) || IngestionRole.Any(char.IsWhiteSpace), nameof(IngestionRole));
+        Check(MaxBatchBytes is < 1024 or > 1024 * 1024, nameof(MaxBatchBytes));
+        Check(MaxDatasetBytes < MaxBatchBytes || MaxDatasetBytes > 32 * 1024 * 1024, nameof(MaxDatasetBytes));
+        Check(MaxRecords is < 1 or > 1000000, nameof(MaxRecords));
+        Check(MaxDatabaseBytes < 4L * MaxDatasetBytes || MaxDatabaseBytes > 1024 * 1024 * 1024, nameof(MaxDatabaseBytes));
+        Check(FreshMinutes < 1, nameof(FreshMinutes));
+        Check(UnavailableMinutes <= FreshMinutes || UnavailableMinutes > 1440, nameof(UnavailableMinutes));
+        Check(SessionMinutes is < 1 or > 120, nameof(SessionMinutes));
+        Check(RequestBodyTimeoutSeconds is < 1 or > 120, nameof(RequestBodyTimeoutSeconds));
+        if (invalid.Count != 0)
+            throw new InvalidOperationException("Read model configuration is invalid. Check settings: " +
+                string.Join(", ", invalid) + ". Use protected server-local storage.");
         var root = Path.GetPathRoot(DatabasePath);
         if (OperatingSystem.IsWindows() && root is not null && new DriveInfo(root).DriveType == DriveType.Network)
             throw new InvalidOperationException("Read model storage must not use a mapped network drive.");
         ManagementGroupId = Guid.Parse(ManagementGroupId).ToString("D");
         GroupId = GroupId is null ? null : Guid.Parse(GroupId).ToString("D");
-        PublisherObjectIds = PublisherObjectIds.Select(id => Guid.Parse(id).ToString("D")).Distinct().ToArray();
+        PublisherObjectIds = (PublisherObjectIds ??
+            throw new InvalidOperationException("Read model configuration is invalid. Check settings: PublisherObjectIds."))
+            .Select(id => Guid.Parse(id).ToString("D")).Distinct().ToArray();
+
+        void Check(bool rejected, string name)
+        {
+            if (rejected) invalid.Add(name);
+        }
     }
 
     public sealed class WindowsMetricHostingSettings
