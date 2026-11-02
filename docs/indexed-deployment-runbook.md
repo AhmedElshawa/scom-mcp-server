@@ -86,8 +86,9 @@ for source-specific evidence; leave unverified gates false.
 
 ## 4. Prepare two complete private configurations
 
-Start from [receiver](../ScomMcp/appsettings.ReadModel.example.json) and
-[worker](../ScomMcp/appsettings.Worker.example.json) examples. They deliberately
+Start from `appsettings.ReadModel.example.json` and
+`appsettings.Worker.example.json` (under `ScomMcp` in source or `server` in the
+packaged distribution). They deliberately
 contain synthetic values and disabled verification/projection settings.
 They are structures, not ready-to-run configurations.
 

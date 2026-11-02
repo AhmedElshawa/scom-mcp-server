@@ -26,4 +26,12 @@ foreach ($name in @('appsettings.example.json', 'appsettings.ReadModel.example.j
 foreach ($name in @('README.md', 'LICENSE')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $output
 }
+$docs = Join-Path $output 'docs'
+$null = New-Item -ItemType Directory -Path (Join-Path $docs 'images')
+foreach ($name in @('indexed-deployment-runbook.md', 'deployment-issue-log.md', 'customer-evaluation.md')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\$name") -Destination $docs
+}
+foreach ($name in @('scom-reference-architecture.png', 'scom-reference-architecture.excalidraw')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\images\$name") -Destination (Join-Path $docs 'images')
+}
 Write-Output 'Package created. It includes the legacy collector and opt-in worker host/ingestion foundation, not a certified SCOM normalization profile.'

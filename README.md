@@ -69,6 +69,9 @@ that collector's scope as a substitute for configuring the indexed path.
 
 ## Get started
 
+**Customer evaluation:** see [release preparation and acceptance gates](docs/customer-evaluation.md).
+The indexed path is not a production-certified, turnkey installer.
+
 1. Review the [configuration model](#indexed-read-model-configuration-opt-in),
    [security limitations](#security-and-known-limitations), and
    [deployment acceptance checklist](#deployment-acceptance-checklist).
@@ -474,7 +477,15 @@ After successful validation, invoke packaging from the same repository root:
 ```
 
 The output contains `artifacts\package\server` (application and example settings)
-and `artifacts\package\collector` (profile, modules and diagnostics). Keep these
+and `artifacts\package\collector` (profile, modules and diagnostics), plus `docs`
+with deployment/evaluation guides and architecture assets. Check the package:
+
+```powershell
+pwsh -NoProfile -File .\Validation\Test-Package.ps1 -PackageDirectory .\artifacts\package
+```
+
+This is a read-only content check, not a clean-host installation or SCOM
+certification. Keep these
 as a reviewed package; the worker configuration must point to the installed
 profile and its reviewed hash. Copying these folders does not configure or start
 collection. Configure both receiving server and worker before a one-shot run.

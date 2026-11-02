@@ -17,6 +17,7 @@ configuration payloads or certificate details.
 | JSON `GroupId: null` failed management-group validation | Reproduced with the .NET 8 JSON configuration provider: JSON null binds to an empty string, while the original validator required a null reference | Current source normalizes only the empty string to null in management-group mode. Group scope still requires a valid GUID; whitespace, the string `"null"` and a real group ID remain rejected in management-group mode. The live workaround omitted only the key; validation then passed with Auth preserved. |
 | Health probe recorded status 0 after a targeted recycle | The failing probe used localhost HTTP and encountered HTTP 503; it did not verify the configured HTTPS endpoint | The intended hostname-based HTTPS probe passed with normal certificate validation (200). Use the configured hostname, port and application prefix. Status 0 is not an HTTP response. Do not infer startup failure from an unrelated binding or recycle again without evidence. |
 | Publisher could not use an HTTPS application base with a path prefix | Publisher originally required the URL root | Preserve the configured application prefix and normalize the trailing slash for relative ingestion routes. HTTPS/URI restrictions and no-redirect behavior remain. Root/single/nested-path regression coverage exists. |
+| Binary package README linked to omitted deployment guides and image | Packaging copied README/license but not linked documentation assets | Package the explicit documentation/image allowlist and validate required content, local Markdown file links, example JSON and common private/runtime-state exclusions before distribution. |
 
 ## Verified outcome and remaining boundaries
 
@@ -43,6 +44,9 @@ configuration payloads or certificate details.
   retaining the sanitized HTTP response. These do not replace IIS startup logs.
 - Regression tests for JSON-provider null binding, strict group-scope rejection,
   multiple rejected settings, BOM compatibility and sanitized error output.
+- [Customer evaluation gates](customer-evaluation.md) distinguish offline package
+  verification from a clean-host installation, live customer acceptance and a
+  reviewed versioned release.
 
 ## Recording the next finding
 
