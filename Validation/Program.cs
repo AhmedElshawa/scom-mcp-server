@@ -58,6 +58,7 @@ static class Checks
             var codec = new CursorCodec(Clock, source);
             var engine = new QueryEngine(source, Clock, codec);
             TestQueries(dataset, source, codec, engine);
+            ObservationLookupChecks.Run(dataset, source, Clock);
             TestNativeMemory(snapshot, source, engine);
             TestOptimizationMetadata(snapshot, source, engine);
             TestValidation(snapshot, source, engine);

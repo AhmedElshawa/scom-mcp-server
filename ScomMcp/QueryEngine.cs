@@ -1,4 +1,6 @@
 using System.Collections.Immutable;
+using System.Collections.Frozen;
+using System.Runtime.CompilerServices;
 
 namespace ScomMcp;
 
@@ -40,6 +42,7 @@ public sealed record PageData<T>(ImmutableArray<T> Rows, int TotalCount, int Pag
 
 public sealed class QueryEngine(SourceSettings settings, TimeProvider clock, CursorCodec cursors)
 {
+    private static readonly ConditionalWeakTable<Snapshot, Lazy<ObservationIndex>> ObservationIndexes = new();
     private static readonly string[] BaseLimitations =
     [
         "ONLY_APPROVED_WINDOWS_COMPUTERS_NOT_AN_ENTERPRISE_TOTAL",
@@ -317,13 +320,25 @@ public sealed class QueryEngine(SourceSettings settings, TimeProvider clock, Cur
         var samples = RawObservations(ds, entity, metric, start, end);
         // Prefer the native series per entity/window; never blend it with derived fallback observations.
         if (metric != "memoryUsedPercent" || samples.Length != 0) return samples;
-        var total = ds.Snapshot.Devices.SingleOrDefault(d => d.EntityId == entity)?.MemoryTotalMiB;
+        var index = Index(ds);
+        var total = index.Devices.GetValueOrDefault(entity)?.MemoryTotalMiB;
         return total is null ? [] : RawObservations(ds, entity, "memoryAvailableMiB", start, end)
             .Select(s => s with { Value = (total.Value - s.Value) / total.Value * 100 }).ToArray();
     }
     private static Sample[] RawObservations(Dataset ds, string entity, string metric, DateTimeOffset start, DateTimeOffset end) =>
-        ds.Snapshot.Samples.Where(s => s.EntityId == entity && s.Metric == metric &&
+        Index(ds).Series.GetValueOrDefault((entity, metric), []).Where(s =>
             s.ObservedAtUtc > start && s.ObservedAtUtc <= end).ToArray();
+    private static ObservationIndex Index(Dataset ds) =>
+        ObservationIndexes.GetValue(ds.Snapshot, snapshot => new(() => new(snapshot))).Value;
+
+    private sealed class ObservationIndex(Snapshot snapshot)
+    {
+        public FrozenDictionary<(string Entity, string Metric), ImmutableArray<Sample>> Series { get; } =
+            snapshot.Samples.GroupBy(s => (s.EntityId, s.Metric))
+                .ToFrozenDictionary(group => group.Key, group => group.ToImmutableArray());
+        public FrozenDictionary<string, Device> Devices { get; } =
+            snapshot.Devices.ToFrozenDictionary(device => device.EntityId, StringComparer.Ordinal);
+    }
     private static double? Aggregate(Sample[] samples, string statistic) => samples.Length == 0 ? null :
         statistic == "max" ? samples.Max(s => s.Value) :
         statistic == "mean" ? samples.Average(s => s.Value) :
