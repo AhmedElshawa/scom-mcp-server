@@ -19,7 +19,8 @@ schedule recurrence, merge or create a release without the relevant approval.
 | Reported working in the lab | First worker publication and agent inventory recovery after approved operational corrections. This does not certify the new packaged build or every tool/caller. |
 | Code-review corrections implemented | All four findings below have source fixes and exact-trigger offline regressions. Independent re-review and intended-host/package acceptance remain outstanding. |
 | Not yet verified | Clean-host installation, customer-specific scope/platform acceptance, supervised recurring operation and recovery, metric source load and full Studio identity acceptance. |
-| Not implemented | Guided configuration generator/checker and authoritative OS lifecycle assessment. |
+| OS lifecycle implemented offline | Additive Windows-backed lifecycle tool with exact curated Windows Server coverage, Microsoft evidence, freshness bounds, ESU separation, full counts and bound paging. Customer/Studio acceptance remains; see [profile](os-lifecycle-assessment.md). |
+| Not implemented | Guided configuration generator/checker, broader verified OS lifecycle coverage and automated evidence maintenance. |
 
 The independent review identified concrete findings, but did not provide the
 requested file-by-file coverage map. Do not describe it as an exhaustive audit,
@@ -145,7 +146,9 @@ gates pass, label any distribution an evaluation candidate.
 Do not include agent-driven administrative writes, full SCOM replication,
 unrestricted live queries or untested multi-node/external-database designs.
 OS lifecycle answers require verified applicability/version/edition mapping,
-provenance, update cadence and explicit unknown results; they are not implemented.
+provenance, update cadence and explicit unknown results. The
+[curated Windows Server profile](os-lifecycle-assessment.md) implements these
+offline; broader OS coverage and automatic evidence maintenance remain deferred.
 
 ## Human-readable operator journey
 

@@ -524,7 +524,8 @@ static class ReadModelChecks
                     ("list_devices", new { pageSize = 50 }),
                     ("get_device_details", new { entityId = batch.WindowsInventory!.Devices[0].EntityId }),
                     ("get_utilization", new { metric = "cpuPercent", statistic = "mean", comparePrevious = true }),
-                    ("get_capacity_summary", new { resource = "disk", pageSize = 50 })
+                    ("get_capacity_summary", new { resource = "disk", pageSize = 50 }),
+                    ("list_os_support_assessments", new { pageSize = 1 })
                 };
                 foreach (var (name, arguments) in requests)
                 {
@@ -545,6 +546,13 @@ static class ReadModelChecks
                     using var data = JsonDocument.Parse(toolResult.GetProperty("content")[0].GetProperty("text").GetString()!);
                     Check(data.RootElement.GetProperty("datasetId").GetString() == publishedSession,
                         "indexed tool uses same activated dataset as generic tools: " + name);
+                    if (name == "list_os_support_assessments")
+                    {
+                        Check(data.RootElement.GetProperty("data").GetProperty("scopeComputerCount").GetInt32() ==
+                            batch.WindowsInventory!.Devices.Length, "indexed lifecycle counts actual computers not generic objects");
+                        Check(data.RootElement.GetProperty("data").GetProperty("rows").GetArrayLength() <= 1,
+                            "indexed lifecycle bounded page");
+                    }
                 }
             }
 
@@ -627,7 +635,7 @@ static class ReadModelChecks
         }
         finally { await app.StopAsync(); }
         if (windowsTools)
-            Console.WriteLine($"PASS: {assertions - startedAssertions} indexed Windows HTTP assertions; real publisher, DI and all six authenticated tools.");
+            Console.WriteLine($"PASS: {assertions - startedAssertions} indexed Windows HTTP assertions; real publisher, DI, six existing tools and additive lifecycle.");
 
         string Token(string oid, bool delegated)
         {

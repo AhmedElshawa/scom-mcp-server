@@ -8,6 +8,8 @@ branch is not a tagged, supported binary release.
 ## What is available
 
 - Read-only MCP tools over committed retained data, not per-question SDK queries.
+- [Windows Server lifecycle assessment](os-lifecycle-assessment.md) using an
+  evidence-cited curated catalog with explicit unknown and stale-evidence behavior.
 - Separately executed scoped SCOM worker, authenticated ingestion and local
   indexed read model with independent worker checkpoint storage.
 - Inventory-only onboarding with explicit missing/partial/unavailable behavior;
@@ -81,7 +83,7 @@ delete state or point the receiver at the worker checkpoint to bypass startup.
 | Recovery and upgrade | Protected backups, controlled package replacement, checkpoint/policy compatibility and approved failure/restore rehearsal. Never delete pinned state to make checks pass. |
 | Copilot Studio identity | Intended per-caller delegated authorization and denied-caller/scope behavior through the real connector. |
 | Metrics, if enabled | Timestamp semantics, rule/unit mappings, raw observation parity and approved 14-day workload/budget tests. Inventory acceptance alone is insufficient. |
-| OS lifecycle, if requested | A verified lifecycle source/mapping with applicability, provenance and explicit unknown results. Not implemented by this release. |
+| OS lifecycle | Implemented curated Windows Server profile, not universal OS support. Validate actual captions/editions, catalog freshness/maintenance ownership, unknown/missing counts and Studio interpretation; no entitlement or patch-compliance claim. |
 
 Guided deployment checking/configuration generation is proposed future work,
 not an included installer. Production rollout remains blocked on the applicable

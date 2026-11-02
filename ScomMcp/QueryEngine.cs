@@ -40,8 +40,16 @@ public sealed record CapacityRow(string EntityId, string? ParentEntityId, string
     string? SourceMetric, bool? Optimized);
 public sealed record PageData<T>(ImmutableArray<T> Rows, int TotalCount, int PageSize, string? NextCursor);
 
-public sealed class QueryEngine(SourceSettings settings, TimeProvider clock, CursorCodec cursors)
+public sealed partial class QueryEngine(SourceSettings settings, TimeProvider clock, CursorCodec cursors,
+    LifecycleSettings? lifecycle = null)
 {
+    private readonly LifecycleSettings lifecyclePolicy = ValidateLifecycle(lifecycle ?? new());
+
+    private static LifecycleSettings ValidateLifecycle(LifecycleSettings value)
+    {
+        value.Validate();
+        return new() { ApproachingSupportDays = value.ApproachingSupportDays, MaxCatalogAgeDays = value.MaxCatalogAgeDays };
+    }
     private static readonly ConditionalWeakTable<Snapshot, Lazy<ObservationIndex>> ObservationIndexes = new();
     private static readonly string[] BaseLimitations =
     [

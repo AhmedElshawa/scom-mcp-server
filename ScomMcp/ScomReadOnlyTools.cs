@@ -58,6 +58,13 @@ public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine
             minFreePercent, maxFreePercent, pageSize, cursor), cancellationToken,
             () => QueryEngine.ValidateCapacity(entityId, resource, groupId, minFreePercent, maxFreePercent, pageSize));
 
+    [McpServerTool(Name = "list_os_support_assessments", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Assess retained scoped computers against the curated Microsoft Windows Server lifecycle profile, not a live query or patch/entitlement audit. Exact product+edition captions only; missing/ambiguous/unsupported inventory and stale catalog remain unknown. Mainstream/extended end dates are inclusive Pacific dates; approaching means extended end within configured days, never ESU entitlement. Complete retained-computer counts precede bounded page (1..50). assessment filter: mainstream|extended|ended|unknown|unsupported|approaching. Cursor binds caller,scope,dataset,filter,date,catalog and policy; restart paging after any change. Read evidence URLs, verification date, inventory freshness and coverage.")]
+    public Task<CallToolResult> OsSupport(string? scopeId = null, string? assessment = null,
+        int pageSize = 20, string? cursor = null, CancellationToken cancellationToken = default) =>
+        Execute(scopeId, (ds, caller, scope) => engine.OsSupport(ds, caller, scope, assessment, pageSize, cursor),
+            cancellationToken, () => QueryEngine.ValidateLifecycleQuery(assessment, pageSize));
+
     private async Task<CallToolResult> Execute(string? scopeId, Func<Dataset, Caller, string, Envelope> run,
         CancellationToken ct, Action? validate = null)
     {

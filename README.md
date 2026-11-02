@@ -18,7 +18,8 @@ versioned read model rather than replicating the SCOM databases.
 > and customer-specific validation. Production readiness, installed SCOM and
 > management-pack compatibility, source collection load, and Copilot Studio
 > integration require the [deployment acceptance checklist](#deployment-acceptance-checklist).
-> OS support-lifecycle assessment and administrative write actions are not
+> OS support-lifecycle assessment has a bounded, curated Windows Server profile;
+> customer acceptance remains required. Administrative write actions are not
 > implemented. This is a community project, not a Microsoft-supported product.
 
 ## Key features
@@ -38,7 +39,7 @@ versioned read model rather than replicating the SCOM databases.
 - **Separated access policies:** Authenticate ingestion publishers separately from
   delegated MCP readers, with configured source and caller authorization.
 - **Compatibility path:** Retain the original two-computer snapshot collector and
-  its six-tool interface as the default configuration.
+  its six existing tool contracts, with an additive read-only OS lifecycle tool.
 
 ## Solution overview
 
@@ -72,8 +73,8 @@ that collector's scope as a substitute for configuring the indexed path.
 The MCP supplies **read-only, source-backed evidence for inventory and
 troubleshooting**. The agent can explain retained observations and suggest
 investigation steps; it cannot guarantee a root cause or perform remediation.
-The full configured implementation exposes six Windows tools and five generic
-indexed tools. Availability depends on enabled surfaces, approved scope, exposed
+The full configured implementation exposes six existing Windows tools, one
+additive OS lifecycle tool and five generic indexed tools. Availability depends on enabled surfaces, approved scope, exposed
 fields, accepted mappings and successfully collected data.
 
 | IT-admin use case / example question | Tool evidence | Important boundary |
@@ -87,6 +88,7 @@ fields, accepted mappings and successfully collected data.
 | "Which volumes have less than 10% free space, and what capacity is known?" | `get_capacity_summary` | Memory/disk values as of the dataset; volumes and machines counted separately. Missing totals/usage remain unknown. |
 | "Show the retained samples supporting that conclusion." | `list_metric_observations` | Selected raw samples with units, rule, time and optimization flag, not every counter or unlimited history. |
 | "When was this data collected, and is the answer incomplete or stale?" | `get_source_status`, coverage/provenance on tool results | Freshness is independent of HTTP health. Failed/unavailable data must not be presented as current complete evidence. |
+| "Which approved computers approach the end of extended OS support within a year?" | `list_os_support_assessments` | Exact curated Windows Server product/edition captions only; separate mainstream/extended dates, Microsoft citations, bounded catalog freshness and explicit unknown counts. ESU entitlement is never assumed. |
 
 **Implementation is not deployment acceptance.** Inventory recovery was reported
 in the lab. Metric capabilities require separately verified source rules, units,
@@ -97,9 +99,10 @@ tools, expected scope, allowed/denied users and refresh behavior. Review the
 
 **Not provided:** guaranteed root-cause diagnosis, per-question real-time SDK
 queries, every SCOM counter, administrative/alert writes, license compliance or
-certification of untested platforms. OS end-of-support assessment is roadmap work
-until authoritative lifecycle mapping and explicit unknown handling are
-implemented. Generic class support alone does not certify every management pack
+certification of untested platforms. OS assessment uses the
+[declared Windows Server coverage profile](docs/os-lifecycle-assessment.md),
+not universal OS/build inference or automatic vendor-feed updates.
+Generic class support alone does not certify every management pack
 or provide Linux/network inventory through the Windows tool contract.
 
 ## Get started
@@ -1230,8 +1233,9 @@ The initial targets are SCOM 2025 and 2022, not certified profiles. Until this
 evidence is available, the production worker, independent source completeness
 checks and incremental reconciliation remain unfinished. Indexed six-tool
 compatibility is implemented and tested offline below, but the production worker
-profile that supplies it is not certified. OS support-lifecycle mapping and
-write/admin actions are deferred.
+profile that supplies it is not certified. OS support-lifecycle assessment is
+implemented for the [declared curated profile](docs/os-lifecycle-assessment.md);
+customer applicability acceptance remains. Write/admin actions are deferred.
 
 `Collector\ScomSdkReader.psm1` implements the installed-signature object-ID reader
 boundary for an SDK-capable Windows PowerShell host. It requires an already-created
@@ -1318,9 +1322,10 @@ view for those tools. This requires `ReadModel:Enabled: true`,
 read-model freshness settings. Startup rejects mixed legacy/indexed Windows
 configuration rather than silently returning tools from different datasets.
 Generic tools and Windows tools then use the same committed dataset identity.
-With both Windows projection and snapshot mode disabled, the six tools explicitly
+With both Windows projection and snapshot mode disabled, the Windows-backed tools explicitly
 return `SOURCE_UNAVAILABLE`. With `ReadModel:Enabled` absent/false, the original
-six-tool surface and two-computer validation remain unchanged.
+six contracts and two-computer validation remain unchanged; the additive
+`list_os_support_assessments` tool uses that same legacy reader.
 
 In indexed Windows mode, batches may include `windowsInventory` with required
 `devices` and `volumes` arrays using the existing `Device`/`Volume` contracts.
@@ -1491,9 +1496,11 @@ these gates. Do not enable verification flags to bypass a failed gate.
 
 Copilot Studio's connection instructions are documented at
 <https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent>.
-Lifecycle assessment and write/admin actions are not implemented in this release.
-An agent must not infer OS support dates from inventory text or claim it executed
-remediation; missing lifecycle/connection evidence is unknown/not assessed.
+OS lifecycle assessment is available through `list_os_support_assessments`, with
+exact source-backed product/edition matching and explicit evidence freshness.
+See [coverage, configuration and unknown semantics](docs/os-lifecycle-assessment.md).
+An agent must use those deterministic assessments, not invent dates from free text
+or claim it executed remediation. Write/admin actions remain unsupported.
 
 ## Configure the server
 

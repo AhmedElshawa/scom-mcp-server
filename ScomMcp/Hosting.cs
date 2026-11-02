@@ -11,10 +11,12 @@ namespace ScomMcp;
 public static class Hosting
 {
     public static void AddScomServices(IServiceCollection services, AuthSettings auth, SourceSettings source,
-        ReadModelSettings? readModel = null)
+        ReadModelSettings? readModel = null, LifecycleSettings? lifecycle = null)
     {
         auth.Validate();
         source.Validate();
+        lifecycle ??= new();
+        lifecycle.Validate();
         readModel ??= new();
         readModel.Validate();
         if (!source.SnapshotEnabled && !readModel.Enabled)
@@ -26,6 +28,7 @@ public static class Hosting
             throw new InvalidOperationException("Indexed Windows tools require read model enabled, legacy snapshots disabled and matching freshness settings.");
         services.AddSingleton(auth);
         services.AddSingleton(source);
+        services.AddSingleton(lifecycle);
         services.AddSingleton(readModel);
         services.AddSingleton<ReadModelStore>();
         services.AddRateLimiter(options =>

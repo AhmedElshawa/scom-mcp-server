@@ -18,6 +18,11 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
 
+if (args is ["--lifecycle-checks"])
+{
+    OsLifecycleChecks.Run();
+    return 0;
+}
 if (args is ["--read-model-fault", var mode, var path, var session])
     return ReadModelFaultChecks.Child(mode, path, session);
 if (args is ["--normalization-child", var normalizationMode])
@@ -59,6 +64,7 @@ static class Checks
             var engine = new QueryEngine(source, Clock, codec);
             TestQueries(dataset, source, codec, engine);
             ObservationLookupChecks.Run(dataset, source, Clock);
+            OsLifecycleChecks.Run();
             TestNativeMemory(snapshot, source, engine);
             TestOptimizationMetadata(snapshot, source, engine);
             TestValidation(snapshot, source, engine);
@@ -700,10 +706,10 @@ static class Checks
             Equal(HttpStatusCode.OK, init.StatusCode, "valid JWT initializes MCP");
             var listing = await Send(client, new { jsonrpc = "2.0", id = 2, method = "tools/list", @params = new { } });
             var tools = Rpc(await listing.Content.ReadAsStringAsync()).GetProperty("result").GetProperty("tools");
-            Equal(6, tools.GetArrayLength(), "six and only six MCP tools");
+            Equal(7, tools.GetArrayLength(), "six existing tools plus additive lifecycle assessment");
             var names = tools.EnumerateArray().Select(t => t.GetProperty("name").GetString()).Order().ToArray();
             Check(names.SequenceEqual(new[] { "get_capacity_summary", "get_device_details", "get_inventory_summary",
-                "get_source_status", "get_utilization", "list_devices" }), "exact tool names");
+                "get_source_status", "get_utilization", "list_devices", "list_os_support_assessments" }), "exact tool names");
             foreach (var tool in tools.EnumerateArray())
             {
                 var annotations = tool.GetProperty("annotations");
@@ -721,6 +727,19 @@ static class Checks
             var envelope = TextEnvelope(result);
             Equal(2, envelope.GetProperty("data").GetProperty("uniqueComputerCount").GetInt32(), "MCP tool returns actual filtered count");
             Equal("1.0", envelope.GetProperty("schemaVersion").GetString(), "MCP envelope preserved");
+            var lifecycleDenied = await Call("list_os_support_assessments", new { scopeId = "unknown" });
+            Equal(HttpStatusCode.Forbidden, lifecycleDenied.StatusCode, "lifecycle scope denied over HTTP");
+            var lifecycleResponse = await Call("list_os_support_assessments", new { pageSize = 1 });
+            var lifecycleData = TextEnvelope(Rpc(await lifecycleResponse.Content.ReadAsStringAsync()).GetProperty("result")).GetProperty("data");
+            Equal(2, lifecycleData.GetProperty("totalCount").GetInt32(), "legacy HTTP lifecycle full retained count");
+            Equal(1, lifecycleData.GetProperty("rows").GetArrayLength(), "legacy HTTP lifecycle bounded page");
+            var lifecycleNext = await Call("list_os_support_assessments",
+                new { pageSize = 1, cursor = lifecycleData.GetProperty("nextCursor").GetString() });
+            Equal(1, TextEnvelope(Rpc(await lifecycleNext.Content.ReadAsStringAsync()).GetProperty("result"))
+                .GetProperty("data").GetProperty("rows").GetArrayLength(), "legacy HTTP lifecycle continuation");
+            var lifecycleInvalid = await Call("list_os_support_assessments", new { assessment = "invalid" });
+            Equal(-32602, Rpc(await lifecycleInvalid.Content.ReadAsStringAsync()).GetProperty("error").GetProperty("code").GetInt32(),
+                "lifecycle invalid arguments JSON-RPC");
             var missing = await Call("get_device_details", new { entityId = Guid.Empty.ToString() });
             var missingResult = Rpc(await missing.Content.ReadAsStringAsync()).GetProperty("result");
             Check(missingResult.GetProperty("isError").GetBoolean(), "missing entity isError");
@@ -748,6 +767,12 @@ static class Checks
             Equal(Now.AddMinutes(-2), nativeCapacityRow.GetProperty("observedAtUtc").GetDateTimeOffset(), "MCP native capacity timestamp");
             Equal(false, nativeCapacityRow.GetProperty("optimized").GetBoolean(), "MCP native capacity optimized=false preserved");
             memory.Fail = true;
+            var lifecycleInvalidWhileUnavailable = await Call("list_os_support_assessments", new { pageSize = 0 });
+            Equal(-32602, Rpc(await lifecycleInvalidWhileUnavailable.Content.ReadAsStringAsync()).GetProperty("error").GetProperty("code").GetInt32(),
+                "lifecycle argument validation precedes unavailable source read");
+            var lifecycleFailed = await Call("list_os_support_assessments", new { });
+            Equal("SOURCE_UNAVAILABLE", TextEnvelope(Rpc(await lifecycleFailed.Content.ReadAsStringAsync()).GetProperty("result"))
+                .GetProperty("data").GetProperty("errorCode").GetString(), "lifecycle never bypasses unavailable inventory");
             var invalidWhileUnavailable = await Call("get_utilization", new { metric = "invalid" });
             Equal(-32602, Rpc(await invalidWhileUnavailable.Content.ReadAsStringAsync()).GetProperty("error").GetProperty("code").GetInt32(),
                 "argument validation precedes source availability");

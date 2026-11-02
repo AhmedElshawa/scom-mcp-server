@@ -50,6 +50,16 @@ configuration payloads or certificate details.
 
 ## Independent-review corrections
 
+### OS lifecycle capability gap
+
+Earlier builds intentionally could not answer OS-support questions. The additive
+`list_os_support_assessments` tool now uses a [versioned curated Microsoft
+Windows Server catalog](os-lifecycle-assessment.md), never per-question scraping
+or inferred build dates. Exact product/edition matching, support boundaries,
+unknown coverage, bounded evidence age, ESU non-entitlement, complete counts and
+bound paging are covered offline. This does not certify customer inventory,
+patch state or Copilot Studio acceptance; the original six contracts remain.
+
 | Finding | Implemented correction | Verification and remaining boundary |
 |---|---|---|
 | Worker crash could orphan its collector | Atomic Windows Job Object association during process creation, kill-on-close and descendant cleanup before releasing collection guard | Synthetic worker-kill/replacement, descendant, cancellation/deadline and UTF-8 tests pass. Requires Windows 10/Server 2016+ and supported job restrictions; intended service/task host acceptance remains. |

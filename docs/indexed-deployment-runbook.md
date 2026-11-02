@@ -247,6 +247,15 @@ from current connectivity, expose unknown/partial values and avoid unsupported
 OS-lifecycle conclusions. With metrics disabled, utilization being unavailable
 and capacity usage being unknown are expected, not reasons to fabricate values.
 
+For `list_os_support_assessments`, follow the
+[declared Windows Server profile](os-lifecycle-assessment.md). Confirm the effective
+`Lifecycle` thresholds, catalog version/verification age, exact observed captions,
+unknown/missing counts and Microsoft citations. Stop lifecycle acceptance if the
+catalog is stale or applicability is ambiguous; inventory may still be useful.
+Do not overwrite captions, raise the freshness ceiling, assume ESU entitlement or
+modify source collection to force an assessment. This check is read-only and does
+not replace the separate source/identity/recurrence gates.
+
 **Completion check:** record results and limitations in the private deployment
 record. Do not call the deployment successful merely because the agent connects.
 
