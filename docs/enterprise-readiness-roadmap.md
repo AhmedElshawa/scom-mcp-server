@@ -20,6 +20,7 @@ schedule recurrence, merge or create a release without the relevant approval.
 | Code-review corrections implemented | All four findings below have source fixes and exact-trigger offline regressions. Independent re-review and intended-host/package acceptance remain outstanding. |
 | Not yet verified | Clean-host installation, customer-specific scope/platform acceptance, supervised recurring operation and recovery, metric source load and full Studio identity acceptance. |
 | OS lifecycle implemented offline | Additive Windows-backed lifecycle tool with exact curated Windows Server coverage, Microsoft evidence, freshness bounds, ESU separation, full counts and bound paging. Customer/Studio acceptance remains; see [profile](os-lifecycle-assessment.md). |
+| Targeted live transport implemented; source-dependent | Approved outbound worker pull, expiring bounded inbox, caller/publisher isolation and one-object health/alerts protocol. Fake-source checks do not certify SDK bounds or fresh membership; no production profile shipped. Keep [live verification](targeted-live-verification.md) disabled until those gates are met. |
 | Not implemented | Guided configuration generator/checker, broader verified OS lifecycle coverage and automated evidence maintenance. |
 
 The independent review identified concrete findings, but did not provide the

@@ -74,7 +74,8 @@ The MCP supplies **read-only, source-backed evidence for inventory and
 troubleshooting**. The agent can explain retained observations and suggest
 investigation steps; it cannot guarantee a root cause or perform remediation.
 The full configured implementation exposes six existing Windows tools, one
-additive OS lifecycle tool and five generic indexed tools. Availability depends on enabled surfaces, approved scope, exposed
+additive OS lifecycle tool, five generic indexed tools and a disabled-by-default
+targeted live-verification surface. Availability depends on enabled surfaces, approved scope, exposed
 fields, accepted mappings and successfully collected data.
 
 | IT-admin use case / example question | Tool evidence | Important boundary |
@@ -89,6 +90,7 @@ fields, accepted mappings and successfully collected data.
 | "Show the retained samples supporting that conclusion." | `list_metric_observations` | Selected raw samples with units, rule, time and optimization flag, not every counter or unlimited history. |
 | "When was this data collected, and is the answer incomplete or stale?" | `get_source_status`, coverage/provenance on tool results | Freshness is independent of HTTP health. Failed/unavailable data must not be presented as current complete evidence. |
 | "Which approved computers approach the end of extended OS support within a year?" | `list_os_support_assessments` | Exact curated Windows Server product/edition captions only; separate mainstream/extended dates, Microsoft citations, bounded catalog freshness and explicit unknown counts. ESU entitlement is never assumed. |
+| "After inspecting this retained critical application alert, its relationships and metrics, can you verify this object's current state?" | `verify_object_current_state` | Opt-in one-object monitoring health/alerts only, via outbound source worker. Transport is implemented/tested with fake sources; a production bounded fresh-scope provider is **not certified or shipped**, so keep disabled. No reachability/RCA or live graph/metrics/remediation. |
 
 **Implementation is not deployment acceptance.** Inventory recovery was reported
 in the lab. Metric capabilities require separately verified source rules, units,
@@ -104,6 +106,10 @@ certification of untested platforms. OS assessment uses the
 not universal OS/build inference or automatic vendor-feed updates.
 Generic class support alone does not certify every management pack
 or provide Linux/network inventory through the Windows tool contract.
+
+The optional [targeted current-state verification](docs/targeted-live-verification.md)
+is an explicit exception to retained-only answering, not a general live proxy.
+Its disabled/unavailable states never return retained data labeled as live.
 
 ## Get started
 

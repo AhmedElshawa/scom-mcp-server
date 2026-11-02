@@ -10,6 +10,9 @@ branch is not a tagged, supported binary release.
 - Read-only MCP tools over committed retained data, not per-question SDK queries.
 - [Windows Server lifecycle assessment](os-lifecycle-assessment.md) using an
   evidence-cited curated catalog with explicit unknown and stale-evidence behavior.
+- [Optional targeted live-verification transport](targeted-live-verification.md):
+  fake-source tested, disabled by default, production bounded source provider
+  not certified/shipped. It is not accepted live functionality.
 - Separately executed scoped SCOM worker, authenticated ingestion and local
   indexed read model with independent worker checkpoint storage.
 - Inventory-only onboarding with explicit missing/partial/unavailable behavior;

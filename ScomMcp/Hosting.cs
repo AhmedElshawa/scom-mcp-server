@@ -11,7 +11,7 @@ namespace ScomMcp;
 public static class Hosting
 {
     public static void AddScomServices(IServiceCollection services, AuthSettings auth, SourceSettings source,
-        ReadModelSettings? readModel = null, LifecycleSettings? lifecycle = null)
+        ReadModelSettings? readModel = null, LifecycleSettings? lifecycle = null, TargetedLiveSettings? targetedLive = null)
     {
         auth.Validate();
         source.Validate();
@@ -19,6 +19,8 @@ public static class Hosting
         lifecycle.Validate();
         readModel ??= new();
         readModel.Validate();
+        targetedLive ??= new();
+        targetedLive.Validate(readModel);
         if (!source.SnapshotEnabled && !readModel.Enabled)
             throw new InvalidOperationException("At least one source must be enabled.");
         if (readModel.Enabled && auth.Callers.Any(c => c.ObjectId is null))
@@ -29,6 +31,8 @@ public static class Hosting
         services.AddSingleton(auth);
         services.AddSingleton(source);
         services.AddSingleton(lifecycle);
+        services.AddSingleton(targetedLive);
+        services.AddSingleton<TargetedLiveChecks>();
         services.AddSingleton(readModel);
         services.AddSingleton<ReadModelStore>();
         services.AddRateLimiter(options =>
@@ -68,7 +72,8 @@ public static class Hosting
         });
         var mcp = services.AddMcpServer(options => options.ServerInfo = new() { Name = "ScomReadOnlyMcp", Version = "1.0.0" })
             .WithHttpTransport(options => options.Stateless = true)
-            .WithTools<ScomReadOnlyTools>();
+            .WithTools<ScomReadOnlyTools>()
+            .WithTools<TargetedLiveTools>();
         if (readModel.Enabled) mcp.WithTools<ReadModelTools>();
     }
 
@@ -163,5 +168,6 @@ public static class Hosting
         app.MapGet("/healthz", () => Results.Json(new { service = "ScomReadOnlyMcp", version = "1.0.0" })).AllowAnonymous();
         app.MapMcp("/mcp").RequireAuthorization("ScomRead");
         ReadModelHosting.Map(app);
+        TargetedLiveHosting.Map(app);
     }
 }

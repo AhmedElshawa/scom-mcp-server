@@ -23,6 +23,7 @@ $required = @(
     'docs\deployment-issue-log.md', 'docs\customer-evaluation.md',
     'docs\enterprise-readiness-roadmap.md',
     'docs\os-lifecycle-assessment.md',
+    'docs\targeted-live-verification.md',
     'docs\images\scom-reference-architecture.png', 'docs\images\scom-reference-architecture.excalidraw'
 )
 foreach ($relative in $required) {

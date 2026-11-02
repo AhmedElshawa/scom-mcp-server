@@ -415,8 +415,11 @@ static class ReadModelChecks
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { Args = [] });
         builder.Logging.ClearProviders();
         builder.WebHost.UseUrls("http://127.0.0.1:0");
-        Hosting.AddScomServices(builder.Services, auth, new() { SnapshotEnabled = false }, settings);
-        builder.Services.AddSingleton<TimeProvider>(new Clock { Now = manifest.Metrics.AsOfUtc });
+        var liveSettings = new TargetedLiveSettings { Enabled = true, PublisherObjectId = Publisher,
+            ProviderPolicySha256 = new('a', 64), ExecutionSeconds = 1 };
+        Hosting.AddScomServices(builder.Services, auth, new() { SnapshotEnabled = false }, settings, targetedLive: liveSettings);
+        var httpClock = new Clock { Now = manifest.Metrics.AsOfUtc };
+        builder.Services.AddSingleton<TimeProvider>(httpClock);
         builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
         {
             options.Authority = null;
@@ -513,6 +516,82 @@ static class ReadModelChecks
                 "worker-to-HTTP-to-indexed-store activation is end-to-end");
             Check(await publisher.PublishAsync(publishedSession, manifest, PublisherBatches()) == publishedSession,
                 "whole prepared session can replay after acknowledged commit before source checkpoint");
+            var liveSource = new SyntheticLiveSource(httpClock);
+            using (var liveWorker = new TargetedLiveWorker(new() { Endpoint = new Uri("https://synthetic.invalid/") },
+                _ => Task.FromResult(Token(Publisher, delegated: false)),
+                new(liveSettings.ProviderPolicySha256, app.Services.GetRequiredService<TargetedLiveChecks>().Source, true),
+                liveSource, httpClock, Microsoft.Extensions.Logging.Abstractions.NullLogger<TargetedLiveWorker>.Instance,
+                new LoopbackPublisherHandler(new Uri(address), dropLiveResultOnce: true)))
+            {
+                Check(!await liveWorker.RunOnceAsync(default), "live poll readiness has zero source work");
+                var target = batch.Objects[0].Id;
+                async Task<JsonElement> LiveCall(object arguments)
+                {
+                    using var response = await client.PostAsync("/mcp", Content(Bytes(new
+                    {
+                        jsonrpc = "2.0", id = 19, method = "tools/call",
+                        @params = new { name = "verify_object_current_state", arguments }
+                    })));
+                    var text = await response.Content.ReadAsStringAsync();
+                    if (text.StartsWith("event:", StringComparison.Ordinal) || text.StartsWith("data:", StringComparison.Ordinal))
+                        text = string.Join("", text.Split('\n').Where(line => line.StartsWith("data:", StringComparison.Ordinal))
+                            .Select(line => line[5..].Trim()));
+                    using var rpc = JsonDocument.Parse(text);
+                    return rpc.RootElement.Clone();
+                }
+                static JsonElement LiveData(JsonElement rpc)
+                {
+                    using var document = JsonDocument.Parse(rpc.GetProperty("result").GetProperty("content")[0].GetProperty("text").GetString()!);
+                    return document.RootElement.Clone();
+                }
+                var missingTarget = await LiveCall(new { objectId = "ffffffff-ffff-4fff-8fff-ffffffffffff" });
+                Check(LiveData(missingTarget).GetProperty("error").GetString() == "NOT_FOUND" && liveSource.Calls == 0,
+                    "unknown retained ID never causes source access");
+                using var deniedClaim = await client.PostAsync("/ingestion/live/claim", Content(Bytes(new
+                {
+                    providerPolicySha256 = liveSettings.ProviderPolicySha256,
+                    source = app.Services.GetRequiredService<TargetedLiveChecks>().Source, contractVerified = true
+                })));
+                Check(deniedClaim.StatusCode == HttpStatusCode.Forbidden, "delegated reader cannot fulfill source requests");
+                var liveResponse = LiveCall(new { objectId = target });
+                using (var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                    while (!await liveWorker.RunOnceAsync(bound.Token)) await Task.Delay(10, bound.Token);
+                var liveData = LiveData(await liveResponse);
+                Check(liveData.GetProperty("mode").GetString() == "targetedLive" &&
+                    liveData.GetProperty("observation").GetProperty("scopeVerified").GetBoolean(), "fake-source authenticated live round trip");
+                Check(liveSource.Calls == 1 && liveData.GetProperty("observation").GetProperty("objectId").GetString() == target,
+                    "one admitted target yields one source invocation");
+                httpClock.Now = httpClock.Now.AddSeconds(2);
+                liveSource.Outside = true;
+                var removedResponse = LiveCall(new { objectId = target });
+                using (var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                    while (!await liveWorker.RunOnceAsync(bound.Token)) await Task.Delay(10, bound.Token);
+                Check(LiveData(await removedResponse).GetProperty("error").GetString() == "NOT_FOUND",
+                    "source membership removal never serves historical or live attributes");
+                httpClock.Now = httpClock.Now.AddSeconds(2);
+                liveSource.Outside = false;
+                liveSource.DelayUntilCancelled = true;
+                var timedResponse = LiveCall(new { objectId = target });
+                using (var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                    while (!await liveWorker.RunOnceAsync(bound.Token)) await Task.Delay(10, bound.Token);
+                Check(LiveData(await timedResponse).GetProperty("error").GetString() == "LIVE_SOURCE_UNAVAILABLE" &&
+                    liveSource.Active == 0, "source deadline cancels and joins fake provider without retained fallback");
+                httpClock.Now = httpClock.Now.AddMinutes(1);
+                liveSource.DelayUntilCancelled = false;
+                var invalidatingSession = Guid.NewGuid().ToString("D");
+                liveSource.DuringRead = () => app.Services.GetRequiredService<ReadModelStore>().Begin(Publisher, invalidatingSession);
+                Check(!await liveWorker.RunOnceAsync(default), "readiness restored without reading source");
+                var invalidatedResponse = LiveCall(new { objectId = target });
+                using (var bound = new CancellationTokenSource(TimeSpan.FromSeconds(5)))
+                    while (!await liveWorker.RunOnceAsync(bound.Token)) await Task.Delay(10, bound.Token);
+                Check(LiveData(await invalidatedResponse).GetProperty("error").GetString() == "SOURCE_UNAVAILABLE",
+                    "retained scope availability is rechecked after source result before delivery");
+                liveSource.DuringRead = null;
+                app.Services.GetRequiredService<ReadModelStore>().Fail(Publisher, invalidatingSession);
+                publishedSession = Guid.NewGuid().ToString("D");
+                Check(await publisher.PublishAsync(publishedSession, manifest, PublisherBatches()) == publishedSession,
+                    "explicit fresh publication recovers after invalidation, not live-result fallback");
+            }
             if (windowsTools)
             {
                 Check(app.Services.GetRequiredService<ISnapshotReader>() is IndexedWindowsReader,
@@ -718,9 +797,34 @@ static class ReadModelChecks
         }
     }
 
-    private sealed class LoopbackPublisherHandler(Uri origin) : HttpMessageHandler
+    private sealed class SyntheticLiveSource(Clock clock) : ITargetedLiveSource
+    {
+        public int Calls;
+        public bool Outside;
+        public bool DelayUntilCancelled;
+        public Action? DuringRead;
+        public int Active;
+        public async Task<LiveCheckObservation> VerifyAsync(LiveCheckRequest request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            Interlocked.Increment(ref Active);
+            try
+            {
+                if (DelayUntilCancelled) await Task.Delay(Timeout.Infinite, cancellationToken);
+                DuringRead?.Invoke();
+                return new LiveCheckObservation(request.RequestId, request.ObjectId, request.Source,
+                Outside ? "outOfScope" : "ok", !Outside, clock.Now, clock.Now,
+                    Outside ? null : "critical", Outside ? null : clock.Now, !Outside, [], 3);
+            }
+            finally { Interlocked.Decrement(ref Active); }
+        }
+    }
+
+    private sealed class LoopbackPublisherHandler(Uri origin, bool dropLiveResultOnce = false) : HttpMessageHandler
     {
         private readonly HttpClient client = new(new HttpClientHandler { AllowAutoRedirect = false, UseCookies = false });
+        private bool dropped;
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             if (!origin.IsLoopback || origin.Scheme != "http")
@@ -732,7 +836,14 @@ static class ReadModelChecks
                 forwarded.Content = new ByteArrayContent(await request.Content.ReadAsByteArrayAsync(cancellationToken));
                 forwarded.Content.Headers.ContentType = request.Content.Headers.ContentType;
             }
-            return await client.SendAsync(forwarded, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            var response = await client.SendAsync(forwarded, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
+            if (dropLiveResultOnce && !dropped && request.RequestUri!.AbsolutePath.EndsWith("/live/result", StringComparison.Ordinal))
+            {
+                dropped = true;
+                response.Dispose();
+                throw new HttpRequestException("Synthetic lost accepted result.");
+            }
+            return response;
         }
         protected override void Dispose(bool disposing)
         {

@@ -18,6 +18,11 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
 
+if (args is ["--targeted-live-checks"])
+{
+    await TargetedLiveValidation.Run();
+    return 0;
+}
 if (args is ["--lifecycle-checks"])
 {
     OsLifecycleChecks.Run();
@@ -65,6 +70,7 @@ static class Checks
             TestQueries(dataset, source, codec, engine);
             ObservationLookupChecks.Run(dataset, source, Clock);
             OsLifecycleChecks.Run();
+            await TargetedLiveValidation.Run();
             TestNativeMemory(snapshot, source, engine);
             TestOptimizationMetadata(snapshot, source, engine);
             TestValidation(snapshot, source, engine);
@@ -706,16 +712,17 @@ static class Checks
             Equal(HttpStatusCode.OK, init.StatusCode, "valid JWT initializes MCP");
             var listing = await Send(client, new { jsonrpc = "2.0", id = 2, method = "tools/list", @params = new { } });
             var tools = Rpc(await listing.Content.ReadAsStringAsync()).GetProperty("result").GetProperty("tools");
-            Equal(7, tools.GetArrayLength(), "six existing tools plus additive lifecycle assessment");
+            Equal(8, tools.GetArrayLength(), "six existing tools plus additive lifecycle and opt-in live verification");
             var names = tools.EnumerateArray().Select(t => t.GetProperty("name").GetString()).Order().ToArray();
             Check(names.SequenceEqual(new[] { "get_capacity_summary", "get_device_details", "get_inventory_summary",
-                "get_source_status", "get_utilization", "list_devices", "list_os_support_assessments" }), "exact tool names");
+                "get_source_status", "get_utilization", "list_devices", "list_os_support_assessments", "verify_object_current_state" }), "exact tool names");
             foreach (var tool in tools.EnumerateArray())
             {
                 var annotations = tool.GetProperty("annotations");
                 Check(annotations.GetProperty("readOnlyHint").GetBoolean(), "readOnlyHint on " + tool.GetProperty("name"));
                 Check(!annotations.GetProperty("destructiveHint").GetBoolean(), "non-destructive metadata");
-                Check(annotations.GetProperty("idempotentHint").GetBoolean(), "idempotent metadata");
+                Equal(tool.GetProperty("name").GetString() != "verify_object_current_state",
+                    annotations.GetProperty("idempotentHint").GetBoolean(), "idempotent metadata");
                 foreach (var parameter in tool.GetProperty("inputSchema").GetProperty("properties").EnumerateObject())
                     Check(!parameter.Value.ToString().Contains("\"type\": \"object\"", StringComparison.Ordinal), "flat schema parameter " + parameter.Name);
             }
@@ -727,6 +734,9 @@ static class Checks
             var envelope = TextEnvelope(result);
             Equal(2, envelope.GetProperty("data").GetProperty("uniqueComputerCount").GetInt32(), "MCP tool returns actual filtered count");
             Equal("1.0", envelope.GetProperty("schemaVersion").GetString(), "MCP envelope preserved");
+            var liveDisabled = await Call("verify_object_current_state", new { objectId = A });
+            Equal("LIVE_NOT_ENABLED", TextEnvelope(Rpc(await liveDisabled.Content.ReadAsStringAsync()).GetProperty("result"))
+                .GetProperty("error").GetString(), "targeted live is disabled without source fallback");
             var lifecycleDenied = await Call("list_os_support_assessments", new { scopeId = "unknown" });
             Equal(HttpStatusCode.Forbidden, lifecycleDenied.StatusCode, "lifecycle scope denied over HTTP");
             var lifecycleResponse = await Call("list_os_support_assessments", new { pageSize = 1 });

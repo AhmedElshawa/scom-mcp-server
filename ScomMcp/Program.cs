@@ -24,7 +24,8 @@ var auth = builder.Configuration.GetSection("Auth").Get<AuthSettings>() ?? new A
 var source = builder.Configuration.GetSection("Source").Get<SourceSettings>() ?? new SourceSettings();
 var readModel = builder.Configuration.GetSection("ReadModel").Get<ReadModelSettings>() ?? new ReadModelSettings();
 var lifecycle = builder.Configuration.GetSection("Lifecycle").Get<LifecycleSettings>() ?? new LifecycleSettings();
-Hosting.AddScomServices(builder.Services, auth, source, readModel, lifecycle);
+var targetedLive = builder.Configuration.GetSection("TargetedLive").Get<TargetedLiveSettings>() ?? new TargetedLiveSettings();
+Hosting.AddScomServices(builder.Services, auth, source, readModel, lifecycle, targetedLive);
 var app = builder.Build();
 Hosting.MapScom(app);
 app.Run();

@@ -73,18 +73,39 @@ public sealed class PowerShellNormalizationProfile : IScomNormalizationProfile
         {
             cancellationToken.ThrowIfCancellationRequested();
             var input = NormalizationProcess.EncodeRequest(configuration, request, inputLimit);
-            VerifyScript();
-            var start = new ProcessStartInfo(executable)
-            {
-                UseShellExecute = false, CreateNoWindow = true,
-                RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
-                WorkingDirectory = Path.GetDirectoryName(script)!
-            };
-            foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File", script })
-                start.ArgumentList.Add(argument);
-            return await NormalizationProcess.RunAsync(start, input, outputLimit, deadline, cancellationToken);
+            return await NormalizationProcess.RunAsync(CreateStart(), input, outputLimit, deadline, cancellationToken);
         }
         finally { Volatile.Write(ref running, 0); }
+    }
+
+    internal async Task<LiveCheckObservation> VerifyAsync(LiveCheckRequest request, CancellationToken cancellationToken)
+    {
+        if (deadline > TimeSpan.FromSeconds(request.ExecutionSeconds) || outputLimit > 32768)
+            throw TargetedLiveChecks.Fault("LIVE_PROFILE_BUDGET_INVALID");
+        if (Interlocked.CompareExchange(ref running, 1, 0) != 0)
+            throw TargetedLiveChecks.Fault("LIVE_SOURCE_BUSY");
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var input = JsonSerializer.SerializeToUtf8Bytes(new { protocolVersion = 1, configuration, request }, Wire.Json);
+            if (input.Length > inputLimit) throw TargetedLiveChecks.Fault("LIVE_INPUT_BUDGET");
+            return await NormalizationProcess.RunJsonAsync<LiveCheckObservation>(CreateStart(), input, outputLimit, deadline, cancellationToken);
+        }
+        finally { Volatile.Write(ref running, 0); }
+    }
+
+    private ProcessStartInfo CreateStart()
+    {
+        VerifyScript();
+        var start = new ProcessStartInfo(executable)
+        {
+            UseShellExecute = false, CreateNoWindow = true,
+            RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true,
+            WorkingDirectory = Path.GetDirectoryName(script)!
+        };
+        foreach (var argument in new[] { "-NoLogo", "-NoProfile", "-NonInteractive", "-File", script })
+            start.ArgumentList.Add(argument);
+        return start;
     }
 
     private void VerifyScript()
@@ -137,6 +158,15 @@ public static class NormalizationProcess
     public static async Task<NormalizedSourceScan> RunAsync(ProcessStartInfo start, byte[] input, int maxOutputBytes,
         TimeSpan deadline, CancellationToken cancellationToken)
     {
+        var result = await RunJsonAsync<NormalizationBridgeResult>(start, input, maxOutputBytes, deadline, cancellationToken);
+        if (result.ProtocolVersion != 1 || result.Scan is null)
+            throw new QueryFault("SOURCE_UNAVAILABLE", "SOURCE_BRIDGE_PROTOCOL_INVALID");
+        return result.Scan;
+    }
+
+    internal static async Task<T> RunJsonAsync<T>(ProcessStartInfo start, byte[] input, int maxOutputBytes,
+        TimeSpan deadline, CancellationToken cancellationToken)
+    {
         ArgumentNullException.ThrowIfNull(start);
         ArgumentNullException.ThrowIfNull(input);
         if (start.UseShellExecute || !start.RedirectStandardInput || !start.RedirectStandardOutput ||
@@ -172,10 +202,10 @@ public static class NormalizationProcess
             {
                 using var document = JsonDocument.Parse(stdout.Result);
                 SnapshotReader.RejectDuplicateProperties(document.RootElement);
-                var result = document.RootElement.Deserialize<NormalizationBridgeResult>(Wire.Json);
-                if (result is null || result.ProtocolVersion != 1 || result.Scan is null)
+                var result = document.RootElement.Deserialize<T>(Wire.Json);
+                if (result is null)
                     throw new QueryFault("SOURCE_UNAVAILABLE", "SOURCE_BRIDGE_PROTOCOL_INVALID");
-                return result.Scan;
+                return result;
             }
             catch (JsonException)
             {

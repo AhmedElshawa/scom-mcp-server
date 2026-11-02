@@ -50,6 +50,19 @@ configuration payloads or certificate details.
 
 ## Independent-review corrections
 
+### Optional targeted live verification
+
+Retained data cannot establish current health. The opt-in
+[targeted live transport](targeted-live-verification.md) separates such checks from
+retained answers, with one-object requests, fresh scope proof, budgets and safe
+unavailable states. No production SCOM provider is certified/shipped; documented
+cmdlet parameters do not establish bounded backend work or membership completeness.
+Do not enable it, fabricate fresh timestamps or bypass source gates to hide that gap.
+Offline evidence: 38 broker assertions, real loopback fake-source tool/worker
+flows (including lost accepted-result replay, fresh-scope refusal, timeout/join
+and retained-source invalidation), complete regression suite and 27-file package
+checks passed. This is not a production source/provider acceptance result.
+
 ### OS lifecycle capability gap
 
 Earlier builds intentionally could not answer OS-support questions. The additive

@@ -13,6 +13,7 @@ public sealed class CollectionWorkerHostSettings
     public IngestionPublisherSettings Publisher { get; set; } = new();
     public ReconciledSourceSettings Reconciliation { get; set; } = new();
     public CollectionScheduleSettings Schedule { get; set; } = new();
+    public LiveWorkerSettings LiveChecks { get; set; } = new();
 }
 
 public static class CollectionWorkerHost
@@ -51,6 +52,9 @@ public static class CollectionWorkerHost
             settings.Schedule.Validate();
             settings.Publisher.Validate();
             settings.Identity.Validate();
+            settings.LiveChecks.Validate();
+            if (once && settings.LiveChecks.Enabled)
+                throw new InvalidOperationException("Live checks require the explicitly enabled long-running worker, not worker-once.");
             var profile = new PowerShellNormalizationProfile(settings.Profile);
             // Endpoint/identity pin prevents resuming a pending dataset against a
             // different ingestion destination or publisher after reconfiguration.
@@ -72,9 +76,57 @@ public static class CollectionWorkerHost
             }
             else
             {
-                var scheduler = new CollectionScheduler(settings.Schedule, worker.RunOnceAsync,
+                using var sourceGate = new SemaphoreSlim(1);
+                async Task<CollectionAttemptOutcome> Collect(CancellationToken ct)
+                {
+                    await sourceGate.WaitAsync(ct);
+                    try { return await worker.RunOnceAsync(ct); }
+                    finally { sourceGate.Release(); }
+                }
+                var scheduler = new CollectionScheduler(settings.Schedule, Collect,
                     logging.CreateLogger<CollectionScheduler>());
-                await scheduler.RunAsync(cancellationToken);
+                if (!settings.LiveChecks.Enabled) await scheduler.RunAsync(cancellationToken);
+                else
+                {
+                    var liveProfile = new PowerShellNormalizationProfile(settings.LiveChecks.Profile);
+                    using var liveWorker = new TargetedLiveWorker(settings.Publisher, identity.AcquireAsync,
+                        new(LiveWorkerSettings.Policy(settings.LiveChecks.Profile), settings.LiveChecks.Source, true),
+                        new PowerShellTargetedLiveSource(liveProfile), TimeProvider.System, logging.CreateLogger<TargetedLiveWorker>());
+                    using var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    async Task Poll()
+                    {
+                        var backoff = settings.LiveChecks.PollSeconds;
+                        while (true)
+                        {
+                            combined.Token.ThrowIfCancellationRequested();
+                            if (await sourceGate.WaitAsync(0, combined.Token))
+                                try
+                                {
+                                    await liveWorker.RunOnceAsync(combined.Token);
+                                    backoff = settings.LiveChecks.PollSeconds;
+                                }
+                                catch (Exception error) when (!combined.IsCancellationRequested &&
+                                    error is QueryFault or HttpRequestException or OperationCanceledException)
+                                {
+                                    logger.LogWarning("Live verification deferred. Event={Event} ErrorType={ErrorType}",
+                                        "SCOM_LIVE_DEFERRED", error.GetType().Name);
+                                    backoff = Math.Min(30, backoff * 2);
+                                }
+                                finally { sourceGate.Release(); }
+                            await Task.Delay(TimeSpan.FromSeconds(backoff), combined.Token);
+                        }
+                    }
+                    var collection = scheduler.RunAsync(combined.Token);
+                    var live = Poll();
+                    try { await await Task.WhenAny(collection, live); }
+                    finally
+                    {
+                        combined.Cancel();
+                        // Join both loops before releasing the checkpoint lease or allowing a replacement worker.
+                        try { await Task.WhenAll(collection, live); }
+                        catch (OperationCanceledException) when (combined.IsCancellationRequested) { }
+                    }
+                }
             }
             return 0;
         }
