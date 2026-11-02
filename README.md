@@ -42,6 +42,13 @@ versioned read model rather than replicating the SCOM databases.
 
 ## Solution overview
 
+![SCOM MCP reference architecture: scheduled remote SCOM collection, authenticated ingestion, separate local stores, and delegated Copilot Studio access](docs/images/scom-reference-architecture.png)
+
+[Download the architecture picture](docs/images/scom-reference-architecture.png)
+or [edit the Excalidraw source](docs/images/scom-reference-architecture.excalidraw).
+This reference layout runs the worker and MCP application as separate processes
+on the MCP host; it is not evidence of deployment acceptance.
+
 The opt-in indexed configuration separates source collection from conversational
 queries:
 
