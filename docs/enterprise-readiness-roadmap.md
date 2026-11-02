@@ -17,15 +17,21 @@ schedule recurrence, merge or create a release without the relevant approval.
 |---|---|
 | Implemented and checked offline | Opt-in indexed worker/ingestion/read model, reconciliation/checkpoints/scheduler, generic tools, six-tool bridge, deployment hardening and package checks. Offline checks are not installed-SDK certification. |
 | Reported working in the lab | First worker publication and agent inventory recovery after approved operational corrections. This does not certify the new packaged build or every tool/caller. |
-| Code-review corrections implemented | All four findings below have source fixes and exact-trigger offline regressions. Independent re-review and intended-host/package acceptance remain outstanding. |
+| Code-review corrections implemented and re-reviewed | All four findings below have source fixes and exact-trigger offline regressions. Independent final-diff review found no remaining confirmed merge blocker; intended-host/package acceptance remains outstanding. |
 | Not yet verified | Clean-host installation, customer-specific scope/platform acceptance, supervised recurring operation and recovery, metric source load and full Studio identity acceptance. |
 | OS lifecycle implemented offline | Additive Windows-backed lifecycle tool with exact curated Windows Server coverage, Microsoft evidence, freshness bounds, ESU separation, full counts and bound paging. Customer/Studio acceptance remains; see [profile](os-lifecycle-assessment.md). |
 | Targeted live transport implemented; source-dependent | Approved outbound worker pull, expiring bounded inbox, caller/publisher isolation and one-object health/alerts protocol. Fake-source checks do not certify SDK bounds or fresh membership; no production profile shipped. Keep [live verification](targeted-live-verification.md) disabled until those gates are met. |
 | Not implemented | Guided configuration generator/checker, broader verified OS lifecycle coverage and automated evidence maintenance. |
 
-The independent review identified concrete findings, but did not provide the
-requested file-by-file coverage map. Do not describe it as an exhaustive audit,
-security certification or proof that no other defects exist.
+The initial independent review identified concrete findings without a file-by-file
+coverage map. Final independent re-review covered the principal changed
+source/collector, authorization, ingestion/storage, query, lifecycle, targeted-live,
+child-lifetime and packaging areas and found no remaining confirmed merge blocker.
+It classified ambiguous live-lease recovery as a documented nonblocking
+availability limitation: automatic reassignment could overlap an unproven stopped
+source operation. The final review did not supply exhaustive path/environment
+proof. Do not describe either review as an exhaustive audit, security certification
+or proof that no other defects exist.
 
 ## 1. Close the current PR's correctness gaps
 
