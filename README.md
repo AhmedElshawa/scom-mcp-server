@@ -1,6 +1,6 @@
 # SCOM MCP Server
 
-[Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
+[Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Two-server setup](#two-server-deployment-indexed-path) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
 
 SCOM MCP Server connects System Center Operations Manager (SCOM) monitoring data
 to AI assistants through the Model Context Protocol (MCP). It provides
@@ -69,8 +69,10 @@ that collector's scope as a substitute for configuring the indexed path.
    contain changes that are not yet available on the default branch.
 3. Use the [build and validation instructions](#build-and-validate) to run the
    synthetic checks and prepare a package.
-4. Configure and evaluate the solution in an authorized lab before connecting
-   production data or publishing an agent.
+4. Follow the [two-server setup](#two-server-deployment-indexed-path) to configure
+   the receiving MCP server and source worker. Complete an authorized lab
+   publication and reader check before connecting production data or publishing
+   an agent.
 
 The repository includes source code, synthetic regression fixtures, configuration
 examples, and packaging scripts. Customer configuration, credentials, collected
@@ -89,6 +91,104 @@ false, metric mappings empty, and Windows projection disabled. Do not flip
 unverified flags merely to make collection run. Inventory acceptance does not
 certify metric timestamps, full-history source load, lifecycle answers or
 Copilot Studio authentication.
+
+## Two-server deployment (indexed path)
+
+**Connecting an agent to MCP does not start collection or populate inventory.**
+The worker must publish a valid dataset before MCP can answer inventory questions.
+Use the following layout when you have a SCOM server and a separate MCP server:
+
+| Host | Responsibilities | Requirements |
+|---|---|---|
+| SCOM server / collector host | Run the worker, read approved SCOM data and publish it over HTTPS | .NET 8 runtime, Windows PowerShell 5.1, installed OperationsManager module/SDK, approved read-only SCOM identity |
+| MCP server | Receive datasets, maintain the local SQLite read model and serve authenticated MCP requests | .NET 8 runtime, protected local storage, configured HTTPS hosting and Entra authentication |
+
+The existing SCOM server can be the collector host if approved by its operator.
+A third machine is not required. The MCP server does **not** need the SCOM SDK
+or Operations console for this layout. A separately approved Windows host with
+the appropriate SDK can also run the worker. Validate resource impact before
+running collection on a production SCOM management server.
+
+### 1. Configure the receiving MCP server
+
+Use `ScomMcp\appsettings.ReadModel.example.json` as the structure for protected
+server configuration. Do not copy its synthetic identifiers as deployment values.
+Configure HTTPS hosting, delegated reader authorization, the separate ingestion
+publisher policy, approved source identity, exposure mappings and local storage
+as described in [indexed configuration](#indexed-read-model-configuration-opt-in).
+For this path, use `Source:SnapshotEnabled=false` and `ReadModel:Enabled=true`.
+
+The six Windows tools, including `list_devices`, additionally require
+`ReadModel:WindowsToolsEnabled=true` and the reviewed Windows projection/hosting
+configuration described below. The example deliberately leaves these disabled.
+Do not enable them without matching collector and reader mappings.
+
+### 2. Configure the worker on the SCOM server
+
+Copy the packaged worker executable, collector profile and dependent modules to
+approved, protected local paths on the collector host. Use
+`ScomMcp\appsettings.Worker.example.json` as the structure for a separate, private
+worker JSON file outside the repository. Configure:
+
+- `profile.configuration.managementServer`: the SCOM management-server hostname
+  or FQDN, not a URL, shared-folder path or MCP address.
+- `profile.configuration.operationsManagerModule`: the installed local
+  `OperationsManager.psd1` path.
+- The approved management-group/group identity, independently reviewed scope
+  gates, Windows mappings, script path/hash, budgets and local checkpoint path.
+- `publisher.endpoint`: the receiving MCP server's HTTPS origin, plus the
+  separately provisioned certificate-based publisher identity in `identity`.
+
+Run the worker under the approved Windows account with the read-only SCOM role.
+Its PowerShell child inherits that identity and connects to the configured SCOM
+server. Configure the execution account through the organization's approved
+Windows service/task mechanism; do not put its password in JSON, command-line
+arguments, Copilot Studio or this repository. Grant only the required local
+file, checkpoint and publisher-certificate access. The SCOM Windows identity
+and Entra ingestion publisher identity serve different purposes.
+
+The application does not install a service/task, provision identities, sign
+scripts or configure HTTPS. Follow approved execution/signing policy; do not
+bypass it. Example verification flags are intentionally false and require
+actual evidence, not blanket enabling.
+
+### 3. Validate prerequisites, then publish once
+
+Run `collector\Test-SCOMPreflight.ps1` in an approved Operations Manager Shell
+on the collector host. It checks metadata only. The optional
+`Get-SCOMCompatibilityReport.ps1` is a support diagnostic;
+`Get-SCOMMetricCompatibilityReport.ps1` is a separate lab metric diagnostic.
+**None of these scripts collects and publishes an inventory dataset.**
+
+After configuration and the applicable
+[acceptance checks](#deployment-acceptance-checklist), run the actual packaged
+worker once under the intended Windows identity:
+
+```powershell
+dotnet 'C:\YourApprovedPackage\ScomMcp.dll' --worker-once 'C:\ProtectedWorker\worker.json'
+```
+
+These are placeholder paths. Successful publication requires both server and
+worker configuration; this command is not a substitute for that setup. Do not
+run the legacy `Collect-SCOMSnapshot.ps1` to populate the indexed database.
+Inventory testing does not require performance counters; leave metric mappings
+empty until their independent acceptance is complete.
+
+### 4. Confirm data before testing the agent
+
+Confirm that the one-shot worker completed successfully and that authorized MCP
+`get_source_status` and inventory calls return the intended dataset and coverage.
+`/healthz` alone proves neither collection nor publication. Then configure
+supervised recurring execution using the worker's `--worker` mode and reviewed
+schedule, and test the same tools through Copilot Studio.
+
+If `list_devices` returns `SOURCE_UNAVAILABLE`, inspect the actual tool error
+reason and the effective server data-source configuration first. A
+snapshot/status read error indicates the legacy file reader and can mean missing
+or unreadable files or invalid JSON; do not install the SDK on the MCP server to
+resolve it. In indexed mode, missing, failed, uncommitted or expired source data
+also remains unavailable. Do not fabricate fixtures or disable validation to
+make the agent return inventory.
 
 ## Windows MCP tools
 
@@ -120,12 +220,44 @@ source is available or current.
 
 ## Build and validate
 
+### Check prerequisites and choose a build host
+
+On each intended execution host, inspect the installed .NET components:
+
+```powershell
+dotnet --list-sdks
+dotnet --list-runtimes
+```
+
+If `dotnet` is not recognized, it is not available in that shell; this does not
+by itself prove that no installation exists elsewhere. Have the administrator
+verify installation and PATH before proceeding. The framework-dependent package
+requires the .NET 8 runtime; the ASP.NET Core application also requires
+`Microsoft.AspNetCore.App` 8.x, including when using this application's worker
+entry point. Use current supported servicing updates through the organization's
+approved installation process.
+
+Building requires a compatible SDK capable of targeting .NET 8. Build on a
+development/build machine or an approved separate folder on the MCP server;
+do not install development tools on the SCOM server solely to build this project.
+Copy the resulting package to the approved execution hosts afterward. A source
+ZIP is not a runnable package, and extracting it does not install any runtime.
+Never extract or publish over a running deployment.
+
+### Restore, validate and package
+
 From the repository root in PowerShell:
 
 ```powershell
+dotnet restore .\ScomMcp\ScomMcp.csproj
 dotnet build .\ScomMcp\ScomMcp.csproj --configuration Release
 pwsh -NoProfile -File .\validate.ps1
 ```
+
+Run each command only after the previous command succeeds. `pwsh` is PowerShell 7
+and is required for the validation commands shown here; it is separate from the
+Windows PowerShell 5.1 used by the SCOM SDK profile. Do not install tools on a
+production host without approval.
 
 The validation harness uses synthetic fixtures and a loopback HTTP server; it
 does not access SCOM, publish snapshots, or deploy IIS. Recovery tests start and
@@ -140,6 +272,54 @@ examples, not `appsettings.json` or local settings. Configure the package before
 starting it. Do not reuse an existing output directory or treat this as a
 production-certified release: it includes both the legacy collector and the
 opt-in SDK worker, whose deployment-specific acceptance remains required.
+
+After successful validation, invoke packaging from the same repository root:
+
+```powershell
+.\package.ps1
+```
+
+The output contains `artifacts\package\server` (application and example settings)
+and `artifacts\package\collector` (profile, modules and diagnostics). Keep these
+as a reviewed package; the worker configuration must point to the installed
+profile and its reviewed hash. Copying these folders does not configure or start
+collection. Configure both receiving server and worker before a one-shot run.
+If packaging fails, do not deploy the incomplete output. The script refuses to
+reuse an existing output directory; preserve it for inspection and choose a new,
+explicit `-OutputDirectory` for a subsequent attempt rather than mixing builds.
+
+### Downloaded scripts and execution policy
+
+If PowerShell reports that `package.ps1` is not digitally signed, inspect policy:
+
+```powershell
+Get-ExecutionPolicy -List
+```
+
+Do not change policy or use `-ExecutionPolicy Bypass` to make packaging work.
+With `RemoteSigned`, a script extracted from an Internet download may retain a
+download-zone marker and therefore require a signature. Inspect this specific
+file from the repository root:
+
+```powershell
+Get-Item -LiteralPath .\package.ps1 -Stream Zone.Identifier -ErrorAction SilentlyContinue
+```
+
+Only after reviewing the script and confirming that organizational policy permits
+trusting this download, remove the marker from that one file and retry:
+
+```powershell
+Unblock-File -LiteralPath .\package.ps1
+.\package.ps1
+```
+
+`Unblock-File` removes the file's download marker; it does not sign the code or
+change execution policy. Do not recursively unblock the repository/package.
+If policy requires signatures, or the organization does not permit unblocking,
+obtain approved code signing instead. Validation and collector scripts/modules
+may independently require review/signing on their execution hosts; a successful
+package build does not sign or approve them. Stop on further policy errors rather
+than weakening protections.
 
 ## Indexed read-model configuration (opt-in)
 
@@ -218,10 +398,10 @@ the server might already have activated it. Recovery must retain the original
 session/bytes while resolving the outcome; do not restart it with a new ID and
 claim a known result. Uncommitted staging remains unavailable and expires.
 
-This is transport, not token provisioning, an SDK-capable Windows PowerShell
-bridge, a scheduler or a completed SCOM collector. Source/profile validation and
-checkpoint handling are still required; no production agent is started by this
-library. Offline tests simulate lost responses after real store acknowledgements
+This transport component does not provision tokens or start collection by itself.
+The worker host described below composes it with the PowerShell source bridge,
+scheduler and checkpoint handling; deployment-specific source/profile validation
+is still required. Offline tests simulate lost responses after real store acknowledgements
 to prove retry idempotency, and exercise the publisher through the actual
 authenticated loopback ingestion endpoints into the indexed store, without
 connecting to customer infrastructure. The loopback transport is test-only;
@@ -235,8 +415,9 @@ identities before returning that outcome. Unexpected errors stop with sanitized
 diagnostics rather than automatically starting another dataset. A cooperative
 deadline cancels the attempt, but the loop waits for noncooperative source work
 to finish before stopping; it never abandons an SDK call and starts overlapping
-work. Only the future worker host should register this loop—not the MCP query host.
-It is not yet connected to a production source adapter or deployed schedule.
+work. The worker host registers this loop in `--worker` mode, not the MCP query
+host. An operator must configure and supervise its execution; starting the MCP
+query host does not deploy a collection schedule.
 
 `AlertReconciler` provides an offline-tested reconciliation boundary for a worker
 that has independently verified current expected scope. Bootstrap records only
@@ -705,7 +886,8 @@ The included SDK callback is wired into the generic group profile. Independent
 query-contract and role-completeness evidence are still required before this
 resolver can establish live scope.
 
-For an approved SCOM host session, run the included metadata-only report:
+For SDK compatibility investigation or a support request, an operator can run
+the optional metadata-only report in an approved SCOM host session:
 
 ```powershell
 .\Collector\Get-SCOMCompatibilityReport.ps1
@@ -823,6 +1005,31 @@ copy a live database or place it on SMB, and do not serve old scope data as curr
 while recovering.
 
 ### Deployment acceptance checklist
+
+#### Operator responsibilities and diagnostic tools
+
+Copilot Studio users do not run collector scripts or require direct SCOM access.
+An authorized operator configures and validates the deployment; the scheduled
+worker subsequently refreshes the approved data independently of user questions.
+
+| Tool | Purpose | When to use |
+|---|---|---|
+| `Test-SCOMPreflight.ps1` | Consolidated host and SDK metadata screening | Operator onboarding and relevant SDK/host upgrades |
+| `Get-SCOMCompatibilityReport.ps1` | Detailed installed SDK and command metadata for engineering review | Optional compatibility investigation or support request |
+| `Get-SCOMMetricCompatibilityReport.ps1` | Selected metric metadata and explicitly authorized one-hour sample diagnostics | Lab metric acceptance or troubleshooting |
+
+These are not recurring end-user tasks. The current preflight does not replace
+configuration, identity, scope, storage, live source or client acceptance. A
+successful report is not deployment approval. Each customer's installed SDK,
+management packs and intended collector role require applicable evidence; lab
+results from another environment are not transferable certification.
+
+A diagnostic host without the OperationsManager module or loaded SDK cannot
+verify installed signatures. That is a limitation of that execution context,
+not evidence that the SDK is absent from the customer's collector host or that
+previously observed source behavior is invalid. Run any needed diagnostic on
+the authorized SDK host using the organization's approved script-signing process.
+Do not bypass execution policy or request customers' credentials or raw data.
 
 For authorized lab metric metadata acceptance, the packaged
 `collector\Get-SCOMMetricCompatibilityReport.ps1` consolidates the CPU/memory
