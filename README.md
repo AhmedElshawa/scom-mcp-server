@@ -1,6 +1,6 @@
 # SCOM MCP Server
 
-[Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Two-server setup](#two-server-deployment-indexed-path) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
+[Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Two-server setup](#two-server-deployment-indexed-path) | [IIS and Copilot Studio](#azure-iis-and-copilot-studio-reader-setup) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
 
 SCOM MCP Server connects System Center Operations Manager (SCOM) monitoring data
 to AI assistants through the Model Context Protocol (MCP). It provides
@@ -218,6 +218,157 @@ or unreadable files or invalid JSON; do not install the SDK on the MCP server to
 resolve it. In indexed mode, missing, failed, uncommitted or expired source data
 also remains unavailable. Do not fabricate fixtures or disable validation to
 make the agent return inventory.
+
+## Azure IIS and Copilot Studio reader setup
+
+This procedure configures HTTPS hosting and delegated MCP access. It does **not**
+configure the worker publisher or populate inventory. Complete the
+[publisher identity setup](#publisher-identity-setup-entra-and-windows) and source
+acceptance separately. All hostnames and paths below are generic examples;
+replace them in private deployment configuration only.
+
+### 1. Prepare an approved IIS host
+
+Have the platform administrator provision a supported Windows Server host with
+IIS and the current approved .NET 8 **Hosting Bundle** (including the ASP.NET Core
+Module for IIS). A standalone runtime alone does not provide IIS integration.
+Follow [Microsoft's IIS hosting instructions](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-8.0)
+for prerequisites, installation order and any required service restart.
+
+Configure a valid TLS certificate, DNS and HTTPS binding. Review Azure NSG,
+Windows firewall and proxy rules so the intended Copilot Studio service can reach
+the HTTPS endpoint; do not expose management ports or SCOM SDK services publicly.
+Use approved network restrictions rather than broadly opening inbound traffic.
+Require certificate validation; do not accept unsafe-site warnings as a fix.
+
+### 2. Stage and configure the application
+
+Build and validate in a separate directory using
+[build and packaging instructions](#build-and-validate). Copy the complete
+`artifacts\package\server` output into a new approved application folder, for
+example `C:\ApprovedApps\ScomMcp`. Do not publish directly over a running IIS
+deployment or copy only the main DLL. Use a reviewed maintenance/rollback plan
+for upgrades.
+
+In IIS Manager, create a dedicated application pool with **.NET CLR version:
+No Managed Code** and **Managed pipeline mode: Integrated**. Assign an approved
+site/application to that pool and its staged folder. Prefer an application-root
+HTTPS binding for the indexed publisher; a reader-only IIS subapplication can
+have a path prefix, but the current worker publisher does not accept such a
+prefix as its endpoint. See the publisher setup limitation before routing ingestion.
+
+Retain the package's ASP.NET Core `web.config`. Grant the application-pool
+identity read/execute access to application files and the required write access
+only to its protected database/log locations. Keep worker checkpoint storage
+separate. Do not run the IIS pool under the SCOM account or grant broad write
+access to the application directory.
+
+Create protected server settings from the appropriate example and merge any
+existing approved authentication configuration. This illustrative `Auth` fragment
+is **not** a complete runnable configuration:
+
+```json
+{
+  "Auth": {
+    "TenantId": "<tenant-guid>",
+    "Audiences": ["<approved-api-access-token-audience>"],
+    "RequiredScope": "Scom.Read",
+    "Callers": [
+      {
+        "ObjectId": "<authorized-user-object-id>",
+        "Scopes": ["scom-lab"]
+      }
+    ]
+  }
+}
+```
+
+`Audiences` must match the API access token's actual `aud`, not the OAuth client's
+ID. It is commonly the API client-ID GUID for v2 access tokens; other API token
+versions can use a different resource identifier. Verify the API configuration
+instead of assuming one format. `RequiredScope` is the delegated `scp` value.
+`Callers[].ObjectId` is the authorized user's immutable object ID, not the
+connector application's ID. `scom-lab` is the current logical tool scope identifier,
+not a customer hostname or SCOM group name.
+
+Configure the actual data source too: either the original two-computer snapshot
+path or the opt-in indexed configuration. These paths are not interchangeable.
+Inspect IIS/environment overrides as part of configuration review. Do not put
+OAuth client secrets in `appsettings.json`. Apply approved changes and restart
+only the intended application/pool during its maintenance window, not all IIS sites.
+
+### 3. Register the reader API and OAuth client
+
+If registrations already exist, review/reuse them; do not create duplicates or
+overwrite a working connection without a reason.
+
+1. In Entra **App registrations**, create or identify the single-tenant **API
+   resource** registration. Under **Expose an API**, configure its approved
+   Application ID URI (for example `api://<api-client-id>`) and delegated scope
+   `Scom.Read`, with the consent policy approved by the identity administrator.
+2. Create or identify a separate single-tenant **Copilot Studio OAuth client**
+   registration. Add the API's **delegated** `Scom.Read` permission under
+   **API permissions** and obtain consent as required by tenant policy.
+3. If using the manual OAuth wizard below, provision a client secret through the
+   approved credential process. Enter its value only into the protected connector
+   authentication field. Keep it out of source, screenshots, logs and chat, and
+   plan expiration/rotation. This is not the worker's certificate credential.
+4. Add the wizard-generated callback URI as a **Web** redirect URI on the OAuth
+   client registration, exactly as displayed. Do not invent or reuse a callback
+   URI from a different environment/connector.
+
+### 4. Connect the agent using manual OAuth
+
+For agents using the supported Copilot Studio MCP onboarding wizard, enable
+generative orchestration and open **Tools > Add a tool > New tool > Model Context
+Protocol**. UI labels can vary by release. Configure a clear name/description,
+the deployment's HTTPS MCP URL (for example `https://mcp.example.com/mcp`), and
+**OAuth 2.0 > Manual**. This server does not implement dynamic client registration.
+Use Streamable HTTP, not the deprecated SSE transport.
+
+| Wizard field | Value |
+|---|---|
+| Client ID | Copilot Studio OAuth client Application (client) ID, not the API or worker ID |
+| Client secret | Approved OAuth client secret value, entered only in the connector |
+| Authorization URL | `https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/authorize` |
+| Token URL template | `https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token` |
+| Refresh URL | `https://login.microsoftonline.com/<tenant-id>/oauth2/v2.0/token` |
+| Scopes | `<api-application-id-uri>/Scom.Read offline_access` |
+
+Select **Create**, record the generated callback URI and have it registered on
+the OAuth client as described above. Continue with **Next**, **Create a new
+connection**, sign in as the intended authorized user, and **Add to agent**.
+Preserve individual-user authentication; do not substitute a shared administrator
+connection for caller acceptance.
+
+### 5. Verify the reader and data separately
+
+An HTTPS `GET /healthz` returning 200 proves process reachability only.
+Unauthenticated `/mcp` requests must not expose tools. A browser GET, including
+a possible 405 response for an unsupported method, is not a successful MCP test:
+use the authenticated Streamable HTTP initialization and tool discovery.
+
+Confirm tool discovery, then run `get_source_status`, `list_devices` and
+`get_inventory_summary` with an authorized caller after successful collection.
+Also test an unauthorized caller, pagination, stale/partial data and intended
+source coverage before publishing the agent. Tools loading does not mean data
+is available; an MCP tool error can be returned inside an HTTP-success response.
+
+| Symptom | Check |
+|---|---|
+| HTTP 401 | Token expiry/signature, intended tenant/issuer and exact API audience |
+| HTTP 403 | Delegated scope, configured caller object ID and logical tool scope |
+| Sign-in/callback failure | Exact generated Web redirect URI, OAuth client ID, secret expiry and tenant consent |
+| Tools fail to load | Correct HTTPS MCP route, network/TLS, OAuth connection and supported transport; do not choose None/API key for this JWT-protected server |
+| `SOURCE_UNAVAILABLE` | Actual selected data source, last collection/publication, freshness and file/database access; reconnecting OAuth does not populate inventory |
+
+If a connector is demonstrably stale or misconfigured, review its settings and
+create a replacement connection only through the approved process. Do not delete
+working connections as a generic troubleshooting step.
+
+Reference: [Microsoft's MCP onboarding wizard and authentication instructions](https://learn.microsoft.com/en-us/microsoft-copilot-studio/mcp-add-existing-server-to-agent).
+This runbook is deployment guidance, not a claim that every customer environment
+or agent configuration has passed integration acceptance.
 
 ## Windows MCP tools
 
