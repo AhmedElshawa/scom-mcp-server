@@ -87,6 +87,7 @@ delete state or point the receiver at the worker checkpoint to bypass startup.
 | Copilot Studio identity | Intended per-caller delegated authorization and denied-caller/scope behavior through the real connector. |
 | Metrics, if enabled | Timestamp semantics, rule/unit mappings, raw observation parity and approved 14-day workload/budget tests. Inventory acceptance alone is insufficient. |
 | OS lifecycle | Implemented curated Windows Server profile, not universal OS support. Validate actual captions/editions, catalog freshness/maintenance ownership, unknown/missing counts and Studio interpretation; no entitlement or patch-compliance claim. |
+| Targeted live verification | **Actual SCOM live checks are unavailable**: transport only, no certified production source provider shipped. Keep receiver and worker enablement false. Require fresh-scope, source-bounds/cache/alert-completeness evidence and separately authorized acceptance before enabling. |
 
 Guided deployment checking/configuration generation is proposed future work,
 not an included installer. Production rollout remains blocked on the applicable

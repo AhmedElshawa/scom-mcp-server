@@ -9,6 +9,12 @@ The indexed path is opt-in; the legacy snapshot path remains supported separatel
 start collection. Inventory becomes available only after a worker dataset commits.**
 Do not treat this guide or a verification flag as production certification.
 
+**Actual SCOM targeted-live verification is unavailable:** no certified bounded
+source provider is shipped. `TargetedLive.Enabled` and worker
+`liveChecks.enabled` must remain false until separately reviewed provider/source
+acceptance. The implemented request/result transport is not a working production
+SCOM live-check adapter. See [limits and blockers](targeted-live-verification.md).
+
 ## 1. Record the deployment plan
 
 Have the responsible administrators approve scope, identities, filesystem

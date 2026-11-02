@@ -125,6 +125,14 @@ jobs with suitable runners and permissions. Do not claim CI is enforced merely
 because a workflow file exists: verify required checks/branch policy separately.
 Keep live customer tests out of public CI.
 
+The repository now includes a pinned-action `Offline Windows validation` workflow:
+Windows 2022 runner, SDK 8.0.427, locked dependencies, full offline suite and
+commit-named evaluation package/content checks. It tests and records the exact
+PR head, not an unspecified local build. Its presence does not establish a
+successful run or mandatory branch protection. Verify the final head's actual
+Actions conclusion before merge review; required-check policy and broader
+security/clean-host jobs remain separately controlled.
+
 The current package includes linked docs/images and has passed offline content
 checks, including missing-guide/private-file rejection. Still require a reviewed
 candidate commit, dependency inventory, checksums and a clean-host rehearsal.

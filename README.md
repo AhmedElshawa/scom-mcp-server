@@ -489,6 +489,16 @@ Never extract or publish over a running deployment.
 
 ### Restore, validate and package
 
+PR/push CI uses `Offline Windows validation` (`.github\workflows\offline-validation.yml`)
+on `windows-2022`, pins SDK `8.0.427` and action commit hashes, and restores locked
+NuGet dependencies. It records the checked-out head SHA, runs the same complete
+offline harness, validates a fresh evaluation package and retains a seven-day
+commit-named artifact. No customer secrets, SCOM connection or production
+provider is used. Inspect the actual run conclusion and tested SHA, not merely
+the workflow's presence. Branch protection/required-check settings are separate
+administrator policy and are not changed here. Local build commands below may
+use another compatible installed SDK; CI pins its own SDK selection.
+
 From the repository root in PowerShell:
 
 ```powershell
