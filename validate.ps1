@@ -4,6 +4,29 @@ $env:DOTNET_NOLOGO = '1'
 Push-Location $PSScriptRoot
 try {
     & (Join-Path $PSScriptRoot 'Collector\Validate-Collector.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomPreflight.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomMetricCompatibilityReport.ps1')
+    $powerShell = (Get-Process -Id $PID).Path
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomSdkReader.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'SDK reader validation failed.' }
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomManagementGroupScope.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Management-group scope validation failed.' }
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomGroupMembership.ps1')
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomRelationshipReader.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Relationship reader validation failed.' }
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomObjectNormalization.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomAlertNormalization.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomGenericProfile.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomMetricProfile.ps1')
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomWindowsProjection.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Windows source projection validation failed.' }
+    $compatibility = & (Join-Path $PSScriptRoot 'Collector\Get-SCOMCompatibilityReport.ps1') | ConvertFrom-Json
+    if ($compatibility.certificationStatus -ne 'notCertified' -or
+        -not $compatibility.metadataOnly -or $compatibility.sourceQueriesExecuted -ne 0 -or
+        $compatibility.operationsManager.commands.Count -ne 4 -or
+        $compatibility.unresolvedEvidence.Count -ne 7) {
+        throw 'Compatibility metadata must not imply source certification.'
+    }
     dotnet run --project '.\Validation\Validation.csproj' --configuration Release
     if ($LASTEXITCODE -ne 0) { throw 'Validation failed.' }
 }

@@ -5,6 +5,13 @@ artifacts/
 Collector/collector.config.json
 ScomMcp/appsettings.*.json
 !ScomMcp/appsettings.example.json
+!ScomMcp/appsettings.ReadModel.example.json
+!ScomMcp/appsettings.Worker.example.json
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.lock
 snapshot.json
 collector-status.json
 last-error.txt

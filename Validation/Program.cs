@@ -17,6 +17,10 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
 
+if (args is ["--read-model-fault", var mode, var path, var session])
+    return ReadModelFaultChecks.Child(mode, path, session);
+if (args is ["--normalization-child", var normalizationMode])
+    return NormalizationProcessChecks.Child(normalizationMode);
 if (args.Length != 0)
     return await CapturedSnapshot.Run(args, TimeProvider.System, Console.Out, Console.Error);
 await Checks.Run();
@@ -59,6 +63,21 @@ static class Checks
             await TestReader(root, snapshot, source);
             await TestCapturedSnapshot(root, snapshot, source);
             await TestHttp(auth, source, dataset);
+            await ReadModelChecks.Run(root);
+            await ReadModelFaultChecks.Run(root);
+            await IngestionPublisherChecks.Run(root);
+            await CollectionSchedulerChecks.Run();
+            await IndexedWindowsChecks.Run(root, dataset);
+            AlertReconcilerChecks.Run();
+            await CollectionWorkerChecks.Run();
+            MetricReconcilerChecks.Run();
+            await ReconciledSourceChecks.Run(root);
+            await SourceCheckpointChecks.Run(root);
+            await NormalizationProcessChecks.Run();
+            await CertificatePublisherChecks.Run();
+            await CollectionWorkerHostChecks.Run(root);
+            await WindowsSourceProjectionChecks.Run(root);
+            await ManagementGroupSourceChecks.Run(root);
             Console.WriteLine($"PASS: {passed} assertions; pure auth, snapshots, counts, cursors, math, and authenticated MCP HTTP verified.");
         }
         finally
@@ -95,6 +114,13 @@ static class Checks
         Equal(null, CallerAuthorization.Resolve(Principal(oid: Guid.Empty.ToString()), auth), "unmapped oid denied");
         Equal(null, CallerAuthorization.Resolve(Principal(tid: Guid.Empty.ToString()), auth), "wrong tenant denied");
         Check(CallerAuthorization.Resolve(Principal(), auth) is not null, "oid grant accepted");
+        var alternateCaller = Auth();
+        alternateCaller.Callers[0].ObjectId = Guid.Parse(alternateCaller.Callers[0].ObjectId!).ToString("B");
+        alternateCaller.Validate();
+        Check(CallerAuthorization.Resolve(Principal(), alternateCaller) is not null, "noncanonical configured caller GUID normalized");
+        var emptyCaller = Auth();
+        emptyCaller.Callers[0].ObjectId = Guid.Empty.ToString("D");
+        Throws<InvalidOperationException>(emptyCaller.Validate, "empty caller GUID refused");
         Fault("FORBIDDEN", () => CallerAuthorization.AuthorizeScope(Caller, "unknown-scope"), "unknown scope denied");
         Fault("FORBIDDEN", () => CallerAuthorization.AuthorizeScope(new("other", ImmutableHashSet<string>.Empty), null), "scope grant required");
         var upnAuth = Auth();
@@ -226,6 +252,12 @@ static class Checks
         Fault("SOURCE_UNAVAILABLE", () => SnapshotReader.Validate(new byte[source.MaxSnapshotBytes + 1], Status(snapshot), source, Now), "oversize refused");
         var malformed = Wire.Encode(snapshot).Replace("\"value\":40", "\"value\":1e999");
         Fault("SOURCE_UNAVAILABLE", () => SnapshotReader.Validate(Encoding.UTF8.GetBytes(malformed), Status(snapshot), source, Now), "nonfinite sample refused");
+        var missingValue = Wire.Encode(snapshot).Replace("\"value\":40,", "");
+        Fault("SOURCE_UNAVAILABLE", () => SnapshotReader.Validate(Encoding.UTF8.GetBytes(missingValue), Status(snapshot), source, Now),
+            "missing sample value refused, never zero");
+        var zeroSample = snapshot.Samples[0] with { Value = 0, ObservedAtUtc = snapshot.Samples[0].ObservedAtUtc.AddSeconds(-1) };
+        Check(Validate(snapshot with { Samples = snapshot.Samples.Add(zeroSample) }, source).Snapshot.Samples.Contains(zeroSample),
+            "explicit zero snapshot sample retained");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { Scope = new("other", "hidden") }, source), "wrong snapshot scope refused");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { SchemaVersion = "2.0" }, source), "unknown schema refused");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { Status = "unavailable" }, source), "unavailable snapshot refused");
@@ -235,6 +267,13 @@ static class Checks
         var partialDs = Validate(partial, source);
         Equal("partial", engine.SourceStatus(partialDs).Status, "missing expected computer surfaced partial");
         Check(!engine.SourceStatus(partialDs).Coverage!.Complete, "coverage false for missing device");
+        var largerExpected = partialDs with { Snapshot = partialDs.Snapshot with { ExpectedDeviceCount = 3 } };
+        Equal(3, Data(engine.SourceStatus(largerExpected)).GetProperty("expectedDeviceCount").GetInt32(),
+            "query engine reports dataset expected count rather than pilot constant");
+        Equal(3, engine.SourceStatus(largerExpected).Coverage!.ExpectedDeviceCount,
+            "query coverage uses authoritative expected count");
+        Check(!engine.SourceStatus(largerExpected).Coverage!.Complete,
+            "discovered rows do not imply complete expected membership");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { Devices = snapshot.Devices.SetItem(0, snapshot.Devices[0] with { Hostname = "outside.invalid" }) }, source), "host allowlist enforced");
         var noSamples = Validate(snapshot with { Samples = [] }, source);
         Equal("partial", engine.SourceStatus(noSamples).Status, "empty metrics explicit partial capability");

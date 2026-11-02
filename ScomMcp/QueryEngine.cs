@@ -52,7 +52,7 @@ public sealed class QueryEngine(SourceSettings settings, TimeProvider clock, Cur
         mode = "scom", capabilities = ds.Snapshot.Capabilities,
         collectionStartedAtUtc = ds.Snapshot.CollectionStartedAtUtc,
         collectedAtUtc = ds.Snapshot.CollectedAtUtc,
-        expectedDeviceCount = 2, uniqueComputerCount = ds.Snapshot.Devices.Length,
+        expectedDeviceCount = ds.Snapshot.ExpectedDeviceCount, uniqueComputerCount = ds.Snapshot.Devices.Length,
         metricObservationCount = ds.Snapshot.Samples.Length,
         optimizedObservationCount = ds.Snapshot.Samples.Count(s => s.Optimized),
         nonOptimizedObservationCount = ds.Snapshot.Samples.Count(s => !s.Optimized),
@@ -273,13 +273,16 @@ public sealed class QueryEngine(SourceSettings settings, TimeProvider clock, Cur
         var s = ds.Snapshot;
         var age = Math.Max(0, (clock.GetUtcNow() - s.CollectedAtUtc).TotalSeconds);
         var fresh = age <= settings.FreshMinutes * 60;
-        var limitations = BaseLimitations.Concat(s.Limitations).Concat(ds.ValidationLimitations)
+        var baseLimitations = ds.StorageMode == "indexed"
+            ? BaseLimitations.Skip(1).Prepend("ONLY_APPROVED_WINDOWS_VIEW_NOT_ALL_MONITORED_OBJECTS")
+            : BaseLimitations.AsEnumerable();
+        var limitations = baseLimitations.Concat(s.Limitations).Concat(ds.ValidationLimitations)
             .Concat(extra ?? []).Concat(fresh ? [] : new[] { "SNAPSHOT_STALE" }).Distinct().ToImmutableArray();
-        var partial = forcePartial || !fresh || s.Status == "partial" || s.Devices.Length != 2 ||
+        var partial = forcePartial || !fresh || s.Status == "partial" || s.Devices.Length != s.ExpectedDeviceCount ||
             ds.ValidationLimitations.Length != 0 || (extra?.Any() ?? false);
         return new Envelope("1.0", partial ? "partial" : "ok", "scom", s.DatasetId, s.Scope, data,
             s.CollectedAtUtc, new Freshness(age, fresh ? "fresh" : "stale"),
-            new Coverage(2, s.Devices.Length, s.Devices.Length == 2, s.CollectionStartedAtUtc),
+            new Coverage(s.ExpectedDeviceCount, s.Devices.Length, s.Devices.Length == s.ExpectedDeviceCount, s.CollectionStartedAtUtc),
             limitations, s.SourceRefs, Guid.NewGuid().ToString("D"));
     }
 

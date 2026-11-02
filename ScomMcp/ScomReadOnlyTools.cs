@@ -7,10 +7,10 @@ namespace ScomMcp;
 
 [McpServerToolType]
 public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine,
-    IHttpContextAccessor http, AuthSettings auth)
+    IHttpContextAccessor http, AuthSettings auth, ILogger<ScomReadOnlyTools> logger)
 {
     [McpServerTool(Name = "get_source_status", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Read SCOM snapshot capabilities, timestamps and coverage for authorized scom-lab only. Healthz does not prove metrics exist. Failed/latest missing collection returns SOURCE_UNAVAILABLE; no fixture fallback.")]
+    [Description("Read retained SCOM capabilities, timestamps and coverage for authorized scom-lab only, from the configured legacy snapshot or indexed Windows view. Neither is a live query. Healthz does not prove metrics exist. Failed/latest missing collection returns SOURCE_UNAVAILABLE; no fixture fallback.")]
     public Task<CallToolResult> SourceStatus(
         [Description("Optional authorized scope; omitted means scom-lab. No other scopes are supported.")] string? scopeId = null,
         CancellationToken cancellationToken = default) =>
@@ -77,8 +77,10 @@ public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine
             return Result(engine.Error(ex, ds), true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception)
+        catch (Exception ex)
         {
+            logger.LogError("SCOM tool request failed. ErrorType={ErrorType} TraceId={TraceId}",
+                ex.GetType().Name, http.HttpContext?.TraceIdentifier);
             return Result(engine.Error(new QueryFault("SOURCE_UNAVAILABLE", "REQUEST_COULD_NOT_BE_COMPLETED")), true);
         }
     }

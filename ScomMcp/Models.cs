@@ -28,7 +28,7 @@ public sealed record Device(
     ImmutableArray<string> GroupIds, ImmutableArray<string> SourceRefs);
 public sealed record Volume(string EntityId, string ParentEntityId, string DeviceId, string? FileSystem,
     double? SizeMiB, ImmutableArray<string> SourceRefs);
-public sealed record Sample(string EntityId, string Metric, DateTimeOffset ObservedAtUtc, double Value,
+public sealed record Sample(string EntityId, string Metric, DateTimeOffset ObservedAtUtc, [property: JsonRequired] double Value,
     string CollectionRuleId, [property: JsonRequired] bool Optimized);
 public sealed record Snapshot(
     string SchemaVersion, string DatasetId, string SourceMode, string Status,
@@ -38,7 +38,7 @@ public sealed record Snapshot(
     Capabilities Capabilities, ImmutableArray<string> Limitations, ImmutableArray<string> SourceRefs);
 public sealed record CollectorStatus(string Status, DateTimeOffset AttemptedAtUtc, string? ErrorCode, string? DatasetId);
 public sealed record Dataset(Snapshot Snapshot, string Fingerprint, int DuplicateDevices, int DuplicateVolumes,
-    int DuplicateSamples, ImmutableArray<string> ValidationLimitations);
+    int DuplicateSamples, ImmutableArray<string> ValidationLimitations, string StorageMode = "snapshot");
 public sealed record Freshness(double AgeSeconds, string State);
 public sealed record Coverage(int ExpectedDeviceCount, int UniqueDeviceCount, bool Complete,
     DateTimeOffset CollectionStartedAtUtc);

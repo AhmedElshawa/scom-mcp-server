@@ -25,6 +25,13 @@ public sealed class AuthSettings
                 c.Scopes.Length == 0 || c.Scopes.Any(s => s != Wire.ScopeId)))
             throw new InvalidOperationException("Auth configuration is missing or invalid. Refusing to start.");
         TenantId = tenantId.ToString("D");
+        foreach (var grant in Callers.Where(c => c.ObjectId is not null))
+        {
+            var id = Guid.Parse(grant.ObjectId!);
+            if (id == Guid.Empty)
+                throw new InvalidOperationException("Caller object ID must be nonzero. Refusing to start.");
+            grant.ObjectId = id.ToString("D");
+        }
     }
 }
 
