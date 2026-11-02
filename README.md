@@ -96,18 +96,45 @@ Copilot Studio authentication.
 
 **Connecting an agent to MCP does not start collection or populate inventory.**
 The worker must publish a valid dataset before MCP can answer inventory questions.
-Use the following layout when you have a SCOM server and a separate MCP server:
+Choose the collector location before installing prerequisites. To avoid adding
+.NET 8 to an existing SCOM management server, use the following two-server layout:
 
 | Host | Responsibilities | Requirements |
 |---|---|---|
-| SCOM server / collector host | Run the worker, read approved SCOM data and publish it over HTTPS | .NET 8 runtime, Windows PowerShell 5.1, installed OperationsManager module/SDK, approved read-only SCOM identity |
-| MCP server | Receive datasets, maintain the local SQLite read model and serve authenticated MCP requests | .NET 8 runtime, protected local storage, configured HTTPS hosting and Entra authentication |
+| Existing SCOM server | Provide the existing SCOM SDK service for remote read-only access | Existing approved SCOM deployment; no collector runtime installation required |
+| MCP server / collector host | Run the worker separately from the MCP application, read SCOM remotely, publish datasets, and serve retained data | .NET 8 and ASP.NET Core 8 runtimes, Windows PowerShell 5.1, compatible OperationsManager module/SDK, read-only SCOM identity, protected local storage, HTTPS and Entra authentication |
 
-The existing SCOM server can be the collector host if approved by its operator.
-A third machine is not required. The MCP server does **not** need the SCOM SDK
-or Operations console for this layout. A separately approved Windows host with
-the appropriate SDK can also run the worker. Validate resource impact before
-running collection on a production SCOM management server.
+A third machine is not required. Install **Operations console only** on the MCP
+server from approved, compatible SCOM media; this provides the PowerShell/SDK
+components without installing a management server, database, reporting server or
+web console. Review supported operating systems, installer prerequisites and
+applicable console updates with the SCOM administrator. Follow
+[Microsoft's console installation guide](https://learn.microsoft.com/en-us/system-center/scom/deploy-install-ops-console?view=sc-om-2025);
+do not copy SDK DLLs manually. If media is unavailable, obtain it through the
+organization's approved Microsoft licensing/download channel.
+
+Alternatively, an approved SCOM server or separate Windows SDK host can run the
+worker with the required runtimes. In that arrangement the MCP query host does
+not need the SDK. Validate source load and local resource impact for either layout.
+
+On the chosen collector host, verify the module in Windows PowerShell 5.1:
+
+```powershell
+Get-Module -ListAvailable -Name OperationsManager |
+    Select-Object Name, Version, Path
+```
+
+In a separate shell running as the approved read-only account, import the module
+and test the connection, replacing the example FQDN:
+
+```powershell
+Import-Module OperationsManager -ErrorAction Stop
+New-SCOMManagementGroupConnection -ComputerName 'scom01.example.com' -ErrorAction Stop
+```
+
+The connection uses that shell's Windows identity. Do not send passwords in
+commands or grant administrator/logon permissions merely to bypass an error.
+A successful connection does not establish complete scope visibility.
 
 ### 1. Configure the receiving MCP server
 
@@ -123,7 +150,7 @@ The six Windows tools, including `list_devices`, additionally require
 configuration described below. The example deliberately leaves these disabled.
 Do not enable them without matching collector and reader mappings.
 
-### 2. Configure the worker on the SCOM server
+### 2. Configure the worker on the chosen collector host
 
 Copy the packaged worker executable, collector profile and dependent modules to
 approved, protected local paths on the collector host. Use
@@ -146,6 +173,8 @@ Windows service/task mechanism; do not put its password in JSON, command-line
 arguments, Copilot Studio or this repository. Grant only the required local
 file, checkpoint and publisher-certificate access. The SCOM Windows identity
 and Entra ingestion publisher identity serve different purposes.
+Complete the [publisher identity setup](#publisher-identity-setup-entra-and-windows)
+before attempting publication.
 
 The application does not install a service/task, provision identities, sign
 scripts or configure HTTPS. Follow approved execution/signing policy; do not
@@ -367,6 +396,144 @@ enabled after a data review; names are retained. Text remains untrusted source
 data, not instructions. There is no automatic secret-redaction guarantee.
 Scope/property/metric exposure policy is pinned to the database; changing it
 requires a reviewed rebuild/migration, not silently serving old disallowed fields.
+
+### Publisher identity setup (Entra and Windows)
+
+This is an administrator provisioning procedure, not something Copilot Studio
+users perform. It creates application access and a persistent credential:
+obtain the organization's explicit approvals before changing Entra permissions,
+issuing/importing certificates or granting private-key access. The repository
+does not perform these actions automatically. Preserve the existing delegated
+reader configuration; a working Copilot Studio OAuth connection does not
+authorize the worker to publish.
+
+There are three distinct identities:
+
+| Identity | Purpose |
+|---|---|
+| Read-only Windows execution account | Worker process identity, remote SCOM access, local checkpoint and certificate access |
+| Worker Entra application/service principal | App-only authentication for HTTPS ingestion |
+| Delegated MCP caller | Authorized tool access from Copilot Studio; not an ingestion publisher |
+
+#### 1. Identify the existing API registration
+
+In the Microsoft Entra admin center, open **App registrations** and locate the
+API registration corresponding to the receiving server's configured
+`Auth:Audiences`. Do not accidentally select the Copilot Studio OAuth client
+registration. Under **Expose an API**, record the existing Application ID URI
+for private configuration. Do not change its delegated scopes, redirect URIs or
+token version as part of this procedure.
+
+The worker requests `<Application ID URI>/.default`. The issued token's audience
+must match a value already approved in the server's `Auth:Audiences`; the exact
+claim format depends on the API's access-token version. Review this locally
+without copying bearer tokens into chat, logs or online token decoders. Do not
+weaken audience validation to make an unexpected token work.
+
+#### 2. Define the ingestion application role on the API
+
+On that **API registration**, select **App roles > Create app role**:
+
+| Field | Value |
+|---|---|
+| Display name | A descriptive name such as `Publish approved SCOM datasets` |
+| Allowed member types | **Applications** |
+| Value | `Scom.Ingest` (case-sensitive) |
+| Description | Publish approved SCOM collection datasets to this API |
+| Enable this app role | Enabled |
+
+Save through the authorized administrator's approved process. This application
+role is separate from the existing delegated scope such as `Scom.Read`.
+
+#### 3. Register the worker and assign its permission
+
+1. In **App registrations > New registration**, create a dedicated worker app
+   using **Accounts in this organizational directory only**. A client-credentials
+   worker does not need a redirect URI.
+2. Record its **Directory (tenant) ID** and **Application (client) ID** privately.
+3. Open its **API permissions > Add a permission > My APIs**, choose the receiving
+   API, then **Application permissions > Scom.Ingest > Add permissions**.
+4. Have an authorized administrator review and **Grant admin consent** for the
+   tenant. Confirm the application permission is granted; adding it to the list
+   without consent is not sufficient.
+5. In **Enterprise applications**, locate this worker by its application/client
+   ID and record its **Object ID**. This is the service-principal object ID used
+   in the app-only token's `oid`, not the app-registration Object ID.
+
+The worker does not require Microsoft Graph permissions for this transport.
+Do not grant it delegated reader access or reuse a human identity as publisher.
+
+#### 4. Provision the publisher certificate
+
+Have the certificate/security administrator issue and deploy an approved
+certificate for the worker. The implementation requires an RSA private key of at
+least 2048 bits and uses PS256 assertions; verify that the chosen provider
+supports RSA-PSS signing under the worker's execution account.
+
+On the **worker app registration**, open **Certificates & secrets > Certificates
+> Upload certificate** and upload only its public certificate (`.cer`, `.pem` or
+`.crt`). Do not upload a PFX or private key to the registration.
+
+On the **collector host** (the MCP server in the co-located layout), use the
+approved certificate enrollment/import process to place the matching certificate
+and private key in **Certificates (Local Computer) > Personal > Certificates**
+(`LocalMachine\My`). The worker does not search Current User stores.
+For a software private key managed through the Certificates MMC, an authorized
+administrator can use **All Tasks > Manage Private Keys** to grant the worker
+execution account only the access needed to read/use that key. For other
+providers, use the provider's approved access controls. Do not grant broad groups
+access or change the IIS application-pool identity to the SCOM account.
+
+Record the certificate thumbprint locally: the worker setting requires the
+40-hex-character certificate thumbprint with no spaces. The certificate must be
+currently valid and uniquely present in that store. This lookup thumbprint is
+not the SHA256 `x5t#S256` assertion header, which the code computes itself.
+Never commit private keys, PFX passwords, tokens or customer configuration.
+
+#### 5. Map the identities into private configuration
+
+| Private setting | Source |
+|---|---|
+| Worker `identity.tenantId` | Worker directory/tenant ID; must match receiving server `Auth:TenantId` |
+| Worker `identity.clientId` | Worker **Application (client) ID** |
+| Worker `identity.resource` | Receiving API Application ID URI, without `/.default` or a trailing slash |
+| Worker `identity.certificateThumbprint` | Matching certificate in collector host `LocalMachine\My` |
+| Server `ReadModel:PublisherObjectIds` | Worker **Enterprise application Object ID**, in canonical hyphenated GUID form |
+| Server `ReadModel:IngestionRole` | `Scom.Ingest` |
+| Worker `publisher.endpoint` | Receiving ingestion **HTTPS origin**, not the Entra resource URI or `/mcp` route |
+
+**IIS subapplication limitation:** the current publisher accepts only an origin
+such as `https://ingestion.example.com/`; paths such as `/scom2/` are rejected.
+It calls `/ingestion/sessions/...` relative to the origin root. Before using an
+IIS subapplication, arrange an explicitly reviewed HTTPS root binding or reverse
+proxy route to the intended ingestion application. Do not assume that a working
+`/scom2/mcp` tool URL is a usable publishing endpoint, or change bindings on shared
+sites without approval.
+
+Keep all actual settings outside source. Do not overwrite the current
+`appsettings.json` with an example: merge reviewed settings while preserving
+reader authorization. Check environment/IIS overrides before an approved restart.
+Complete database, source pins, exposure policy and Windows mappings as well;
+publisher identity alone does not make `list_devices` available.
+
+#### 6. Verify before recurring execution
+
+Verify certificate access under the actual worker account, permission consent,
+TLS routing and matching configuration before an authorized `--worker-once`
+attempt. Token acquisition does not by itself prove ingestion authorization:
+the server also requires the exact tenant, approved publisher `oid`, assigned
+role and an app-only token without a delegated `scp` claim.
+
+Confirm successful publication and the intended authorized dataset through MCP
+before enabling the recurring worker. Never use a fixture, disable validation,
+or grant broader permissions as a substitute for diagnosing a failure. Protect
+both local databases independently. Plan certificate expiry monitoring and
+approved rotation, testing the new credential before retiring the old one.
+
+References:
+[App roles and application permission assignment](https://learn.microsoft.com/en-us/entra/identity-platform/howto-add-app-roles-in-apps),
+[register an app and service principal](https://learn.microsoft.com/en-us/entra/identity-platform/howto-create-service-principal-portal),
+and [certificate credentials](https://learn.microsoft.com/en-us/entra/identity-platform/certificate-credentials).
 
 ### Ingestion protocol
 
