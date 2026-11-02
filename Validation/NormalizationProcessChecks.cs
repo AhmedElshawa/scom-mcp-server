@@ -221,8 +221,22 @@ static class NormalizationProcessChecks
             }
             catch (ArgumentException) { /* An exited process may already be reaped. */ }
         }
-        using var exclusive = new FileStream(Path.Combine(root, "collector.lock"), FileMode.Open,
-            FileAccess.ReadWrite, FileShare.None);
+        // Prove resource release explicitly, too; never start the replacement
+        // until both process exit and exclusive access have been observed.
+        var watch = Stopwatch.StartNew();
+        while (true)
+        {
+            try
+            {
+                using var exclusive = new FileStream(Path.Combine(root, "collector.lock"), FileMode.Open,
+                    FileAccess.ReadWrite, FileShare.None);
+                break;
+            }
+            catch (IOException error) when ((error.HResult & 0xFFFF) is 32 or 33 && watch.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                await Task.Delay(20);
+            }
+        }
     }
 
     private static async Task WaitForFile(string path)
