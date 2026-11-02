@@ -503,12 +503,13 @@ Never commit private keys, PFX passwords, tokens or customer configuration.
 | Worker `publisher.endpoint` | Receiving ingestion **HTTPS origin**, not the Entra resource URI or `/mcp` route |
 
 **IIS subapplication limitation:** the current publisher accepts only an origin
-such as `https://ingestion.example.com/`; paths such as `/scom2/` are rejected.
+such as `https://ingestion.example.com/`; non-root application base paths are
+rejected.
 It calls `/ingestion/sessions/...` relative to the origin root. Before using an
 IIS subapplication, arrange an explicitly reviewed HTTPS root binding or reverse
 proxy route to the intended ingestion application. Do not assume that a working
-`/scom2/mcp` tool URL is a usable publishing endpoint, or change bindings on shared
-sites without approval.
+MCP tool URL beneath an application path is a usable publishing endpoint, or
+change bindings on shared sites without approval.
 
 Keep all actual settings outside source. Do not overwrite the current
 `appsettings.json` with an example: merge reviewed settings while preserving
