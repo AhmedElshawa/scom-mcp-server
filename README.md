@@ -1,32 +1,80 @@
-# SCOM MCP server
+# SCOM MCP Server
 
-An experimental, read-only Model Context Protocol (MCP) server for Windows
-System Center Operations Manager (SCOM). The original **two-computer snapshot
-pilot** remains the default. An opt-in scheduled SDK worker and indexed
-read model support an approved SCOM group or explicitly approved whole
-management group, independently of agent questions.
+[Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
 
-This is not an enterprise-wide SCOM integration or a production-ready security
-boundary. Review the limitations below before deploying it. The public source
-does not contain the original deployment's settings, data, runbooks, or
-environment-specific deployment scripts.
+SCOM MCP Server connects System Center Operations Manager (SCOM) monitoring data
+to AI assistants through the Model Context Protocol (MCP). It provides
+authenticated, read-only access to inventory, object relationships, alerts, and
+selected performance observations, enabling source-backed operational questions
+without sending a live SCOM query for every conversation.
 
-An **opt-in indexed read-model foundation** now accepts authenticated, versioned
-HTTPS ingestion and exposes generic object, relationship, alert and selected
-metric queries. It does not require a hostname list or JSON snapshot-file handoff.
-SCOM remains authoritative; this stores a selective derived view, not a replica
-of the SCOM databases. **A source worker is implemented but is not certified for
-production deployment.**
-Do not interpret the ingestion foundation or synthetic tests as production-ready
-group discovery, verified management-pack mappings, or deployed SCOM compatibility.
-The existing collector and six-tool snapshot path remain unchanged by default.
+Use the solution as a foundation for inventory assistance and monitoring-data
+investigation with MCP clients, including Microsoft Copilot Studio. Administrators
+control the collection scope, exposed properties, selected metrics, and caller
+access. SCOM remains the authoritative source; the server retains a selective,
+versioned read model rather than replicating the SCOM databases.
 
-## Start with controlled lab testing
+> **Project status: preview.** This project is intended for controlled evaluation
+> and customer-specific validation. Production readiness, installed SCOM and
+> management-pack compatibility, source collection load, and Copilot Studio
+> integration require the [deployment acceptance checklist](#deployment-acceptance-checklist).
+> OS support-lifecycle assessment and administrative write actions are not
+> implemented. This is a community project, not a Microsoft-supported product.
 
-This source includes synthetic regression tests, safe example configuration and
-packaging; it does not include customer configuration, credentials or collected
-data. Download the intended branch or commit explicitly, rather than assuming
-the default branch contains an in-progress update.
+## Key features
+
+- **Controlled collection scope:** Collect from an approved SCOM group or an
+  explicitly approved whole management group using the opt-in SDK worker.
+- **Scheduled updates:** Refresh the read model independently of agent requests,
+  with durable checkpoints and retry handling.
+- **Read-only operational queries:** Explore objects, relationships, alerts, and
+  selected metrics through authenticated MCP tools.
+- **Windows inventory and utilization:** Use the six Windows tools with reviewed
+  class, property, unit, and hosting mappings. Mixed monitoring roles can be
+  represented without labelling management servers as ordinary agents.
+- **Explicit data quality:** Preserve freshness, partial coverage, missing values,
+  dataset consistency, and pagination boundaries. Missing observations are not
+  reported as zero utilization or proof of connectivity.
+- **Separated access policies:** Authenticate ingestion publishers separately from
+  delegated MCP readers, with configured source and caller authorization.
+- **Compatibility path:** Retain the original two-computer snapshot collector and
+  its six-tool interface as the default configuration.
+
+## Solution overview
+
+The opt-in indexed configuration separates source collection from conversational
+queries:
+
+```text
+SCOM -> Scheduled Windows SDK worker -> Authenticated HTTPS ingestion
+     -> Server-local SQLite read model -> Authenticated MCP -> AI assistant
+```
+
+The worker collects approved data and publishes versioned datasets. The server
+validates and activates each dataset before making it available to readers.
+Agent questions access the retained dataset, not the SCOM SDK. The worker's
+durable checkpoint and the server's query database are separate local stores.
+
+The legacy configuration uses scheduled PowerShell collection and atomic
+`snapshot.json` / `collector-status.json` publication instead of HTTPS ingestion.
+It remains limited to exactly two configured Windows computers. Do not expand
+that collector's scope as a substitute for configuring the indexed path.
+
+## Get started
+
+1. Review the [configuration model](#indexed-read-model-configuration-opt-in),
+   [security limitations](#security-and-known-limitations), and
+   [deployment acceptance checklist](#deployment-acceptance-checklist).
+2. Download or clone the intended branch or commit. An evaluation branch may
+   contain changes that are not yet available on the default branch.
+3. Use the [build and validation instructions](#build-and-validate) to run the
+   synthetic checks and prepare a package.
+4. Configure and evaluate the solution in an authorized lab before connecting
+   production data or publishing an agent.
+
+The repository includes source code, synthetic regression fixtures, configuration
+examples, and packaging scripts. Customer configuration, credentials, collected
+data, and environment-specific deployment artifacts are not included.
 
 ```powershell
 pwsh -NoProfile -File .\validate.ps1
@@ -36,17 +84,18 @@ pwsh -NoProfile -File .\package.ps1
 `package.ps1` creates `artifacts\package` and refuses to overwrite an existing
 output directory. These commands do not deploy to SCOM or provision permissions.
 For live inventory testing, review the indexed read-model/worker configuration
-and final customer acceptance gates below. Example verification flags remain
+and deployment acceptance checklist below. Example verification flags remain
 false, metric mappings empty, and Windows projection disabled. Do not flip
 unverified flags merely to make collection run. Inventory acceptance does not
 certify metric timestamps, full-history source load, lifecycle answers or
 Copilot Studio authentication.
 
-## What it provides
+## Windows MCP tools
 
-- `get_source_status`: snapshot freshness, coverage, and capabilities.
-- `get_inventory_summary`, `list_devices`, and `get_device_details`: the two
-  approved Windows computers and their discovered logical volumes.
+- `get_source_status`: dataset freshness, coverage, and capabilities.
+- `get_inventory_summary`, `list_devices`, and `get_device_details`: approved
+  Windows computers and their discovered logical volumes. The legacy snapshot
+  path supports two computers; the indexed path uses verified expected membership.
 - `get_utilization` and `get_capacity_summary`: available CPU, memory, and disk
   observations, with timestamps and missing-data limitations.
 
@@ -89,9 +138,10 @@ framework-dependent package in the new `artifacts\package` directory. Publicatio
 excludes project JSON content; the script copies only synthetic configuration
 examples, not `appsettings.json` or local settings. Configure the package before
 starting it. Do not reuse an existing output directory or treat this as a
-certified release: it includes the legacy collector, not the new SCOM source worker.
+production-certified release: it includes both the legacy collector and the
+opt-in SDK worker, whose deployment-specific acceptance remains required.
 
-## Indexed read-model foundation (opt-in)
+## Indexed read-model configuration (opt-in)
 
 Copy `ScomMcp\appsettings.ReadModel.example.json` to your protected local server
 configuration and replace the synthetic IDs. Provide an existing, protected
@@ -772,7 +822,7 @@ and logs for investigation, then restore/rebuild under operator control. Do not
 copy a live database or place it on SMB, and do not serve old scope data as current
 while recovering.
 
-### Final customer acceptance gates
+### Deployment acceptance checklist
 
 For authorized lab metric metadata acceptance, the packaged
 `collector\Get-SCOMMetricCompatibilityReport.ps1` consolidates the CPU/memory
