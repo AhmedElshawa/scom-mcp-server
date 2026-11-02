@@ -170,7 +170,7 @@ worker JSON file outside the repository. Configure:
   `OperationsManager.psd1` path.
 - The approved management-group/group identity, independently reviewed scope
   gates, Windows mappings, script path/hash, budgets and local checkpoint path.
-- `publisher.endpoint`: the receiving MCP server's HTTPS origin, plus the
+- `publisher.endpoint`: the receiving MCP application's HTTPS base URL, plus the
   separately provisioned certificate-based publisher identity in `identity`.
 
 Run the worker under the approved Windows account with the read-only SCOM role.
@@ -260,9 +260,8 @@ for upgrades.
 In IIS Manager, create a dedicated application pool with **.NET CLR version:
 No Managed Code** and **Managed pipeline mode: Integrated**. Assign an approved
 site/application to that pool and its staged folder. Prefer an application-root
-HTTPS binding for the indexed publisher; a reader-only IIS subapplication can
-have a path prefix, but the current worker publisher does not accept such a
-prefix as its endpoint. See the publisher setup limitation before routing ingestion.
+HTTPS binding or an IIS subapplication with a path prefix. Configure the worker's
+application base URL to match that routing; it must not include the `/mcp` route.
 
 Retain the package's ASP.NET Core `web.config`. Grant the application-pool
 identity read/execute access to application files and the required write access
@@ -658,16 +657,18 @@ Never commit private keys, PFX passwords, tokens or customer configuration.
 | Worker `identity.certificateThumbprint` | Matching certificate in collector host `LocalMachine\My` |
 | Server `ReadModel:PublisherObjectIds` | Worker **Enterprise application Object ID**, in canonical hyphenated GUID form |
 | Server `ReadModel:IngestionRole` | `Scom.Ingest` |
-| Worker `publisher.endpoint` | Receiving ingestion **HTTPS origin**, not the Entra resource URI or `/mcp` route |
+| Worker `publisher.endpoint` | Receiving application's **HTTPS base URL**, including any IIS application path; not the Entra resource URI or `/mcp` route |
 
-**IIS subapplication limitation:** the current publisher accepts only an origin
-such as `https://ingestion.example.com/`; non-root application base paths are
-rejected.
-It calls `/ingestion/sessions/...` relative to the origin root. Before using an
-IIS subapplication, arrange an explicitly reviewed HTTPS root binding or reverse
-proxy route to the intended ingestion application. Do not assume that a working
-MCP tool URL beneath an application path is a usable publishing endpoint, or
-change bindings on shared sites without approval.
+**IIS application paths:** the publisher accepts an origin such as
+`https://ingestion.example.com/` or an application base such as
+`https://ingestion.example.com/monitoring/`. A missing trailing slash is added
+internally: both `/monitoring` and `/monitoring/` publish beneath
+`/monitoring/ingestion/sessions/...`. Nested application paths are supported.
+Configure the application base, not its `/mcp` or `/ingestion` route. Credentials,
+query strings and fragments are rejected; HTTPS and normal TLS validation remain
+required, and redirects are not followed. Confirm that the intended IIS
+application exposes ingestion with the configured publisher policy; a working
+reader connection alone does not establish that.
 
 Keep all actual settings outside source. Do not overwrite the current
 `appsettings.json` with an example: merge reviewed settings while preserving
@@ -707,7 +708,7 @@ cancellation. This bounds occupancy of the ingestion slot while reading a body,
 not the duration of SQLite validation/commit or upstream SCOM work.
 
 `ScomMcp\IngestionPublisher.cs` provides the source-independent .NET 8 worker
-transport. Supply an HTTPS origin, an in-memory token-acquisition callback and an
+transport. Supply an HTTPS application base URL, an in-memory token-acquisition callback and an
 asynchronous stream of typed batches plus the verified manifest. It serializes
 one batch at a time with encoded-byte and aggregate-record budgets, starts one
 session, sends contiguous sequences, verifies each acknowledgement, then commits.

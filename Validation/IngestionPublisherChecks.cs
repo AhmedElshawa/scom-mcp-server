@@ -112,6 +112,48 @@ static class IngestionPublisherChecks
         http.Endpoint = new("http://synthetic.invalid");
         try { http.Validate(); throw new Exception("HTTP accepted."); }
         catch (InvalidOperationException) { assertions++; }
+        foreach (var endpoint in new[] { "https://synthetic.invalid", "https://synthetic.invalid/",
+            "https://synthetic.invalid/monitoring", "https://synthetic.invalid/monitoring/",
+            "https://synthetic.invalid/platform/monitoring/" })
+        {
+            var pathSettings = Settings();
+            pathSettings.Endpoint = new(endpoint);
+            var prefix = pathSettings.Endpoint.AbsolutePath.TrimEnd('/');
+            var routes = new List<string>();
+            var batchAttempts = 0;
+            var pathHandler = new ReplyHandler(request =>
+            {
+                Check(request.RequestUri!.Scheme == "https" && request.RequestUri.Host == "synthetic.invalid",
+                    "application path preserves HTTPS authority");
+                Check(request.Headers.Authorization?.Parameter == "synthetic-token",
+                    "application path retains publisher authentication");
+                routes.Add(request.RequestUri.AbsolutePath);
+                if (request.RequestUri.AbsolutePath.Contains("/batches/", StringComparison.Ordinal))
+                {
+                    if (++batchAttempts == 1) return new(HttpStatusCode.ServiceUnavailable);
+                    return Json(new { accepted = true });
+                }
+                if (request.RequestUri.AbsolutePath.EndsWith("/commit", StringComparison.Ordinal))
+                    return Json(new { datasetId = request.RequestUri.Segments[^2].TrimEnd('/') });
+                return Json(new { sessionId = request.RequestUri.Segments.Last() });
+            });
+            using var pathPublisher = new IngestionPublisher(pathSettings, _ => Task.FromResult("synthetic-token"), pathHandler);
+            var session = Guid.NewGuid().ToString("D");
+            await pathPublisher.BeginAsync(session, CancellationToken.None);
+            Check(await pathPublisher.PublishAsync(session, Manifest, Batches(Batch)) == session,
+                "application base supports begin and publication");
+            var route = prefix + "/ingestion/sessions/" + session;
+            Check(routes.SequenceEqual(new[] { route, route, route + "/batches/0", route + "/batches/0", route + "/commit" }),
+                "begin, batch, retry and commit preserve exact application prefix");
+        }
+        foreach (var endpoint in new[] { "https://user:password@synthetic.invalid/app/",
+            "https://synthetic.invalid/app/?query=1", "https://synthetic.invalid/app/#fragment" })
+        {
+            var invalidEndpoint = Settings();
+            invalidEndpoint.Endpoint = new(endpoint);
+            try { invalidEndpoint.Validate(); throw new Exception("Unsafe endpoint accepted."); }
+            catch (InvalidOperationException) { assertions++; }
+        }
         Console.WriteLine($"PASS: {assertions} publisher assertions; offline publication, ambiguous responses, retry/auth/budgets and cancellation.");
     }
 

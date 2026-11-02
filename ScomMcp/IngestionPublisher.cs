@@ -16,14 +16,14 @@ public sealed class IngestionPublisherSettings
     public void Validate()
     {
         if (Endpoint is null || !Endpoint.IsAbsoluteUri || Endpoint.Scheme != "https" ||
-            Endpoint.AbsolutePath != "/" || Endpoint.UserInfo.Length != 0 ||
+            Endpoint.UserInfo.Length != 0 ||
             Endpoint.Query.Length != 0 || Endpoint.Fragment.Length != 0 ||
             MaxBatchBytes is < 1024 or > 1024 * 1024 ||
             MaxDatasetBytes < MaxBatchBytes || MaxDatasetBytes > 32 * 1024 * 1024 ||
             MaxRecords is < 1 or > 1000000 || MaxAttempts is < 1 or > 5 ||
             RequestTimeoutSeconds is < 1 or > 120 ||
             PublicationTimeoutSeconds < RequestTimeoutSeconds || PublicationTimeoutSeconds > 7200)
-            throw new InvalidOperationException("Publisher settings require an HTTPS origin and bounded publication budgets.");
+            throw new InvalidOperationException("Publisher settings require an HTTPS application base URL without credentials, query or fragment and bounded publication budgets.");
     }
 }
 
@@ -59,7 +59,9 @@ public sealed class IngestionPublisher : IDisposable
             PublicationTimeoutSeconds = settings.PublicationTimeoutSeconds
         };
         this.acquireToken = acquireToken;
-        client = new(handler) { BaseAddress = settings.Endpoint, Timeout = Timeout.InfiniteTimeSpan };
+        var applicationBase = settings.Endpoint.AbsoluteUri.EndsWith("/", StringComparison.Ordinal)
+            ? settings.Endpoint : new Uri(settings.Endpoint.AbsoluteUri + "/", UriKind.Absolute);
+        client = new(handler) { BaseAddress = applicationBase, Timeout = Timeout.InfiniteTimeSpan };
     }
 
     public async Task<string> PublishAsync(string sessionId, ReadModelManifest manifest,
