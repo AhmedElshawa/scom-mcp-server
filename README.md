@@ -67,6 +67,41 @@ The legacy configuration uses scheduled PowerShell collection and atomic
 It remains limited to exactly two configured Windows computers. Do not expand
 that collector's scope as a substitute for configuring the indexed path.
 
+## How a Copilot Studio agent can help IT administrators
+
+The MCP supplies **read-only, source-backed evidence for inventory and
+troubleshooting**. The agent can explain retained observations and suggest
+investigation steps; it cannot guarantee a root cause or perform remediation.
+The full configured implementation exposes six Windows tools and five generic
+indexed tools. Availability depends on enabled surfaces, approved scope, exposed
+fields, accepted mappings and successfully collected data.
+
+| IT-admin use case / example question | Tool evidence | Important boundary |
+|---|---|---|
+| "How many approved Windows computers are monitored? Which have this exact OS version?" | `get_inventory_summary`, `list_devices` | Distinct scoped computers, not generic object/volume counts, enterprise totals or proof of current connectivity. OS attributes may be unknown. |
+| "Show this computer's OS, memory, processors, volumes and monitoring health." | `get_device_details` | Only observed available attributes. Monitoring health is not a live connectivity test; processor counts do not establish licensing. |
+| "What other monitored objects are retained for our approved scope?" | `list_monitored_objects`, `get_monitored_object` | Retained authorized object classes and allowed properties, not server counts or complete SCOM replication. |
+| "What retained relationships touch this object?" | `list_object_relationships` | Typed edges with authorized endpoints; coverage does not prove complete topology or causal dependency. |
+| "What alerts were observed for this object, and what resolution states are retained?" | `list_monitored_alerts` | History starts at the declared retention boundary; gaps and partial absence do not prove resolution. No alert changes. |
+| "Which computers have the highest observed CPU mean over 24 hours, compared with the previous 24 hours?" | `get_utilization` | Selected CPU/memory/disk metrics only; windows 1h/24h/7d, latest/max/arithmetic mean and top up to 20. Not time-weighted or proof of continuous coverage. |
+| "Which volumes have less than 10% free space, and what capacity is known?" | `get_capacity_summary` | Memory/disk values as of the dataset; volumes and machines counted separately. Missing totals/usage remain unknown. |
+| "Show the retained samples supporting that conclusion." | `list_metric_observations` | Selected raw samples with units, rule, time and optimization flag, not every counter or unlimited history. |
+| "When was this data collected, and is the answer incomplete or stale?" | `get_source_status`, coverage/provenance on tool results | Freshness is independent of HTTP health. Failed/unavailable data must not be presented as current complete evidence. |
+
+**Implementation is not deployment acceptance.** Inventory recovery was reported
+in the lab. Metric capabilities require separately verified source rules, units,
+timestamps, history/load budgets and collected observations; inventory-only setup
+keeps metrics disabled. Customer acceptance must confirm the actual configured
+tools, expected scope, allowed/denied users and refresh behavior. Review the
+[evaluation gates](docs/customer-evaluation.md) before making customer claims.
+
+**Not provided:** guaranteed root-cause diagnosis, per-question real-time SDK
+queries, every SCOM counter, administrative/alert writes, license compliance or
+certification of untested platforms. OS end-of-support assessment is roadmap work
+until authoritative lifecycle mapping and explicit unknown handling are
+implemented. Generic class support alone does not certify every management pack
+or provide Linux/network inventory through the Windows tool contract.
+
 ## Get started
 
 **Customer evaluation:** see [release preparation and acceptance gates](docs/customer-evaluation.md).
