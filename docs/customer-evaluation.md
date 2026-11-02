@@ -50,10 +50,24 @@ Keep actual configuration and operational evidence outside public source/package
 | Downloaded package README linked to omitted deployment docs and image | Packaging now includes the runbook, issue log, evaluation notes and architecture assets. Package validation checks local Markdown file links. |
 | Runbook's source-only example links did not match packaged layout | Runbook explicitly identifies both source and packaged example locations. |
 | Reported lab recovery could be mistaken for production acceptance | Evaluation status and evidence boundaries are explicit; no merge or live upgrade is implied. |
+| Four independent-review correctness findings | Implemented crash-safe Windows collector lifetime, receiver DB ownership checks/migration, raw-observation lookup and legacy blank-ID compatibility with exact-trigger regressions. Independent re-review and intended-host acceptance remain pending. |
 
 This was a bounded deployment/package-readiness review with regression validation,
 not an exhaustive independent review of every feature-branch change or a security
 certification.
+
+### Upgrade constraints added by the correctness fixes
+
+The Windows worker requires Windows 10/Server 2016+ Job Object process-creation
+support. It fails closed if the execution host disallows required job membership;
+test the actual approved service/task mechanism before rollout.
+
+Receiver initialization recognizes the existing rollback-journal read-model
+schemas and preserves pinned scope/current/session state during transactional
+migration. Worker checkpoints, foreign/unknown schemas and WAL-mode databases are
+refused without alteration. Use an approved stopped-writer backup and offline
+review/conversion procedure for unsupported files; never clear ownership pins,
+delete state or point the receiver at the worker checkpoint to bypass startup.
 
 ## Gates before calling a customer deployment accepted
 

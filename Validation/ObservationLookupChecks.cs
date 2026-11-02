@@ -68,6 +68,26 @@ static class ObservationLookupChecks
         var replacedData = JsonSerializer.SerializeToElement(engine.Utilization(replaced, "cpuPercent", null,
             "1h", "mean", 20, false, null, null, null).Data, Wire.Json);
         Equal(50d, Number(replacedData.GetProperty("rows")[0], "value"), "replacement snapshot never reuses prior index");
+        var total = devices[0].MemoryTotalMiB ??
+            throw new InvalidOperationException("Synthetic memory scale test requires known capacity.");
+        var memory = large with
+        {
+            Snapshot = large.Snapshot with
+            {
+                Samples = devices.Select(d => new Sample(d.EntityId, "memoryAvailableMiB", now,
+                    total / 4, "syntheticAvailable", false)).Append(new Sample(devices[0].EntityId,
+                    "memoryUsedPercent", now, 10, "syntheticNative", true)).ToImmutableArray()
+            }
+        };
+        var memoryData = JsonSerializer.SerializeToElement(engine.Utilization(memory, "memoryUsedPercent", null,
+            "1h", "mean", 20, false, "asc", null, null).Data, Wire.Json);
+        Equal(10d, Number(memoryData.GetProperty("rows")[0], "value"), "native memory wins over available MiB");
+        Equal(75d, Number(memoryData.GetProperty("rows")[1], "value"), "other entities retain derived fallback");
+        var caller = new Caller("synthetic-observation-lookup", ImmutableHashSet.Create(Wire.ScopeId));
+        var capacity = JsonSerializer.SerializeToElement(engine.Capacity(memory, caller, Wire.ScopeId,
+            null, "memory", null, null, null, 50, null).Data, Wire.Json);
+        Equal(10000, capacity.GetProperty("consideredMachineCount").GetInt32(), "capacity examines all entities");
+        Equal(total * devices.Length, Number(capacity, "knownTotalMiB"), "capacity keeps known totals");
         Console.WriteLine($"PASS: {assertions} observation lookup assertions; raw-reference parity and 10,000 computers/50,000 samples in {watch.Elapsed.TotalMilliseconds:F1} ms (synthetic, not a production SLA).");
 
         Sample[] Reference(string entity, string metric, DateTimeOffset start, DateTimeOffset end)

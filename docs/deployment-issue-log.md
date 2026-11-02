@@ -48,6 +48,19 @@ configuration payloads or certificate details.
   verification from a clean-host installation, live customer acceptance and a
   reviewed versioned release.
 
+## Independent-review corrections
+
+| Finding | Implemented correction | Verification and remaining boundary |
+|---|---|---|
+| Worker crash could orphan its collector | Atomic Windows Job Object association during process creation, kill-on-close and descendant cleanup before releasing collection guard | Synthetic worker-kill/replacement, descendant, cancellation/deadline and UTF-8 tests pass. Requires Windows 10/Server 2016+ and supported job restrictions; intended service/task host acceptance remains. |
+| Receiver could mutate a worker/foreign SQLite database | Read-only immutable ownership/schema/scope check before writable access, distinct application identity and transactional supported-schema migration | 159 ownership/recovery assertions include unchanged rejected files/sidecars, legacy upgrades and disk-full rollback. WAL and unknown schemas are refused unchanged for offline review. |
+| Utilization repeatedly scanned all samples for every computer | Immutable raw series lookup cached weakly by snapshot identity; original sample order and arithmetic retained | 272 reference/boundary/memory/capacity/replacement assertions; 10,000-computer/50,000-sample synthetic CPU query completed below the five-second guard. Not a source-load or production SLA claim. |
+| Blank optional ObjectId broke legacy UPN startup | Normalize absent/empty/whitespace IDs consistently, then normalize nonblank GUIDs | Real configuration-provider tests verify legacy grants, denied users and indexed-mode UPN rejection. Mutable UPN risk remains legacy-only; prefer immutable IDs. |
+
+These are source fixes, not live upgrades or proof of exhaustive independent
+review. The combined offline suite passed; clean-host/customer/recurring-operation
+acceptance remains separate.
+
 ## Recording the next finding
 
 Record symptom, sanitized evidence, confirmed cause (or explicitly unknown),

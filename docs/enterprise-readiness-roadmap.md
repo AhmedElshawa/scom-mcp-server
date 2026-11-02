@@ -17,7 +17,7 @@ schedule recurrence, merge or create a release without the relevant approval.
 |---|---|
 | Implemented and checked offline | Opt-in indexed worker/ingestion/read model, reconciliation/checkpoints/scheduler, generic tools, six-tool bridge, deployment hardening and package checks. Offline checks are not installed-SDK certification. |
 | Reported working in the lab | First worker publication and agent inventory recovery after approved operational corrections. This does not certify the new packaged build or every tool/caller. |
-| Unresolved code-review findings | Four findings below. They have not been fixed or independently accepted. |
+| Code-review corrections implemented | All four findings below have source fixes and exact-trigger offline regressions. Independent re-review and intended-host/package acceptance remain outstanding. |
 | Not yet verified | Clean-host installation, customer-specific scope/platform acceptance, supervised recurring operation and recovery, metric source load and full Studio identity acceptance. |
 | Not implemented | Guided configuration generator/checker and authoritative OS lifecycle assessment. |
 
@@ -38,6 +38,20 @@ Use separate reviewable commits and exact-trigger regression tests, then the
 complete offline suite and package checks. Keep the live installation unchanged.
 Reconcile remaining PR requirements with implementation and tests; distinguish
 confirmed defects from proposed enhancements and unknown source contracts.
+
+**Implementation evidence:** Windows child creation now atomically binds a
+non-inherited kill-on-close Job Object before execution; crash/descendant tests
+passed. Receiver ownership checks reject foreign/checkpoint files before writable
+access and migrate recognized rollback-journal schemas transactionally. Raw
+observations use an immutable snapshot-keyed lookup without changing series order.
+Legacy blank caller IDs normalize to absent; indexed immutable-ID restrictions
+remain. The complete offline suite passed, including 159 ownership/recovery,
+23 process-lifetime and 272 observation-lookup assertions.
+
+Windows launch requires Windows 10/Server 2016 or later and compatible job
+restrictions; unsupported launches fail closed. Existing WAL/unknown-schema
+receiver databases are refused unchanged and require offline review, not automatic
+conversion. These constraints need intended-host upgrade acceptance.
 
 ## 2. Make configuration predictable
 
