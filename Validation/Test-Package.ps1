@@ -21,6 +21,7 @@ $required = @(
     'collector\ScomNormalization.psm1', 'collector\ScomMetricProfile.psm1',
     'collector\ScomWindowsProjection.psm1', 'docs\indexed-deployment-runbook.md',
     'docs\deployment-issue-log.md', 'docs\customer-evaluation.md',
+    'docs\enterprise-readiness-roadmap.md',
     'docs\images\scom-reference-architecture.png', 'docs\images\scom-reference-architecture.excalidraw'
 )
 foreach ($relative in $required) {

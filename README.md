@@ -71,6 +71,8 @@ that collector's scope as a substitute for configuring the indexed path.
 
 **Customer evaluation:** see [release preparation and acceptance gates](docs/customer-evaluation.md).
 The indexed path is not a production-certified, turnkey installer.
+The [enterprise-readiness roadmap](docs/enterprise-readiness-roadmap.md) records
+the audit backlog, staged engineering plan and human-readable operator journey.
 
 1. Review the [configuration model](#indexed-read-model-configuration-opt-in),
    [security limitations](#security-and-known-limitations), and
