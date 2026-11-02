@@ -7,12 +7,45 @@ using Microsoft.Data.Sqlite;
 namespace ScomMcp;
 
 // All store operations serialize through this process; SQLite transactions are the
-// durable boundary. Staging is never visible to readers.
+// durable boundary. Staging is never visible to readers. Startup adopts only the
+// known unmarked read-model schemas (with or without batches.record_count), with
+// their existing scope/current/session pins intact; other schemas need offline review.
 public sealed class ReadModelStore
 {
+    private const int ApplicationId = 0x53434F52; // SCOR, distinct from the worker's SCOW.
+    private const int SchemaVersion = 1;
+    private static readonly string[] Schema =
+    [
+        """
+        CREATE TABLE runs (
+            id TEXT PRIMARY KEY, publisher TEXT NOT NULL, expires TEXT NOT NULL,
+            state TEXT NOT NULL, manifest TEXT, digest TEXT)
+        """,
+        """
+        CREATE TABLE batches (
+            run TEXT NOT NULL, sequence INTEGER NOT NULL, digest TEXT NOT NULL, payload BLOB NOT NULL,
+            record_count INTEGER, PRIMARY KEY(run, sequence))
+        """,
+        """
+        CREATE TABLE records (
+            run TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, parent TEXT,
+            target TEXT, payload TEXT NOT NULL, PRIMARY KEY(run, kind, id))
+        """,
+        "CREATE INDEX record_parent ON records(run, kind, parent)",
+        """
+        CREATE TABLE current (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            run TEXT, available INTEGER NOT NULL)
+        """,
+        """
+        CREATE TABLE configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
+            scope TEXT NOT NULL)
+        """,
+        "CREATE TABLE used_sessions (id TEXT PRIMARY KEY)"
+    ];
     private readonly ReadModelSettings settings;
     private readonly SourceSettings source;
     private readonly TimeProvider clock;
+    private readonly string scope = "";
     private readonly object gate = new();
     private readonly byte[] cursorKey = RandomNumberGenerator.GetBytes(32);
     private (string Dataset, ReadModelManifest Manifest)? cachedManifest;
@@ -25,26 +58,7 @@ public sealed class ReadModelStore
         this.clock = clock;
         settings.Validate();
         if (!settings.Enabled) return;
-        using var db = Open();
-        Execute(db, """
-            CREATE TABLE IF NOT EXISTS runs (
-                id TEXT PRIMARY KEY, publisher TEXT NOT NULL, expires TEXT NOT NULL,
-                state TEXT NOT NULL, manifest TEXT, digest TEXT);
-            CREATE TABLE IF NOT EXISTS batches (
-                run TEXT NOT NULL, sequence INTEGER NOT NULL, digest TEXT NOT NULL, payload BLOB NOT NULL,
-                PRIMARY KEY(run, sequence));
-            CREATE TABLE IF NOT EXISTS records (
-                run TEXT NOT NULL, kind TEXT NOT NULL, id TEXT NOT NULL, parent TEXT,
-                target TEXT, payload TEXT NOT NULL, PRIMARY KEY(run, kind, id));
-            CREATE INDEX IF NOT EXISTS record_parent ON records(run, kind, parent);
-            CREATE TABLE IF NOT EXISTS current (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-                run TEXT, available INTEGER NOT NULL);
-            CREATE TABLE IF NOT EXISTS configuration (singleton INTEGER PRIMARY KEY CHECK(singleton=1),
-                scope TEXT NOT NULL);
-            CREATE TABLE IF NOT EXISTS used_sessions (id TEXT PRIMARY KEY);
-            INSERT OR IGNORE INTO current VALUES(1, NULL, 0);
-            """);
-        var scope = Wire.Encode(new
+        scope = Wire.Encode(new
         {
             schema = 1, settings.ManagementGroupId, settings.ScopeKind, settings.GroupId,
             properties = settings.AllowedPropertiesByClass.OrderBy(p => p.Key, StringComparer.Ordinal)
@@ -56,10 +70,33 @@ public sealed class ReadModelStore
         if (settings.WindowsToolsEnabled) scope = Wire.Encode(new { schema = 2, policy = scope, windowsTools = true });
         if (settings.WindowsMetricHosting is { } hostingPolicy)
             scope = Wire.Encode(new { schema = 3, policy = scope, windowsMetricHosting = hostingPolicy });
+        var exists = File.Exists(settings.DatabasePath);
+        if (exists)
+        {
+            using var probe = Connect(immutable: true);
+            Verify(probe, null, allowLegacy: true, validateSchema: true);
+            CheckBudget(probe);
+        }
+        else
+        {
+            // Never use ReadWriteCreate on an existing, unverified path (including
+            // an empty file). CreateNew also refuses a concurrent creator.
+            if (new[] { "-journal", "-wal", "-shm" }.Any(suffix => File.Exists(settings.DatabasePath + suffix)))
+                throw new InvalidOperationException("Read model path has orphaned SQLite state; refusing to initialize it.");
+            using var created = new FileStream(settings.DatabasePath, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        }
+        using var db = Connect();
+        Execute(db, "PRAGMA synchronous=FULL;");
+        CheckBudget(db);
+        LimitPages(db);
         using var tx = db.BeginTransaction();
-        var storedScope = Scalar(db, tx, "SELECT scope FROM configuration WHERE singleton=1");
-        if (storedScope is not null && !string.Equals((string)storedScope, scope, StringComparison.Ordinal))
-            throw new InvalidOperationException("Read model database belongs to a different configured scope.");
+        if (exists) Verify(db, tx, allowLegacy: true, validateSchema: true);
+        else
+        {
+            foreach (var statement in Schema) Execute(db, tx, statement);
+            Execute(db, tx, "INSERT INTO current VALUES(1,NULL,0); INSERT INTO configuration VALUES(1,$scope)",
+                ("$scope", scope));
+        }
         using (var columns = Command(db, tx, "PRAGMA table_info(batches)"))
         {
             var hasRecordCount = false;
@@ -68,28 +105,25 @@ public sealed class ReadModelStore
             if (!hasRecordCount)
                 Execute(db, tx, "ALTER TABLE batches ADD COLUMN record_count INTEGER");
         }
-        Execute(db, tx, "INSERT OR IGNORE INTO configuration VALUES(1,$scope)", ("$scope", scope));
+        Execute(db, tx, $"PRAGMA application_id={ApplicationId}; PRAGMA user_version={SchemaVersion};");
         tx.Commit();
     }
 
     private SqliteConnection Open()
     {
         if (!settings.Enabled) throw new QueryFault("SOURCE_UNAVAILABLE", "READ_MODEL_DISABLED");
-        var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        using (var probe = Connect(immutable: true))
         {
-            DataSource = settings.DatabasePath, Mode = SqliteOpenMode.ReadWriteCreate,
-            Pooling = false
-        }.ToString());
+            Verify(probe, null, allowLegacy: false, validateSchema: false);
+            CheckBudget(probe);
+        }
+        var db = Connect();
         try
         {
-            db.Open();
-            Execute(db, "PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL;");
-            using var size = db.CreateCommand();
-            size.CommandText = "PRAGMA page_size";
-            var pageLimit = settings.MaxDatabaseBytes / Convert.ToInt64(size.ExecuteScalar());
-            size.CommandText = $"PRAGMA max_page_count={pageLimit}";
-            if (Convert.ToInt64(size.ExecuteScalar()) > pageLimit)
-                throw new InvalidOperationException("Existing read model exceeds the configured database budget.");
+            Verify(db, null, allowLegacy: false, validateSchema: false);
+            Execute(db, "PRAGMA synchronous=FULL;");
+            CheckBudget(db);
+            LimitPages(db);
             return db;
         }
         catch
@@ -97,6 +131,84 @@ public sealed class ReadModelStore
             db.Dispose();
             throw;
         }
+    }
+
+    private SqliteConnection Connect(bool immutable = false)
+    {
+        if (!File.Exists(settings.DatabasePath))
+            throw new InvalidOperationException("Read model database is missing; refusing to recreate pinned state.");
+        // immutable avoids SQLite recovery and WAL/SHM creation during the ownership
+        // probe. WAL databases require an explicit offline checkpoint/conversion;
+        // ignoring their pending WAL could otherwise misidentify their owner.
+        using (var file = new FileStream(settings.DatabasePath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            Span<byte> header = stackalloc byte[20];
+            if ((file.Read(header) == header.Length && (header[18] == 2 || header[19] == 2)) ||
+                (File.Exists(settings.DatabasePath + "-wal") && new FileInfo(settings.DatabasePath + "-wal").Length > 0))
+                throw new InvalidOperationException("Read model requires an offline rollback-journal database; WAL ownership cannot be verified without mutation.");
+        }
+        var db = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = immutable ? new Uri(Path.GetFullPath(settings.DatabasePath)).AbsoluteUri + "?immutable=1" : settings.DatabasePath,
+            Mode = immutable ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString());
+        try
+        {
+            db.Open();
+            return db;
+        }
+        catch
+        {
+            db.Dispose();
+            throw;
+        }
+    }
+
+    private void CheckBudget(SqliteConnection db)
+    {
+        var pageSize = Convert.ToInt64(Scalar(db, null, "PRAGMA page_size"));
+        if (Convert.ToInt64(Scalar(db, null, "PRAGMA page_count")) > settings.MaxDatabaseBytes / pageSize)
+            throw new InvalidOperationException("Existing read model exceeds the configured database budget.");
+    }
+
+    private void LimitPages(SqliteConnection db)
+    {
+        using var limit = db.CreateCommand();
+        limit.CommandText = $"PRAGMA max_page_count={settings.MaxDatabaseBytes / Convert.ToInt64(Scalar(db, null, "PRAGMA page_size"))}";
+        limit.ExecuteScalar();
+    }
+
+    private void Verify(SqliteConnection db, SqliteTransaction? tx, bool allowLegacy, bool validateSchema)
+    {
+        var applicationId = Convert.ToInt64(Scalar(db, tx, "PRAGMA application_id"));
+        var version = Convert.ToInt64(Scalar(db, tx, "PRAGMA user_version"));
+        if ((applicationId != ApplicationId && !(allowLegacy && applicationId == 0)) ||
+            (version != SchemaVersion && !(allowLegacy && version == 0)))
+            throw new InvalidOperationException("Read model path belongs to another database or unsupported schema version.");
+        if (validateSchema)
+        {
+            static string Normalize(string sql) =>
+                string.Concat(sql.Where(c => !char.IsWhiteSpace(c))).TrimEnd(';').ToUpperInvariant();
+            var actual = new HashSet<string>(StringComparer.Ordinal);
+            using (var command = Command(db, tx, "SELECT sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%'"))
+            using (var reader = command.ExecuteReader())
+                while (reader.Read()) actual.Add(Normalize(reader.GetString(0)));
+            var current = Schema.Select(Normalize).ToHashSet(StringComparer.Ordinal);
+            var legacy = Schema.Select(sql => Normalize(sql.Replace("record_count INTEGER, ", "", StringComparison.Ordinal)))
+                .ToHashSet(StringComparer.Ordinal);
+            // ALTER TABLE appends the migrated column after the table constraint.
+            var migrated = Schema.Select(sql => Normalize(sql.Replace("record_count INTEGER, PRIMARY KEY(run, sequence)",
+                "PRIMARY KEY(run, sequence), record_count INTEGER", StringComparison.Ordinal))).ToHashSet(StringComparer.Ordinal);
+            if (!actual.SetEquals(current) && !actual.SetEquals(legacy) && !actual.SetEquals(migrated))
+                throw new InvalidOperationException("Read model database has an unsupported schema; no automatic repair is performed.");
+        }
+        if (!string.Equals(Scalar(db, tx, "SELECT scope FROM configuration WHERE singleton=1") as string,
+            scope, StringComparison.Ordinal) ||
+            Convert.ToInt64(Scalar(db, tx, "SELECT count(*) FROM configuration")) != 1 ||
+            Convert.ToInt64(Scalar(db, tx, "SELECT count(*) FROM current WHERE singleton=1")) != 1 ||
+            Convert.ToInt64(Scalar(db, tx, "SELECT count(*) FROM current")) != 1)
+            throw new InvalidOperationException("Read model database belongs to a different configured scope or lacks pinned state.");
     }
 
     public string Begin(string publisher, string sessionId)
@@ -659,7 +771,7 @@ public sealed class ReadModelStore
         using var command = Command(db, tx, sql, parameters);
         command.ExecuteNonQuery();
     }
-    private static object? Scalar(SqliteConnection db, SqliteTransaction tx, string sql,
+    private static object? Scalar(SqliteConnection db, SqliteTransaction? tx, string sql,
         params (string Name, object? Value)[] parameters)
     {
         using var command = Command(db, tx, sql, parameters);
