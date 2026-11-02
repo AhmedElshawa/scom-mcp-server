@@ -7,6 +7,7 @@ using ScomMcp;
 static class NormalizationProcessChecks
 {
     private static readonly DateTimeOffset Now = new(2026, 11, 1, 8, 0, 0, TimeSpan.Zero);
+    private const string Input = "{\"protocolVersion\":1,\"text\":\"測定 ü\"}";
     private static NormalizedSourceScan Scan => new("22222222-2222-4222-8222-222222222222", "managementGroup",
         null, true, [], [], [], new(Now, true, null), [], new(Now, true, null), [], Now);
 
@@ -42,6 +43,9 @@ static class NormalizationProcessChecks
         if (scan.ManagementGroupId != Scan.ManagementGroupId || !scan.MembershipVerified)
             throw new InvalidOperationException("Normalized subprocess output differs.");
         count++;
+        if ((await RunMode("utf8")).GroupId != "測定 ü")
+            throw new InvalidOperationException("UTF8 subprocess protocol was corrupted.");
+        count++;
         await Reject("error", "SOURCE_BRIDGE_SCRIPT_FAILED");
         await Reject("stderr", "SOURCE_BRIDGE_SCRIPT_FAILED");
         await Reject("malformed", "SOURCE_BRIDGE_PROTOCOL_INVALID");
@@ -61,7 +65,13 @@ static class NormalizationProcessChecks
         // fully joined, rather than leaving work to a future collection attempt.
         await RunMode("valid");
         count++;
-        Console.WriteLine($"PASS: {count} normalization process assertions; bounded pipes, strict protocol, failure, deadline and cancellation.");
+        if (OperatingSystem.IsWindows())
+        {
+            await CheckJobLifetime();
+            count += 4;
+        }
+        Console.WriteLine($"PASS: {count} normalization process assertions; bounded pipes, strict protocol, failure, deadline and cancellation" +
+            (OperatingSystem.IsWindows() ? "; Windows worker crash and descendant lifetime." : "; Windows crash checks skipped on non-Windows."));
 
         async Task Reject(string mode, string code, TimeSpan? deadline = null)
         {
@@ -73,24 +83,61 @@ static class NormalizationProcessChecks
 
     private static Task<NormalizedSourceScan> RunMode(string mode, TimeSpan? deadline = null, CancellationToken token = default)
     {
-        var start = new ProcessStartInfo("dotnet")
+        return NormalizationProcess.RunAsync(StartInfo(mode), Encoding.UTF8.GetBytes(Input), 4096,
+            deadline ?? TimeSpan.FromSeconds(15), token);
+    }
+
+    private static ProcessStartInfo StartInfo(string mode)
+    {
+        var start = new ProcessStartInfo(Environment.ProcessPath is { } path &&
+            string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase) ? path : "dotnet")
         {
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true
         };
         foreach (var argument in new[] { Assembly.GetExecutingAssembly().Location, "--normalization-child", mode })
             start.ArgumentList.Add(argument);
-        return NormalizationProcess.RunAsync(start, Encoding.UTF8.GetBytes("{\"protocolVersion\":1}"), 4096,
-            deadline ?? TimeSpan.FromSeconds(15), token);
+        return start;
     }
 
     public static int Child(string mode)
     {
+        if (mode == "checks") { Run().GetAwaiter().GetResult(); return 0; }
+        if (mode.StartsWith("worker:", StringComparison.Ordinal))
+        {
+            RunMode("collector:" + mode["worker:".Length..], TimeSpan.FromSeconds(60)).GetAwaiter().GetResult();
+            return 0;
+        }
+        if (mode.StartsWith("descendant:", StringComparison.Ordinal))
+        {
+            WritePid(Path.Combine(mode["descendant:".Length..], "descendant.pid"));
+            Thread.Sleep(Timeout.Infinite);
+        }
+        Console.InputEncoding = new UTF8Encoding(false);
         var input = Console.In.ReadToEnd();
-        if (input != "{\"protocolVersion\":1}") return 2;
+        if (input != Input) return 2;
+        if (mode.StartsWith("collector:", StringComparison.Ordinal) || mode.StartsWith("complete-tree:", StringComparison.Ordinal))
+        {
+            var root = mode[(mode.IndexOf(':') + 1)..];
+            using var exclusive = new FileStream(Path.Combine(root, "collector.lock"), FileMode.OpenOrCreate,
+                FileAccess.ReadWrite, FileShare.None);
+            WritePid(Path.Combine(root, "collector.pid"));
+            using var descendant = Process.Start(StartInfo("descendant:" + root))!;
+            descendant.StandardInput.Close();
+            WaitForFile(Path.Combine(root, "descendant.pid")).GetAwaiter().GetResult();
+            File.WriteAllText(Path.Combine(root, "ready"), "ready");
+            if (mode.StartsWith("collector:", StringComparison.Ordinal)) Thread.Sleep(Timeout.Infinite);
+            Console.Write(Wire.Encode(new NormalizationBridgeResult(1, Scan)));
+            return 0;
+        }
         switch (mode)
         {
             case "valid": Console.Write(Wire.Encode(new NormalizationBridgeResult(1, Scan))); break;
+            case "utf8":
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(new NormalizationBridgeResult(1, Scan with { GroupId = "測定 ü" }),
+                    new JsonSerializerOptions(Wire.Json) { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+                Console.OpenStandardOutput().Write(bytes);
+                break;
             case "error": return 3;
             case "stderr":
                 Console.Error.Write("synthetic private diagnostic");
@@ -106,5 +153,96 @@ static class NormalizationProcessChecks
             default: return 4;
         }
         return 0;
+    }
+
+    private static async Task CheckJobLifetime()
+    {
+        var root = Path.Combine(Directory.GetCurrentDirectory(), ".validation-data", "normalization lifetime ü " + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            // Kill only the worker, not its process tree: managed finally cannot
+            // run. Both collector and its descendant must die via the job.
+            using (var worker = Process.Start(StartInfo("worker:" + root))!)
+            {
+                worker.StandardInput.Close();
+                try
+                {
+                    await WaitForFile(Path.Combine(root, "ready"));
+                    worker.Kill();
+                    await worker.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                    await AssertTreeGone(root);
+                }
+                finally
+                {
+                    if (!worker.HasExited) { worker.Kill(); await worker.WaitForExitAsync(); }
+                }
+            }
+            // Reuse the same exclusive collector resource only after proving the
+            // old processes exited. This is the replacement checkpoint worker.
+            ClearMarkers(root);
+            await RunMode("complete-tree:" + root);
+            await AssertTreeGone(root);
+            ClearMarkers(root);
+            try { await RunMode("collector:" + root, TimeSpan.FromSeconds(2)); throw new Exception("Deadline ignored."); }
+            catch (QueryFault error) when (error.Message == "SOURCE_BRIDGE_DEADLINE") { }
+            await AssertTreeGone(root);
+            ClearMarkers(root);
+            using var cancel = new CancellationTokenSource();
+            var collection = RunMode("collector:" + root, token: cancel.Token);
+            try { await WaitForFile(Path.Combine(root, "ready")); }
+            finally { cancel.Cancel(); }
+            try { await collection; throw new Exception("Cancellation ignored."); }
+            catch (OperationCanceledException) { }
+            await AssertTreeGone(root);
+        }
+        finally
+        {
+            // On a regression, don't leave synthetic processes running.
+            foreach (var name in new[] { "collector.pid", "descendant.pid" })
+                if (File.Exists(Path.Combine(root, name)) && int.TryParse(File.ReadAllText(Path.Combine(root, name)), out var pid))
+                    try { using var process = Process.GetProcessById(pid); if (!process.HasExited) { process.Kill(true); await process.WaitForExitAsync(); } }
+                    catch (ArgumentException) { }
+            Directory.Delete(root, true);
+        }
+    }
+
+    private static async Task AssertTreeGone(string root)
+    {
+        foreach (var name in new[] { "collector.pid", "descendant.pid" })
+        {
+            await WaitForFile(Path.Combine(root, name));
+            var pid = int.Parse(await File.ReadAllTextAsync(Path.Combine(root, name)));
+            try
+            {
+                using var process = Process.GetProcessById(pid);
+                await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                if (!process.HasExited) throw new InvalidOperationException("Synthetic collector survived its worker.");
+            }
+            catch (ArgumentException) { /* An exited process may already be reaped. */ }
+        }
+        using var exclusive = new FileStream(Path.Combine(root, "collector.lock"), FileMode.Open,
+            FileAccess.ReadWrite, FileShare.None);
+    }
+
+    private static async Task WaitForFile(string path)
+    {
+        var watch = Stopwatch.StartNew();
+        while (!File.Exists(path) || new FileInfo(path).Length == 0)
+        {
+            if (watch.Elapsed > TimeSpan.FromSeconds(10)) throw new TimeoutException("Synthetic process did not become ready.");
+            await Task.Delay(20);
+        }
+    }
+
+    private static void ClearMarkers(string root)
+    {
+        foreach (var name in new[] { "collector.pid", "descendant.pid", "ready" }) File.Delete(Path.Combine(root, name));
+    }
+
+    private static void WritePid(string path)
+    {
+        File.WriteAllText(path + ".writing", Environment.ProcessId.ToString());
+        File.Move(path + ".writing", path, true);
     }
 }

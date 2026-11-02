@@ -147,11 +147,11 @@ public static class NormalizationProcess
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         timeout.CancelAfter(deadline);
         cancellationToken.ThrowIfCancellationRequested();
-        using var process = new Process { StartInfo = start };
-        if (!process.Start()) throw new QueryFault("SOURCE_UNAVAILABLE", "SOURCE_BRIDGE_START_FAILED");
-        var stdout = ReadBounded(process.StandardOutput.BaseStream, maxOutputBytes, timeout.Token);
+        using var child = NormalizationChildProcess.Start(start);
+        var process = child.Process;
+        var stdout = ReadBounded(child.Output, maxOutputBytes, timeout.Token);
         // Never surface script error text, which could contain customer data.
-        var stderr = ReadBounded(process.StandardError.BaseStream, 64 * 1024, timeout.Token);
+        var stderr = ReadBounded(child.Error, 64 * 1024, timeout.Token);
         var write = WriteInput();
         var exit = process.WaitForExitAsync(timeout.Token);
         var tasks = new List<Task> { stdout, stderr, write, exit };
@@ -161,6 +161,9 @@ public static class NormalizationProcess
             {
                 var completed = await Task.WhenAny(tasks);
                 await completed;
+                // A descendant can inherit the root's pipe handles. End its
+                // job on root exit before waiting for EOF on those pipes.
+                if (completed == exit) await child.TerminateAndWaitAsync();
                 tasks.Remove(completed);
             }
             if (process.ExitCode != 0 || stderr.Result.Length != 0)
@@ -190,10 +193,7 @@ public static class NormalizationProcess
         finally
         {
             timeout.Cancel();
-            if (!process.HasExited)
-                try { process.Kill(entireProcessTree: true); }
-                catch (InvalidOperationException) when (process.HasExited) { }
-            await process.WaitForExitAsync();
+            await child.TerminateAndWaitAsync();
             // Observe stream failures after terminating the tracked child. Do not
             // abandon a pipe task or permit a second SDK process to overlap it.
             foreach (var task in new Task[] { stdout, stderr, write, exit })
@@ -204,9 +204,9 @@ public static class NormalizationProcess
 
         async Task WriteInput()
         {
-            await process.StandardInput.BaseStream.WriteAsync(input, timeout.Token);
-            await process.StandardInput.BaseStream.FlushAsync(timeout.Token);
-            process.StandardInput.Close();
+            await child.Input.WriteAsync(input, timeout.Token);
+            await child.Input.FlushAsync(timeout.Token);
+            child.Input.Close();
         }
     }
 
