@@ -5,6 +5,10 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
 $scriptRoot = $PSScriptRoot
 $files = @(Get-ChildItem -LiteralPath $scriptRoot -Filter '*.ps1' -File)
+function Write-SyntheticRuntimeStatus {
+    param([Parameter(Mandatory = $true)][string]$Path, [Parameter(Mandatory = $true)]$Status)
+    [IO.File]::WriteAllText($Path, ($Status | ConvertTo-Json -Depth 5), [Text.UTF8Encoding]::new($false))
+}
 foreach ($file in $files) {
     $tokens = $null
     $errors = $null
@@ -143,7 +147,7 @@ try {
         $global:capturedRefreshDefinition.Principal.UserId -ne $currentIdentity -or
         $global:capturedRefreshDefinition.Principal.LogonType -ne 'Password' -or
         $global:capturedRefreshDefinition.Principal.RunLevel -ne 'Limited' -or
-        $global:capturedRefreshAction.Arguments -notmatch '--worker.+--runtime-state-dir') {
+        $global:capturedRefreshAction.Arguments -notmatch '^".+" --worker ".+" --runtime-state-dir ".+"$') {
         throw 'Task registration contract does not match the durable worker host policy.'
     }
     if (Test-Path -LiteralPath (Join-Path $testRoot 'state')) {
@@ -159,12 +163,22 @@ try {
         lastAttemptUtc = [DateTimeOffset]::UtcNow.ToString('O')
         lastPublicationUtc = [DateTimeOffset]::UtcNow.ToString('O')
         lastOutcome = 'deferred'; consecutiveDeferredAttempts = 1
-        failureCode = $null; processId = 1234
+        failureCode = $null; processId = 1234; rearmRequired = $false
+        lastFailureCode = $null; rearmedUtc = $null
     }
-    $statusData | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $statusDirectory 'worker.status.json') -Encoding utf8
+    $global:mockRefreshStatusData = $statusData
+    $global:mockRefreshStatusPath = Join-Path $statusDirectory 'worker.status.json'
+    $global:mockRefreshRequestPath = Join-Path $statusDirectory 'worker.stop.request'
+    Write-SyntheticRuntimeStatus -Path $global:mockRefreshStatusPath -Status $statusData
+    $workerAssembly = [IO.Path]::GetFullPath((Join-Path $scriptRoot '..\..\ScomMcp\bin\Release\net8.0\ScomMcp.dll'))
+    $dotnetExecutable = (Get-Command dotnet.exe -CommandType Application -ErrorAction Stop).Source
     $global:mockRefreshTask = [pscustomobject]@{
         Description = (Get-RefreshTaskMarker) + '; StateDirectory=' + $statusDirectory
-        Actions = @([pscustomobject]@{ Arguments = '--worker "C:\synthetic.json" --runtime-state-dir "' + $statusDirectory + '"' })
+        Actions = @([pscustomobject]@{
+            Execute = $dotnetExecutable
+            Arguments = '"' + $workerAssembly + '" --worker "' + $config + '" --runtime-state-dir "' + $statusDirectory + '"'
+            WorkingDirectory = (Split-Path -Parent $workerAssembly)
+        })
         Principal = [pscustomobject]@{ UserId = $currentIdentity; LogonType = 'Password' }
         Settings = [pscustomobject]@{ MultipleInstances = 'IgnoreNew'; RestartCount = 0 }
         State = 'Running'
@@ -172,16 +186,95 @@ try {
     $statusScript = Join-Path $scriptRoot 'Get-ScomWorkerTaskStatus.ps1'
     $status = & $statusScript -TaskName 'Synthetic Refresh' -TaskPath '\' -StateDirectory $statusDirectory
     if ($status.TaskState -ne 'Running' -or $status.RuntimeConsistency -ne 'consistent' -or
-        $status.LastOutcome -ne 'deferred' -or $status.FreshnessAuthority -notmatch 'get_source_status') {
+        $status.LastOutcome -ne 'deferred' -or $status.FreshnessAuthority -notmatch 'get_source_status' -or
+        $status.RearmRequired) {
         throw 'Status command did not distinguish liveness, deferred outcome and data freshness.'
     }
     $assertions++
+    try {
+        & (Join-Path $scriptRoot 'Start-ScomWorkerTask.ps1') `
+            -TaskName 'Synthetic Refresh' -TaskPath '\' -Confirm:$false
+        throw 'Start accepted a duplicate running task.'
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'already running') { throw }
+        $assertions++
+    }
+    function Get-ScheduledTask {
+        [CmdletBinding()]
+        param([string]$TaskName, [string]$TaskPath)
+        if (Test-Path -LiteralPath $global:mockRefreshRequestPath) {
+            $global:mockRefreshTask.State = 'Ready'
+            $global:mockRefreshStatusData.state = 'stopped'
+            $global:mockRefreshStatusData.failureCode = $null
+            $global:mockRefreshStatusData.rearmRequired = $false
+            $global:mockRefreshStatusData.processId = 0
+            Write-SyntheticRuntimeStatus -Path $global:mockRefreshStatusPath -Status $global:mockRefreshStatusData
+            Remove-Item -LiteralPath $global:mockRefreshRequestPath
+        }
+        return $global:mockRefreshTask
+    }
     & (Join-Path $scriptRoot 'Stop-ScomWorkerTask.ps1') -TaskName 'Synthetic Refresh' -TaskPath '\' -Confirm:$false | Out-Null
     if ($global:mockRefreshTask.State -ne 'Ready') { throw 'Stop command did not target the exact owned task.' }
     $assertions++
     & (Join-Path $scriptRoot 'Start-ScomWorkerTask.ps1') -TaskName 'Synthetic Refresh' -TaskPath '\' -Confirm:$false | Out-Null
     if ($global:mockRefreshTask.State -ne 'Running') { throw 'Start command did not target the exact owned task.' }
     $assertions++
+    $global:mockRefreshTask.State = 'Ready'
+    $global:mockRefreshStatusData.state = 'stopped'
+    $global:mockRefreshStatusData.failureCode = 'SYNTHETIC_TERMINAL_FAILURE'
+    $global:mockRefreshStatusData.rearmRequired = $true
+    $global:mockRefreshStatusData.lastFailureCode = 'SYNTHETIC_TERMINAL_FAILURE'
+    Write-SyntheticRuntimeStatus -Path $global:mockRefreshStatusPath -Status $global:mockRefreshStatusData
+    try {
+        & (Join-Path $scriptRoot 'Start-ScomWorkerTask.ps1') `
+            -TaskName 'Synthetic Refresh' -TaskPath '\' -Confirm:$false
+        throw 'Normal start silently bypassed the persisted rearm gate.'
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'explicitly') { throw }
+        $assertions++
+    }
+    $global:mockRefreshTask.State = 'Running'
+    try {
+        & (Join-Path $scriptRoot 'Rearm-ScomWorkerTask.ps1') `
+            -TaskName 'Synthetic Refresh' -TaskPath '\' -AcknowledgeFailure -Confirm:$false
+        throw 'Rearm was allowed while the task was running.'
+    }
+    catch {
+        if ($_.Exception.Message -notmatch 'running') { throw }
+        $assertions++
+    }
+    $global:mockRefreshTask.State = 'Ready'
+    & (Join-Path $scriptRoot 'Rearm-ScomWorkerTask.ps1') -TaskName 'Synthetic Refresh' `
+        -TaskPath '\' -AcknowledgeFailure -WhatIf -Confirm:$false | Out-Null
+    $assertions++
+    $rearmResult = & (Join-Path $scriptRoot 'Rearm-ScomWorkerTask.ps1') -TaskName 'Synthetic Refresh' `
+        -TaskPath '\' -AcknowledgeFailure -Confirm:$false
+    $rearmedRuntime = Read-RefreshRuntimeStatus -StateDirectory $statusDirectory
+    if (($rearmResult | Out-String) -notmatch 'explicitly rearmed' -or $rearmedRuntime.NeedsRearm -or
+        $rearmedRuntime.lastFailureCode -ne 'SYNTHETIC_TERMINAL_FAILURE') {
+        throw 'Explicit task rearm did not invoke the worker control command or preserve failure evidence.'
+    }
+    $assertions++
+    $savedStatus = Get-Content -LiteralPath $global:mockRefreshStatusPath -Raw
+    try {
+        $global:mockRefreshStatusData | Out-Null
+        $global:mockRefreshStatusPath | Out-Null
+        $invalid = $global:mockRefreshStatusData
+        $invalid | Add-Member -NotePropertyName unknownField -NotePropertyValue 'unknown'
+        Write-SyntheticRuntimeStatus -Path $global:mockRefreshStatusPath -Status $invalid
+        try {
+            & (Join-Path $scriptRoot 'Get-ScomWorkerTaskStatus.ps1') `
+                -TaskName 'Synthetic Refresh' -TaskPath '\'
+            throw 'Unknown runtime status properties were accepted.'
+        }
+        catch {
+            if ($_.Exception.Message -notmatch 'unknown or incomplete') { throw }
+            $assertions++
+        }
+    }
+    finally { [IO.File]::WriteAllText($global:mockRefreshStatusPath, $savedStatus, [Text.UTF8Encoding]::new($false)) }
     & (Join-Path $scriptRoot 'Unregister-ScomWorkerTask.ps1') -TaskName 'Synthetic Refresh' -TaskPath '\' -Confirm:$false | Out-Null
     if (-not $global:mockRefreshUnregistered -or
         -not (Test-Path -LiteralPath (Join-Path $statusDirectory 'worker.status.json'))) {

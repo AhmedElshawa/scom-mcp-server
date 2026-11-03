@@ -1,5 +1,49 @@
 using ScomMcp;
 
+if (args.Length > 0 && args[0] == "--worker-stop-request")
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("Worker stop request requires the exact runtime-state directory.");
+        Environment.ExitCode = 1;
+        return;
+    }
+    try
+    {
+        WorkerRuntimeState.RequestStop(args[1]);
+        Console.WriteLine("Worker stop request recorded.");
+        Environment.ExitCode = 0;
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Worker stop request refused. Code=WORKER_STOP_REQUEST_REFUSED ErrorType={error.GetType().Name}");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
+if (args.Length > 0 && args[0] == "--worker-rearm")
+{
+    if (args.Length != 2)
+    {
+        Console.Error.WriteLine("Worker rearm requires the exact runtime-state directory.");
+        Environment.ExitCode = 1;
+        return;
+    }
+    try
+    {
+        WorkerRuntimeState.Rearm(args[1]);
+        Console.WriteLine("Worker runtime state rearmed; inspect the preserved failure evidence before starting the task.");
+        Environment.ExitCode = 0;
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"Worker rearm refused. Code=WORKER_REARM_REFUSED ErrorType={error.GetType().Name}");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args.Length > 0 && args[0] is "--worker" or "--worker-once")
 {
     var once = args[0] == "--worker-once";

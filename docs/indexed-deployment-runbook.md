@@ -288,8 +288,9 @@ database, and register the long-running worker under the exact approved account.
 The installer rejects built-in identities, protects the runtime-state directory,
 sets Task Scheduler duplicate handling to `IgnoreNew`, requests one startup
 recovery after restart, and configures zero automatic task restarts. This avoids
-restart storms; a fatal exit remains stopped until inspected and explicitly
-started. Windows-protected Task Scheduler credential storage is used for the
+restart storms. Deferred attempts retry only inside the same worker process,
+after reconciliation and bounded backoff; Task Scheduler never retries a
+failed process. Windows-protected Task Scheduler credential storage is used for the
 supplied operator credential; the password is not embedded in scripts,
 configuration, command-line arguments, logs or source control. Follow the
 organization's approved script signing policy and do not bypass it.
@@ -307,11 +308,40 @@ The task runs the existing fixed-delay `--worker` scheduler; it does not create
 queued or overlapping scans. Registration does not start collection immediately;
 it runs at system startup unless the operator explicitly supplies `-StartNow`.
 Use `Get-ScomWorkerTaskStatus.ps1` to inspect task liveness, deferred/stopped
-state and last publication time. `Stop-ScomWorkerTask.ps1` and
-`Unregister-ScomWorkerTask.ps1` target only the marked task; unregister preserves
-logs, status and checkpoint data. Use `Start-ScomWorkerTask.ps1` only after
-reviewing a stopped/deferred failure. A forced task stop can leave an unknown
-runtime status; do not assume the last attempt succeeded.
+state, rearm gate and last publication time. `Stop-ScomWorkerTask.ps1` creates
+the protected cooperative stop request and waits for a recorded clean stop; it
+does not forcibly terminate the worker. If the task does not stop or its status
+is terminal/unknown, preserve the status/logs and investigate. A stop request
+cannot guarantee cancellation of work already accepted by a remote/backend
+system. `Unregister-ScomWorkerTask.ps1` and
+`Start-ScomWorkerTask.ps1` target only the marked task; unregister preserves
+logs, status and checkpoint data. The task still gets its normal startup
+invocation after reboot, but before reading configuration or attempting any
+source work the worker checks the durable runtime status. A known clean stop
+allows startup; a terminal failure remains gated across reboot. Power loss or
+an unexpected process exit leaves a prior `running` record, which is treated
+as an unknown outcome and gated as well. A malformed or unknown status is not
+repaired or overwritten automatically.
+
+After diagnosis and reconciliation of any ambiguous publication, explicitly
+rearm the exact stopped, owned task:
+
+```powershell
+.\Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure
+.\Get-ScomWorkerTaskStatus.ps1
+.\Start-ScomWorkerTask.ps1
+```
+
+Rearm validates the ownership marker and exact worker action, refuses while
+Task Scheduler reports the task running, and acquires the worker's exclusive
+runtime lease before updating only the gate fields. It preserves publication,
+checkpoint, logs and the last failure code. Normal start never rearms silently.
+Run it only from an operator context authorized to administer the exact task
+and modify its protected runtime-state directory.
+If status is malformed, stop and inspect protected state; do not edit or delete
+it to bypass the gate. Rearm does not establish that a remote/backend operation
+was cancelled or that publication succeeded; retain evidence and reconcile
+before resuming collection.
 
 The worker's last publication timestamp and the task's `Running` state are
 separate signals. Use authenticated `get_source_status`, coverage and the

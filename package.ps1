@@ -27,7 +27,7 @@ $operations = Join-Path $output 'Operations\DurableIndexedRefresh'
 $null = New-Item -ItemType Directory -Path $operations -Force
 foreach ($name in @('DurableIndexedRefresh.Common.ps1', 'Register-ScomWorkerTask.ps1',
     'Get-ScomWorkerTaskStatus.ps1', 'Start-ScomWorkerTask.ps1', 'Stop-ScomWorkerTask.ps1',
-    'Unregister-ScomWorkerTask.ps1', 'README.md')) {
+    'Rearm-ScomWorkerTask.ps1', 'Unregister-ScomWorkerTask.ps1', 'README.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Operations\DurableIndexedRefresh\$name") -Destination $operations
 }
 foreach ($name in @('README.md', 'LICENSE')) {

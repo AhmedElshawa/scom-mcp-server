@@ -19,6 +19,7 @@ $required = @(
     'Operations\DurableIndexedRefresh\Get-ScomWorkerTaskStatus.ps1',
     'Operations\DurableIndexedRefresh\Start-ScomWorkerTask.ps1',
     'Operations\DurableIndexedRefresh\Stop-ScomWorkerTask.ps1',
+    'Operations\DurableIndexedRefresh\Rearm-ScomWorkerTask.ps1',
     'Operations\DurableIndexedRefresh\Unregister-ScomWorkerTask.ps1',
     'Operations\DurableIndexedRefresh\README.md',
     'collector\Collect-SCOMSnapshot.ps1', 'collector\collector.example.json',

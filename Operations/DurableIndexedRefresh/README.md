@@ -49,7 +49,9 @@ $workerCredential = Get-Credential -UserName 'DOMAIN\approved-worker'
 
 Registration creates one task with an `AtStartup` trigger,
 `StartWhenAvailable`, `IgnoreNew` duplicate-instance behavior, no execution time
-limit, and **zero automatic restarts**. The first run is at system startup
+limit, and **zero automatic restarts**. Deferred attempts retry only within the
+current worker process after bounded backoff and checkpoint reconciliation.
+Task Scheduler does not restart a failed process. The first run is at system startup
 unless `-StartNow` is explicitly supplied. Task Scheduler keeps the supplied
 task credential using Windows-protected storage; the scripts do not save it to
 source, configuration, task arguments, or logs. Never pass a password as a
@@ -62,9 +64,11 @@ registered after a start-request failure.
 The worker's existing checkpoint lease and reconciliation are used after startup.
 An interrupted or ambiguous publication is reconciled before another source
 scan; checkpoint policy conflicts and unexpected errors stop the worker. There
-is no automatic retry after a fatal exit: this intentionally prevents an
-unattended restart storm. Startup recovery and a reviewed manual start use
-`--worker`, not repeated one-shot runs.
+is no automatic process restart after a fatal exit: this intentionally prevents
+an unattended restart storm. The startup task invocation is still attempted
+after reboot, but a persisted terminal failure or prior `running` state blocks
+before configuration load or source work. Only a known clean stop permits normal
+startup recovery.
 
 ```powershell
 .\Get-ScomWorkerTaskStatus.ps1
@@ -75,13 +79,36 @@ unattended restart storm. Startup recovery and a reviewed manual start use
 
 Each command selects the exact task name/path and verifies the ownership marker,
 worker action, explicit password logon identity, duplicate policy, and zero
-restart count before acting. Stop requests are never followed by broad process
-kills; a timeout or mismatch is an unknown stop outcome. Unregister removes
-only that task and deliberately preserves its protected status, logs, and
-checkpoint.
+restart count before acting. Stop creates a cooperative request in protected
+runtime state and waits for a clean worker stop; it never uses broad process
+kills. A timeout, power loss, malformed status or mismatched task is an unknown
+outcome and remains gated. The stop request cannot guarantee cancellation of
+work already accepted by a remote/backend system. Unregister removes only that
+task and deliberately preserves its protected status, logs, and checkpoint.
+
+After diagnosing a terminal failure and reconciling any ambiguous publication,
+rearm only the exact stopped owned task:
+
+```powershell
+.\Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure
+.\Get-ScomWorkerTaskStatus.ps1
+.\Start-ScomWorkerTask.ps1
+```
+
+Run rearm only from an operator context authorized to administer that exact
+task and modify its protected runtime-state directory.
+
+Rearm requires the explicit acknowledgement switch, validates task ownership
+and action, refuses a running task, and takes the same exclusive runtime lease
+as the worker. It preserves the failure code and collection evidence while
+clearing only the rearm gate. `Start-ScomWorkerTask.ps1` never rearms. Malformed
+or unknown status is not repaired automatically; preserve and inspect it rather
+than editing or deleting state to bypass the gate. Rearm is not proof of backend
+cancellation or successful publication.
 
 Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `LastOutcome`,
-`FailureCode`, and `LastPublicationUtc` together. `deferred` means the last
+`FailureCode`, `LastFailureCode`, `RearmRequired`, and `LastPublicationUtc`
+together. `deferred` means the last
 attempt safely deferred; `stopped` means the worker stopped or failed; a running
 task with stale `running` runtime state is an unknown outcome to investigate,
 not a success. Use authenticated `get_source_status` and the configured
@@ -94,6 +121,8 @@ The `Durable indexed refresh synthetic tests` workflow runs on Windows Server
 2022 under Windows PowerShell 5.1 and PowerShell 7. It checks task setup
 contracts using mocked task-scheduler cmdlets and `-WhatIf`, and exercises
 multiple serialized collection cycles, bounded deferrals, checkpoint restart
-reconciliation, process-child cleanup, runtime status, and bounded log rotation.
+reconciliation, process-child cleanup, persisted failure across a fresh
+worker/reboot simulation, explicit rearm, unknown/malformed state refusal,
+healthy startup recovery, cooperative stop, and bounded log rotation.
 It registers no scheduled task and uses no SCOM connection or customer
 configuration. CI evidence is not deployment acceptance.

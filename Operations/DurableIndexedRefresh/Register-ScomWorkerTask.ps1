@@ -27,8 +27,9 @@ if (Get-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -ErrorAction Silen
 }
 
 $description = '{0}; StateDirectory={1}' -f (Get-RefreshTaskMarker), $state
-$arguments = '--worker {0} --runtime-state-dir {1}' -f `
-    (Quote-RefreshArgument -Value $configuration), (Quote-RefreshArgument -Value $state)
+$arguments = '{0} --worker {1} --runtime-state-dir {2}' -f `
+    (Quote-RefreshArgument -Value $dll), (Quote-RefreshArgument -Value $configuration),
+    (Quote-RefreshArgument -Value $state)
 $action = New-ScheduledTaskAction -Execute $dotnet -Argument $arguments -WorkingDirectory (Split-Path -Parent $dll)
 $trigger = New-ScheduledTaskTrigger -AtStartup
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
