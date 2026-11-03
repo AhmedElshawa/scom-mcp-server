@@ -1,11 +1,16 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$StateDirectory,
-    [ValidateSet('Prepare','Configure','Activate','Publish','Accept','Status','Recover')][string]$Step = 'Status',
+    [ValidateSet('InstallPrerequisites','Prepare','Configure','Activate','Publish','Accept','Status','Recover')][string]$Step = 'Status',
     [string]$PlanPath,
     [string]$IdentityPath,
     [string]$ReceiverSettingsPath,
-    [string]$WorkerSettingsPath
+    [string]$WorkerSettingsPath,
+    [switch]$InstallIis,
+    [string]$HostingBundlePath,
+    [string]$HostingBundleVersion,
+    [string]$HostingBundleSha256,
+    [switch]$AcknowledgeRestart
 )
 
 Set-StrictMode -Version Latest
@@ -20,6 +25,12 @@ $savedPlan = Join-Path $StateDirectory 'setup-plan.json'
 # An exclusive lease prevents competing resumptions, including across consoles.
 $lease = [IO.File]::Open((Join-Path $StateDirectory 'setup.lock'), 'OpenOrCreate', 'ReadWrite', 'None')
 try {
+    if ($Step -eq 'InstallPrerequisites') {
+        & (Join-Path $PSScriptRoot 'Install-ScomPrerequisites.ps1') -StateDirectory $StateDirectory `
+            -InstallIis:$InstallIis -HostingBundlePath $HostingBundlePath -HostingBundleVersion $HostingBundleVersion `
+            -HostingBundleSha256 $HostingBundleSha256 -AcknowledgeRestart:$AcknowledgeRestart
+        return
+    }
     if (-not (Test-Path -LiteralPath $statePath)) {
         if ($Step -ne 'Prepare') { throw 'SETUP_FIRST_STEP_MUST_BE_PREPARE' }
         if ($PlanPath) { $plan = Read-ScomSetupJson $PlanPath }

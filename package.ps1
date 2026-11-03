@@ -23,7 +23,8 @@ $server = Join-Path $output 'server'
 $setup = Join-Path $output 'setup'
 $null = New-Item -ItemType Directory -Path $setup
 foreach ($name in @('ScomSetup.psm1', 'ScomSetup.Windows.psm1', 'ScomEntra.psm1', 'Start-ScomSetup.ps1',
-    'Start-ScomWorkerSetup.ps1', 'Provision-ScomEntra.ps1', 'Initialize-ScomSetupState.ps1')) {
+    'Start-ScomWorkerSetup.ps1', 'Provision-ScomEntra.ps1', 'Initialize-ScomSetupState.ps1',
+    'Install-ScomPrerequisites.ps1', 'ScomPrerequisiteInstall.psm1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Setup\$name") -Destination $setup
 }
 foreach ($name in @('appsettings.example.json', 'appsettings.ReadModel.example.json', 'appsettings.Worker.example.json')) {

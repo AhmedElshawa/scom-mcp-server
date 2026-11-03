@@ -10,7 +10,7 @@ This is an evaluation installer, **not source certification or an unattended
 production installer**. No live IIS/SCOM/Graph acceptance is implied by offline
 tests. Every effect requires typing `APPROVE`; any other response cancels before
 that effect. `Status` is read-only. There are no passwords, automatic credential
-prompts, downloads, execution-policy changes, broad group creation or recurrence.
+prompts, script-managed downloads, execution-policy changes, broad group creation or recurrence.
 
 ## Before starting
 
@@ -28,7 +28,9 @@ OperationsManager module path and common pending-restart indicators. They do
 **not** establish patch currency, SCOM build/SDK support or complete reboot
 readiness. Missing/ambiguous prerequisites block; install from approved Microsoft
 media through the platform process and resume after any required restart.
-No prerequisite installer is run or acquired by the wizard.
+The default prerequisite check does not install anything. The separately opt-in
+`InstallPrerequisites` step below can install explicit IIS features and an
+operator-supplied approved local .NET 8 Hosting Bundle. It never acquires an installer.
 
 Use serviced versions approved for your OS/SCOM combination. See
 [Microsoft IIS prerequisites](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-8.0)
@@ -52,6 +54,69 @@ the customer's private shell; never paste private configuration into a PR.
 
 ```powershell
 .\setup\Initialize-ScomSetupState.ps1 -Path 'C:\ApprovedState\ScomSetup'
+```
+
+If IIS/Hosting Bundle is missing, the authorized host administrator may explicitly
+opt into installation **before Prepare**, in an approved host maintenance window:
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory 'C:\ApprovedState\ScomSetup' -Step InstallPrerequisites `
+    -InstallIis -HostingBundlePath 'C:\ApprovedMedia\dotnet-hosting-8.0.22-win.exe' `
+    -HostingBundleVersion '8.0.22' -HostingBundleSha256 '<independently-approved-64-hex-SHA256>'
+```
+
+The version is illustrative, not a recommended current patch. The customer must
+select a supported, serviced **8.0.x** Hosting Bundle from
+[Microsoft's official versioned downloads](https://dotnet.microsoft.com/en-us/download/dotnet/8.0),
+independently validate that artifact against Microsoft's release checksum/signature,
+and record its approved SHA256 privately. A hash computed from an untrusted file
+alone does not establish trust. The script compares the mandatory independently
+approved SHA256, exact `dotnet-hosting-<version>-win.exe` name and ProductVersion
+prefix, valid Windows Authenticode status and exact Microsoft Corporation signer CN.
+Unsigned/invalid/ambiguous version or checksum evidence blocks **before any OS
+change**. The bounded local executable must not traverse reparse/network paths.
+The Windows adapter rechecks it under a read-only file lease immediately before
+launch; no warning, UAC credential or signing policy is bypassed.
+
+`-InstallIis` installs only missing `Web-Server`, `Web-Mgmt-Console` and
+`Web-Scripting-Tools`, their required dependencies and management tools through
+the supported local ServerManager cmdlet. It does not request all subfeatures,
+remote machines, credentials or `-Restart`. Windows servicing may obtain payloads
+according to the **customer's existing source policy**; this script neither
+downloads files nor overrides that policy. Unavailable feature/media contracts
+stop explicitly. Existing IIS features are not removed or reconfigured.
+
+IIS must be present before the bundle. The approved bundle runs `/install`
+(or `/repair` if that exact bundle is registered), `/quiet /norestart`, with a
+private `/log`; runtime/shared-framework/ANCM opt-outs are explicitly disabled,
+x86 support retained and shared-configuration safety checks preserved.
+The administrator separately approves **each** effect summary. A repair is needed
+when IIS was added after a preexisting bundle; a requested rerun requires a fresh
+explicit repair approval, never a hidden retry. Installer logs/temp are directed
+to the private journal directory using restored process-local environment settings.
+This is a host-wide runtime/module install: it may affect existing applications
+and is not limited to the new MCP pool.
+
+Exit 0 is followed by installed-version/runtime/ANCM probes, not treated as proof
+of deployment acceptance. Exit 3010 or IIS `RestartNeeded=Yes` records a required
+restart and pauses before further effects. All other exits (including unexpected
+1641), exceptions and the 30-minute installer wait timeout retain the pending
+journal. Timeout never forcibly kills the installer; its PID is recorded for
+customer inspection and the process may still be running.
+No OS restart, global IIS/WAS/W3SVC restart, component uninstall or rollback is
+performed. Even exit 0 can require approved IIS maintenance to reload ANCM/PATH.
+Reopen the shell and perform that customer maintenance before `Prepare`.
+
+After an explicitly required OS restart, `-AcknowledgeRestart` only records a
+detected **newer UTC boot** with cleared common restart indicators, with another
+confirmation. It never initiates a reboot. Resume with the intended install
+options if further effects remain. Interrupted-effect journals require authorized
+inspection of installer/servicing outcome and private logs before manual journal
+resolution; do not clear them to force another run.
+SCOM console/media installation, customer script signing and servicing/support
+approval remain manual prerequisites.
+
+```powershell
 .\setup\Start-ScomSetup.ps1 -StateDirectory 'C:\ApprovedState\ScomSetup' -Step Prepare
 ```
 
@@ -281,6 +346,9 @@ regression suite. Checks cover approvals/cancellation, each effect's pending
 journal, resume order, scope/identity/disabled guards, failed health/failed stop,
 package drift, one-shot approval/no-rerun and no secret export. Package checks
 require these scripts/docs and exclude runtime state/credentials.
+Additional prerequisite installer fixtures exercise vendor/version/checksum,
+explicit IIS/bundle opt-in, each mutation failure, repair, invalid/3010/timeout
+outcomes and newer-boot acknowledgement without actual OS or installer execution.
 
 These fixtures never contact customer IIS/SCOM/Graph or write a machine
 certificate. Real customer integration, script signing, SCOM property/SDK
