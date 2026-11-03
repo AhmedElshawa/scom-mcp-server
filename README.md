@@ -233,7 +233,9 @@ worker JSON file outside the repository. Configure:
 Run the worker under the approved Windows account with the read-only SCOM role.
 Its PowerShell child inherits that identity and connects to the configured SCOM
 server. Configure the execution account through the organization's approved
-Windows service/task mechanism; do not put its password in JSON, command-line
+Windows service/task mechanism; the opt-in [durable Task Scheduler host](Operations/DurableIndexedRefresh/README.md)
+provides an explicitly identified worker task, startup recovery, bounded
+deferrals and protected logs. Do not put its password in JSON, command-line
 arguments, Copilot Studio or this repository. Grant only the required local
 file, checkpoint and publisher-certificate access. The SCOM Windows identity
 and Entra ingestion publisher identity serve different purposes.
@@ -493,11 +495,15 @@ PR/push CI uses `Offline Windows validation` (`.github\workflows\offline-validat
 on `windows-2022`, pins SDK `8.0.427` and action commit hashes, and restores locked
 NuGet dependencies. It records the checked-out head SHA, runs the same complete
 offline harness, validates a fresh evaluation package and retains a seven-day
-commit-named artifact. No customer secrets, SCOM connection or production
-provider is used. Inspect the actual run conclusion and tested SHA, not merely
-the workflow's presence. Branch protection/required-check settings are separate
-administrator policy and are not changed here. Local build commands below may
-use another compatible installed SDK; CI pins its own SDK selection.
+commit-named artifact. The `Durable indexed refresh synthetic tests` workflow
+additionally runs task-host contracts on Windows PowerShell 5.1 and PowerShell 7
+and validates checkpoint restart, serialized cycles, process-child cleanup,
+status and bounded logs. Neither workflow registers a task or uses customer
+secrets, live SCOM, or a production provider. Inspect the actual run conclusion
+and tested SHA, not merely the workflow's presence. Branch protection/required-check
+settings are separate administrator policy and are not changed here. Local build
+commands below may use another compatible installed SDK; CI pins its own SDK
+selection.
 
 From the repository root in PowerShell:
 
@@ -912,10 +918,15 @@ dotnet .\ScomMcp.dll --worker C:\ProtectedWorker\worker.json
 ```
 
 `--worker-once` publishes one attempt; `--worker` uses the serialized fixed-delay
-scheduler. Ctrl+C cancels it. Failures stop with a nonzero exit code and safe
-event/type/code diagnostics, never source payloads or arbitrary error messages.
-Service installation, restart policy, credentials and deployment are operator
-tasks; this CLI does not install a Windows service or scheduled task.
+scheduler. The scheduler retries only safely deferred attempts, with bounded
+exponential backoff and a configurable consecutive-attempt limit (default 5);
+unexpected failures and exhausted deferrals stop with a nonzero exit code.
+Ctrl+C cancels it. Optional `--runtime-state-dir` enables a protected
+single-instance lease, bounded rotating logs and a durable status record for the
+Task Scheduler host. Diagnostics never contain source payloads or arbitrary
+exception messages. The CLI itself does not install a task or choose operator
+cadence, freshness limits, credentials or deployment policy; see the
+[durable Task Scheduler host](Operations/DurableIndexedRefresh/README.md).
 Use `appsettings.Worker.example.json` as a synthetic, deliberately non-runnable
 structure, not deployment settings. Keep all actual configuration outside source.
 

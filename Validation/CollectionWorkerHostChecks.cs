@@ -25,6 +25,20 @@ static class CollectionWorkerHostChecks
         await Reject(["--worker-once"]);
         await Reject(["--worker", Path.Combine(root, "does-not-exist.json")]);
         await Reject(["--worker-once", "relative.json"]);
+        await Reject(["--worker-once", Path.Combine(root, "does-not-exist.json"), "--runtime-state-dir", root]);
+        var failedRuntimeState = Path.Combine(root, "failed-runtime-state");
+        Directory.CreateDirectory(failedRuntimeState);
+        await Reject(["--worker", Path.Combine(root, "does-not-exist.json"),
+            "--runtime-state-dir", failedRuntimeState],
+            requiredOutput: "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
+        using (var status = JsonDocument.Parse(await File.ReadAllBytesAsync(
+            Path.Combine(failedRuntimeState, "worker.status.json"))))
+        {
+            if (status.RootElement.GetProperty("state").GetString() != "stopped" ||
+                status.RootElement.GetProperty("failureCode").GetString() != "WORKER_CONFIGURATION_OR_EXECUTION_FAILED")
+                throw new InvalidOperationException("Failed worker host did not report a stopped status.");
+            count++;
+        }
         var invalidJson = Path.Combine(root, "invalid-worker.json");
         try
         {

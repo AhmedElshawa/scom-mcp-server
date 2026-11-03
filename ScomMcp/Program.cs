@@ -2,9 +2,12 @@ using ScomMcp;
 
 if (args.Length > 0 && args[0] is "--worker" or "--worker-once")
 {
-    if (args.Length != 2)
+    var once = args[0] == "--worker-once";
+    var validArguments = args.Length == 2 ||
+        !once && args.Length == 4 && args[2] == "--runtime-state-dir";
+    if (!validArguments)
     {
-        Console.Error.WriteLine("Worker mode requires one absolute configuration path.");
+        Console.Error.WriteLine("Worker mode requires an absolute configuration path and optional runtime state directory.");
         Environment.ExitCode = 1;
         return;
     }
@@ -13,7 +16,8 @@ if (args.Length > 0 && args[0] is "--worker" or "--worker-once")
     Console.CancelKeyPress += stop;
     try
     {
-        Environment.ExitCode = await CollectionWorkerHost.RunAsync(args[1], args[0] == "--worker-once", shutdown.Token);
+        Environment.ExitCode = await CollectionWorkerHost.RunAsync(args[1], once, shutdown.Token,
+            args.Length == 4 ? args[3] : null);
     }
     finally { Console.CancelKeyPress -= stop; }
     return;

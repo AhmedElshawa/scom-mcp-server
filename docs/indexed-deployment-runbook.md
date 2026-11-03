@@ -267,19 +267,59 @@ record. Do not call the deployment successful merely because the agent connects.
 
 ## 9. Enable supervised recurring execution
 
-After separate operational approval, configure the reviewed Windows execution
-mechanism to run the same package/configuration as the same worker account:
+After initial one-shot publication and read-model acceptance, use the separate
+operational approval for recurring source reads. The opt-in task host is
+documented in [`Operations/DurableIndexedRefresh`](../Operations/DurableIndexedRefresh/README.md).
+It packages reusable task setup/inspect/start/stop/unregister commands; it does
+not install or run a task until an operator invokes it. Select and document the
+worker identity, recurrence and freshness budgets before registration.
+
+The schedule is in private worker configuration. Set `schedule.interval`,
+`attemptDeadline`, `failureBackoff`, `maxFailureBackoff` and
+`maxConsecutiveDeferredAttempts` against measured collection duration and the
+receiver's `Source`/`ReadModel` expiry budgets. The consecutive deferred-attempt
+limit is bounded to 1..100 (example default 5). A deferred attempt is retried
+only after reconciliation and bounded exponential backoff; exhaustion or any
+unexpected error stops the loop and requires operator investigation. Do not
+repeat `--worker-once` on a timer or widen freshness thresholds to hide a stop.
+
+Prepare a new empty local runtime-state directory separate from the checkpoint
+database, and register the long-running worker under the exact approved account.
+The installer rejects built-in identities, protects the runtime-state directory,
+sets Task Scheduler duplicate handling to `IgnoreNew`, requests one startup
+recovery after restart, and configures zero automatic task restarts. This avoids
+restart storms; a fatal exit remains stopped until inspected and explicitly
+started. Windows-protected Task Scheduler credential storage is used for the
+supplied operator credential; the password is not embedded in scripts,
+configuration, command-line arguments, logs or source control. Follow the
+organization's approved script signing policy and do not bypass it.
 
 ```powershell
-dotnet 'C:\ApprovedApps\ScomMcp\ScomMcp.dll' --worker 'C:\ProtectedWorker\worker.json'
+$workerCredential = Get-Credential -UserName 'DOMAIN\approved-worker'
+& 'C:\ApprovedPackage\Operations\DurableIndexedRefresh\Register-ScomWorkerTask.ps1' `
+    -WorkerDllPath 'C:\ApprovedApps\ScomMcp\ScomMcp.dll' `
+    -WorkerConfigPath 'C:\ProtectedWorker\worker.json' `
+    -StateDirectory 'C:\ProgramData\ScomMcpWorker\runtime' `
+    -Credential $workerCredential
 ```
 
-This runs the built-in serialized fixed-delay scheduler; it does not install a
-service or task. Do not also launch overlapping one-shot schedules. Define
-supervision, failure alerts, disk monitoring, certificate rotation and protected
-backups. Worker errors can stop the loop; do not assume backoff retries every
-failure. Verify a later committed dataset and membership refresh. Review scan
-duration against freshness thresholds before choosing cadence.
+The task runs the existing fixed-delay `--worker` scheduler; it does not create
+queued or overlapping scans. Registration does not start collection immediately;
+it runs at system startup unless the operator explicitly supplies `-StartNow`.
+Use `Get-ScomWorkerTaskStatus.ps1` to inspect task liveness, deferred/stopped
+state and last publication time. `Stop-ScomWorkerTask.ps1` and
+`Unregister-ScomWorkerTask.ps1` target only the marked task; unregister preserves
+logs, status and checkpoint data. Use `Start-ScomWorkerTask.ps1` only after
+reviewing a stopped/deferred failure. A forced task stop can leave an unknown
+runtime status; do not assume the last attempt succeeded.
+
+The worker's last publication timestamp and the task's `Running` state are
+separate signals. Use authenticated `get_source_status`, coverage and the
+configured freshness budgets to decide whether data is still available and
+current. Define operator alerts for stopped/deferred status, stale published
+data, disk capacity, certificate rotation and protected backups. Verify a later
+committed dataset and membership refresh; do not widen expiry or clear/reseed
+checkpoints as recovery.
 
 ## Troubleshooting without restarting the whole setup
 

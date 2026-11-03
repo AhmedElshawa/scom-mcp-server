@@ -18,13 +18,23 @@ public sealed class CollectionWorkerHostSettings
 
 public static class CollectionWorkerHost
 {
-    public static async Task<int> RunAsync(string configurationPath, bool once, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(string configurationPath, bool once, CancellationToken cancellationToken,
+        string? runtimeStateDirectory = null)
     {
         using var logging = LoggerFactory.Create(builder => builder.AddSimpleConsole(options => options.SingleLine = true));
         var logger = logging.CreateLogger("ScomCollectionWorker");
+        WorkerRuntimeState? runtimeState = null;
         var loadingConfiguration = true;
         try
         {
+            if (runtimeStateDirectory is not null)
+            {
+                if (once)
+                    throw new InvalidOperationException("Runtime state hosting is available only in long-running worker mode.");
+                runtimeState = new WorkerRuntimeState(runtimeStateDirectory);
+                logging.AddProvider(new BoundedWorkerFileLoggerProvider(runtimeStateDirectory));
+                logger.LogInformation("Worker runtime logging initialized. Event={Event}", "SCOM_WORKER_STARTED");
+            }
             if (!Path.IsPathFullyQualified(configurationPath))
                 throw new InvalidOperationException("Worker configuration path must be absolute.");
             var info = new FileInfo(configurationPath);
@@ -77,10 +87,19 @@ public static class CollectionWorkerHost
             else
             {
                 using var sourceGate = new SemaphoreSlim(1);
+                var consecutiveDeferredAttempts = 0;
                 async Task<CollectionAttemptOutcome> Collect(CancellationToken ct)
                 {
                     await sourceGate.WaitAsync(ct);
-                    try { return await worker.RunOnceAsync(ct); }
+                    try
+                    {
+                        var outcome = await worker.RunOnceAsync(ct);
+                        consecutiveDeferredAttempts = outcome == CollectionAttemptOutcome.Deferred
+                            ? consecutiveDeferredAttempts + 1
+                            : 0;
+                        runtimeState?.RecordAttempt(outcome, consecutiveDeferredAttempts);
+                        return outcome;
+                    }
                     finally { sourceGate.Release(); }
                 }
                 var scheduler = new CollectionScheduler(settings.Schedule, Collect,
@@ -132,24 +151,37 @@ public static class CollectionWorkerHost
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            runtimeState?.Stop("WORKER_CANCELLED");
             logger.LogInformation("Worker stopped. Event={Event}", "SCOM_WORKER_CANCELLED");
             return 0;
         }
         catch (JsonException error) when (loadingConfiguration)
         {
+            runtimeState?.Stop("WORKER_CONFIGURATION_JSON_INVALID");
             logger.LogError("Worker stopped. Event={Event} Code={Code} LineNumber={LineNumber} BytePositionInLine={BytePositionInLine}",
                 "SCOM_WORKER_FAILED", "WORKER_CONFIGURATION_JSON_INVALID", error.LineNumber, error.BytePositionInLine);
             return 1;
         }
         catch (Exception error)
         {
+            runtimeState?.Stop(error is CollectionAttemptsExhaustedException
+                ? "COLLECTION_ATTEMPTS_EXHAUSTED"
+                : error is IngestionPublicationException publicationFailure ? publicationFailure.Code :
+                error is QueryFault queryFailure ? queryFailure.Code :
+                error is JsonException ? "WORKER_CONFIGURATION_JSON_INVALID" :
+                "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
             // Never log paths, source records, configuration, credentials or
             // arbitrary exception messages from a source-profile subprocess.
             logger.LogError("Worker stopped. Event={Event} ErrorType={ErrorType} Code={Code}",
                 "SCOM_WORKER_FAILED", error.GetType().Name,
+                error is CollectionAttemptsExhaustedException ? "COLLECTION_ATTEMPTS_EXHAUSTED" :
                 error is IngestionPublicationException publication ? publication.Code :
                 error is QueryFault query ? query.Code : "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
             return 1;
+        }
+        finally
+        {
+            runtimeState?.Dispose();
         }
     }
 }

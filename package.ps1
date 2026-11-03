@@ -23,6 +23,13 @@ $server = Join-Path $output 'server'
 foreach ($name in @('appsettings.example.json', 'appsettings.ReadModel.example.json', 'appsettings.Worker.example.json')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ScomMcp\$name") -Destination $server
 }
+$operations = Join-Path $output 'Operations\DurableIndexedRefresh'
+$null = New-Item -ItemType Directory -Path $operations -Force
+foreach ($name in @('DurableIndexedRefresh.Common.ps1', 'Register-ScomWorkerTask.ps1',
+    'Get-ScomWorkerTaskStatus.ps1', 'Start-ScomWorkerTask.ps1', 'Stop-ScomWorkerTask.ps1',
+    'Unregister-ScomWorkerTask.ps1', 'README.md')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Operations\DurableIndexedRefresh\$name") -Destination $operations
+}
 foreach ($name in @('README.md', 'LICENSE')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $output
 }
