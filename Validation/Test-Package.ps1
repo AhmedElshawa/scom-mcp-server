@@ -24,6 +24,10 @@ $required = @(
     'docs\enterprise-readiness-roadmap.md',
     'docs\os-lifecycle-assessment.md',
     'docs\targeted-live-verification.md',
+    'docs\guided-setup.md', 'setup\ScomSetup.psm1', 'setup\ScomSetup.Windows.psm1', 'setup\ScomEntra.psm1',
+    'setup\Start-ScomSetup.ps1', 'setup\Start-ScomWorkerSetup.ps1', 'setup\Provision-ScomEntra.ps1',
+    'setup\Initialize-ScomSetupState.ps1',
+    'setup\Install-ScomPrerequisites.ps1', 'setup\ScomPrerequisiteInstall.psm1',
     'docs\images\scom-reference-architecture.png', 'docs\images\scom-reference-architecture.excalidraw'
 )
 foreach ($relative in $required) {

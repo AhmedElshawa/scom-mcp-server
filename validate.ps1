@@ -3,6 +3,16 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 Push-Location $PSScriptRoot
 try {
+    & (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetup.ps1')
+    & (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetupWindows.ps1')
+    & (Join-Path $PSScriptRoot 'Setup\Validate-ScomPrerequisiteInstall.ps1')
+    $desktopPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetup.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell setup validation failed; inspect the preceding error. Never bypass signing policy.' }
+    & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetupWindows.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell Windows adapter validation failed.' }
+    & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomPrerequisiteInstall.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell prerequisite installer validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-Collector.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomPreflight.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomMetricCompatibilityReport.ps1')

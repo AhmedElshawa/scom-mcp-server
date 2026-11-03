@@ -20,6 +20,13 @@ foreach ($name in @('Collect-SCOMSnapshot.ps1', 'collector.example.json', 'Get-S
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Collector\$name") -Destination $collector
 }
 $server = Join-Path $output 'server'
+$setup = Join-Path $output 'setup'
+$null = New-Item -ItemType Directory -Path $setup
+foreach ($name in @('ScomSetup.psm1', 'ScomSetup.Windows.psm1', 'ScomEntra.psm1', 'Start-ScomSetup.ps1',
+    'Start-ScomWorkerSetup.ps1', 'Provision-ScomEntra.ps1', 'Initialize-ScomSetupState.ps1',
+    'Install-ScomPrerequisites.ps1', 'ScomPrerequisiteInstall.psm1')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Setup\$name") -Destination $setup
+}
 foreach ($name in @('appsettings.example.json', 'appsettings.ReadModel.example.json', 'appsettings.Worker.example.json')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ScomMcp\$name") -Destination $server
 }
@@ -29,7 +36,7 @@ foreach ($name in @('README.md', 'LICENSE')) {
 $docs = Join-Path $output 'docs'
 $null = New-Item -ItemType Directory -Path (Join-Path $docs 'images')
 foreach ($name in @('indexed-deployment-runbook.md', 'deployment-issue-log.md', 'customer-evaluation.md',
-    'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md')) {
+    'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md', 'guided-setup.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\$name") -Destination $docs
 }
 foreach ($name in @('scom-reference-architecture.png', 'scom-reference-architecture.excalidraw')) {
