@@ -177,8 +177,7 @@ try {
 
     # Graph transport below is entirely in-memory. Never import Graph or create
     # a machine-store certificate in synthetic validation.
-    $rsa = [Security.Cryptography.RSA]::Create()
-    $rsa.KeySize=2048
+    $rsa = [Security.Cryptography.RSACng]::new(2048)
     $request = [Security.Cryptography.X509Certificates.CertificateRequest]::new(
         'CN=Synthetic setup validation', $rsa, [Security.Cryptography.HashAlgorithmName]::SHA256,
         [Security.Cryptography.RSASignaturePadding]::Pkcs1)

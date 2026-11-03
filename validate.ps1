@@ -7,7 +7,7 @@ try {
     & (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetupWindows.ps1')
     $desktopPowerShell = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
     & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetup.ps1')
-    if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell setup validation failed; use approved signing policy, never bypass.' }
+    if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell setup validation failed; inspect the preceding error. Never bypass signing policy.' }
     & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetupWindows.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell Windows adapter validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-Collector.ps1')
