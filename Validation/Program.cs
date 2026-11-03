@@ -63,6 +63,7 @@ static class Checks
             source.Validate();
             auth.Validate();
             TestAuth(auth);
+            SetupConfigurationChecks.Run(root);
             var snapshot = Fixture();
             var dataset = Validate(snapshot, source);
             var codec = new CursorCodec(Clock, source);

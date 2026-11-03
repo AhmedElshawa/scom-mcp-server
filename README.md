@@ -283,6 +283,16 @@ resolve it. In indexed mode, missing, failed, uncommitted or expired source data
 also remains unavailable. Do not fabricate fixtures or disable validation to
 make the agent return inventory.
 
+## Guided installation
+
+For a new opt-in indexed installation, use the
+[resumable console setup](docs/guided-setup.md). It separates host prerequisites,
+approved existing-group connection/staging, authorized customer Entra provisioning,
+configuration/IIS activation, explicit one-shot publication and intended-user
+acceptance. No Azure infrastructure is created when an existing host suffices.
+The evaluation wizard does not install prerequisites, infer source verification,
+overwrite existing applications or enable recurrence/metrics/live checks.
+
 ## Azure IIS and Copilot Studio reader setup
 
 This procedure configures HTTPS hosting and delegated MCP access. It does **not**

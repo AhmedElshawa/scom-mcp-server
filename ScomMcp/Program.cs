@@ -1,5 +1,29 @@
 using ScomMcp;
 
+if (args.Length > 0 && args[0] is "--validate-setup" or "--validate-setup-json")
+{
+    try
+    {
+        if (args[0] == "--validate-setup-json")
+        {
+            if (args.Length != 2) throw new InvalidOperationException("Setup JSON validation requires one path.");
+            SetupConfigurationValidation.ValidateJson(args[1]);
+            Console.WriteLine("SCOM_SETUP_JSON_VALID");
+            return;
+        }
+        if (args.Length != 3) throw new InvalidOperationException("Setup validation requires server directory and worker configuration.");
+        var ready = SetupConfigurationValidation.Validate(args[1], args[2]);
+        Console.WriteLine(ready ? "SCOM_SETUP_CONFIGURATION_READY" : "SCOM_SETUP_SOURCE_EVIDENCE_REQUIRED");
+        Environment.ExitCode = ready ? 0 : 2;
+    }
+    catch (Exception error)
+    {
+        Console.Error.WriteLine($"SCOM_SETUP_CONFIGURATION_INVALID ErrorType={error.GetType().Name}");
+        Environment.ExitCode = 1;
+    }
+    return;
+}
+
 if (args.Length > 0 && args[0] is "--worker" or "--worker-once")
 {
     if (args.Length != 2)

@@ -5,6 +5,11 @@ as separate processes on **one MCP server**, reading an existing SCOM server
 remotely. No collector .NET runtime installation is needed on the SCOM server.
 The indexed path is opt-in; the legacy snapshot path remains supported separately.
 
+For a **new** dedicated installation, the additive
+[guided setup](guided-setup.md) implements resumable console stages and separate
+customer Entra provisioning. Existing application migrations, advanced approved
+management-group scope and unsupported wizard paths use this manual runbook.
+
 **Staging files does not activate settings. Connecting Copilot Studio does not
 start collection. Inventory becomes available only after a worker dataset commits.**
 Do not treat this guide or a verification flag as production certification.

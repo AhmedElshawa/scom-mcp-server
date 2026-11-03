@@ -1,0 +1,271 @@
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+Import-Module (Join-Path $PSScriptRoot 'ScomSetup.psm1')
+
+function Get-ScomSetupPrerequisites {
+    param($Plan)
+    $codes = [Collections.Generic.List[string]]::new()
+    if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) { $codes.Add('WINDOWS_POWERSHELL_51_REQUIRED') }
+    $os = Get-CimInstance Win32_OperatingSystem
+    if ($os.ProductType -eq 1 -or [int]$os.BuildNumber -notin @(17763,20348,26100)) { $codes.Add('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED') }
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if (-not $dotnet) { $codes.Add('DOTNET8_RUNTIME_REQUIRED') }
+    else {
+        $runtimes = & $dotnet.Source --list-runtimes
+        if ($LASTEXITCODE -ne 0) { throw 'SETUP_RUNTIME_PROBE_FAILED' }
+        foreach ($runtime in @('Microsoft.NETCore.App','Microsoft.AspNetCore.App')) {
+            if (-not ($runtimes -match "^$([regex]::Escape($runtime)) 8\.")) { $codes.Add("$runtime`_8_REQUIRED") }
+        }
+    }
+    if (-not (Get-Module -ListAvailable WebAdministration)) { $codes.Add('IIS_MANAGEMENT_TOOLS_REQUIRED') }
+    $bundles = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+        Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft \.NET 8\.0\..*Windows Server Hosting' })
+    if ($bundles.Count -eq 0 -or -not (Test-Path "$env:ProgramFiles\IIS\Asp.Net Core Module\V2\aspnetcorev2.dll")) {
+        $codes.Add('DOTNET8_HOSTING_BUNDLE_REQUIRED')
+    }
+    if (-not [Environment]::Is64BitProcess) { $codes.Add('X64_POWERSHELL_AND_HOSTING_REQUIRED') }
+    if (-not (Test-Path -LiteralPath $Plan.operationsManagerModule -PathType Leaf)) { $codes.Add('APPROVED_SCOM_CONSOLE_SDK_REQUIRED') }
+    foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+        'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
+        if (Test-Path $key) { $codes.Add('RESTART_REQUIRED') }
+    }
+    $sessionManager = Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
+    if ($sessionManager.PSObject.Properties['PendingFileRenameOperations'] -and $sessionManager.PendingFileRenameOperations) {
+        $codes.Add('RESTART_REQUIRED')
+    }
+    [pscustomobject]@{ ready=($codes.Count -eq 0); codes=$codes.ToArray(); certificationStatus='notCertified' }
+}
+
+function Set-ScomSetupDirectoryAcl {
+    param([string]$Path, [hashtable]$Grants)
+    Assert-ScomSetupPath $Path
+    $acl = [Security.AccessControl.DirectorySecurity]::new()
+    $acl.SetAccessRuleProtection($true, $false)
+    $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+    $all = @{'S-1-5-18'='FullControl'; 'S-1-5-32-544'='FullControl'}
+    foreach ($name in $Grants.Keys) { $all[$name] = $Grants[$name] }
+    foreach ($name in $all.Keys) {
+        $principal = if ($name.StartsWith('S-1-')) { [Security.Principal.SecurityIdentifier]::new($name) }
+            else { [Security.Principal.NTAccount]::new($name) }
+        $rule = [Security.AccessControl.FileSystemAccessRule]::new($principal, $all[$name],
+            'ContainerInherit,ObjectInherit', 'None', 'Allow')
+        $acl.AddAccessRule($rule)
+    }
+    Set-Acl -LiteralPath $Path -AclObject $acl
+}
+
+function Assert-ScomSetupPrivateDirectory {
+    param([string]$Path)
+    Assert-ScomSetupPath $Path
+    $acl = Get-Acl -LiteralPath $Path
+    $ownerSid = ([Security.Principal.NTAccount]::new($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+    if (-not $acl.AreAccessRulesProtected -or $ownerSid -notin @('S-1-5-32-544','S-1-5-18')) {
+        throw 'SETUP_JOURNAL_REQUIRES_ADMIN_OWNED_PRIVATE_DIRECTORY'
+    }
+    foreach ($rule in $acl.Access) {
+        $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
+        if ($rule.AccessControlType -eq 'Allow' -and $sid -notin @('S-1-5-18','S-1-5-32-544')) {
+            throw 'SETUP_JOURNAL_MUST_ONLY_ALLOW_SYSTEM_AND_ADMINISTRATORS'
+        }
+    }
+}
+
+function Assert-ScomSetupIisTarget {
+    param($Plan)
+    Import-Module WebAdministration
+    if (Test-Path "IIS:\AppPools\$($Plan.poolName)") { throw 'SETUP_EXISTING_POOL_CONFLICT' }
+    $site = Get-Website -Name $Plan.siteName
+    if ($Plan.applicationPath -eq '/') {
+        if ($site) { throw 'SETUP_EXISTING_SITE_CONFLICT' }
+        $uri = [uri]$Plan.httpsBaseUrl
+        if (@(Get-WebBinding | Where-Object {
+            $_.bindingInformation -eq "*:$($uri.Port):$($uri.DnsSafeHost)"
+        }).Count -gt 0) { throw 'SETUP_EXISTING_HTTPS_BINDING_CONFLICT' }
+    } else {
+        if (-not $site -or (Get-WebApplication -Site $Plan.siteName -Name $Plan.applicationPath.Trim('/'))) {
+            throw 'SETUP_EXISTING_APPLICATION_CONFLICT_OR_SITE_MISSING'
+        }
+        $uri = [uri]$Plan.httpsBaseUrl
+        $binding = @(Get-WebBinding -Name $Plan.siteName -Protocol https | Where-Object {
+            $_.bindingInformation -eq "*:$($uri.Port):$($uri.DnsSafeHost)"
+        })
+        if ($binding.Count -ne 1 -or $binding[0].certificateHash -ne $Plan.tlsThumbprint) { throw 'SETUP_EXISTING_SITE_HTTPS_MISMATCH' }
+    }
+    $certificate = Get-Item "Cert:\LocalMachine\My\$($Plan.tlsThumbprint)"
+    if (-not $certificate.HasPrivateKey -or $certificate.NotAfter -le (Get-Date) -or $certificate.NotBefore -gt (Get-Date)) {
+        throw 'SETUP_TLS_CERTIFICATE_INVALID'
+    }
+}
+
+function Assert-ScomSetupOwnedPool {
+    param($Plan)
+    Import-Module WebAdministration
+    $pool = Get-Item "IIS:\AppPools\$($Plan.poolName)"
+    if ($pool.processModel.identityType -ne 'ApplicationPoolIdentity' -or $pool.managedRuntimeVersion -ne '' -or
+        $pool.managedPipelineMode -ne 'Integrated') { throw 'SETUP_POOL_OWNERSHIP_CONFLICT' }
+    $path = if ($Plan.applicationPath -eq '/') { (Get-Website -Name $Plan.siteName).physicalPath }
+        else { (Get-WebApplication -Site $Plan.siteName -Name $Plan.applicationPath.Trim('/')).physicalPath }
+    $assigned = if ($Plan.applicationPath -eq '/') { (Get-Website -Name $Plan.siteName).applicationPool }
+        else { (Get-WebApplication -Site $Plan.siteName -Name $Plan.applicationPath.Trim('/')).applicationPool }
+    if ($path -ne (Join-Path $Plan.installPath 'server') -or $assigned -ne $Plan.poolName) { throw 'SETUP_APP_OWNERSHIP_CONFLICT' }
+    $uses = @(Get-Website | Where-Object applicationPool -EQ $Plan.poolName)
+    $apps = @(Get-WebApplication | Where-Object applicationPool -EQ $Plan.poolName)
+    if ($uses.Count + $apps.Count -ne 1) { throw 'SETUP_POOL_NOT_DEDICATED' }
+    $variables = Get-WebConfigurationProperty -PSPath 'MACHINE/WEBROOT/APPHOST' -Filter "system.applicationHost/applicationPools/add[@name='$($Plan.poolName)']/environmentVariables" -Name '.'
+    if ($variables.Collection.Count -gt 0) {
+        throw 'SETUP_POOL_ENVIRONMENT_OVERRIDES_REQUIRE_MANUAL_REVIEW'
+    }
+}
+
+function New-ScomSetupWindowsAdapters {
+    @{
+        Prerequisites = ${function:Get-ScomSetupPrerequisites}
+        Prepare = {
+            param($p)
+            Assert-ScomSetupIisTarget $p
+            foreach ($path in @($p.installPath,$p.privatePath,$p.receiverStatePath,$p.workerStatePath)) {
+                if (Test-Path -LiteralPath $path) { throw 'SETUP_NEW_DIRECTORIES_REQUIRED' }
+                if (-not (Test-Path -LiteralPath (Split-Path $path -Parent) -PathType Container)) { throw 'SETUP_EXISTING_PARENT_DIRECTORY_REQUIRED' }
+            }
+            foreach ($file in @('server\ScomMcp.dll','server\web.config','server\appsettings.ReadModel.example.json',
+                'server\appsettings.Worker.example.json','collector\Invoke-SCOMGenericGroupProfile.ps1')) {
+                if (-not (Test-Path -LiteralPath (Join-Path $p.packagePath $file) -PathType Leaf)) { throw 'SETUP_PACKAGE_INCOMPLETE' }
+            }
+            foreach ($path in @($p.installPath,$p.privatePath,$p.receiverStatePath,$p.workerStatePath)) {
+                $null = New-Item -ItemType Directory -Path $path
+                Set-ScomSetupDirectoryAcl $path @{}
+            }
+            # The pool SID cannot be resolved until activation creates the pool.
+            Set-ScomSetupDirectoryAcl $p.installPath @{$p.workerAccount='ReadAndExecute'}
+            Set-ScomSetupDirectoryAcl $p.privatePath @{$p.workerAccount='ReadAndExecute'}
+            Set-ScomSetupDirectoryAcl $p.workerStatePath @{$p.workerAccount='Modify'}
+            foreach ($directory in @('server','collector')) {
+                foreach ($file in Get-ChildItem -LiteralPath (Join-Path $p.packagePath $directory) -Recurse -Force) {
+                    Assert-ScomSetupPath $file.FullName
+                }
+                Copy-Item -LiteralPath (Join-Path $p.packagePath $directory) -Destination $p.installPath -Recurse
+            }
+            # Packaged synthetic auth is not a deployable configuration.
+            [IO.File]::WriteAllText((Join-Path $p.installPath 'server\appsettings.json'), '{}', [Text.UTF8Encoding]::new($false))
+            Save-ScomSetupJson (Join-Path $p.privatePath 'setup-plan.json') $p
+            $files = @(Get-ChildItem -LiteralPath $p.installPath -Recurse -File | Where-Object Name -NE 'appsettings.json' |
+                ForEach-Object { [pscustomobject]@{
+                    path=$_.FullName.Substring($p.installPath.TrimEnd('\').Length + 1)
+                    sha256=(Get-ScomSetupHash $_.FullName)
+                } })
+            Save-ScomSetupJson (Join-Path $p.privatePath 'installed-files.json') @{schemaVersion=1; files=$files}
+        }
+        Configure = {
+            param($p,$inputSettings)
+            Assert-ScomSetupInstalledFiles $p
+            foreach ($path in @($inputSettings.identityPath,$inputSettings.receiverPath,$inputSettings.workerPath)) {
+                Assert-ScomSetupPath $path
+                & dotnet (Join-Path $p.installPath 'server\ScomMcp.dll') --validate-setup-json $path
+                if ($LASTEXITCODE -ne 0) { throw 'SETUP_INPUT_JSON_INVALID_OR_DUPLICATE' }
+            }
+            $identity = Read-ScomSetupJson $inputSettings.identityPath
+            $receiver = Read-ScomSetupJson $inputSettings.receiverPath
+            $worker = Read-ScomSetupJson $inputSettings.workerPath
+            $merged = Merge-ScomSetupConfiguration $p $receiver $worker $identity
+            $active = Join-Path $p.installPath 'server\appsettings.json'
+            if (Test-Path -LiteralPath (Join-Path $p.installPath 'server\appsettings.Production.json')) {
+                throw 'SETUP_EXTRA_CONFIGURATION_PROVIDER_REQUIRES_MANUAL_REVIEW'
+            }
+            $backup = Join-Path $p.privatePath ('receiver.before-setup.' + [guid]::NewGuid().ToString('N') + '.json')
+            Copy-Item -LiteralPath $active -Destination $backup
+            $workerPath = Join-Path $p.privatePath 'worker.json'
+            if (Test-Path -LiteralPath $workerPath) {
+                Copy-Item -LiteralPath $workerPath -Destination (Join-Path $p.privatePath ('worker.before-setup.' + [guid]::NewGuid().ToString('N') + '.json'))
+            }
+            Save-ScomSetupJson $active $merged.receiver
+            Save-ScomSetupJson $workerPath $merged.worker
+        }
+        Validate = {
+            param($p)
+            Assert-ScomSetupInstalledFiles $p
+            & dotnet (Join-Path $p.installPath 'server\ScomMcp.dll') --validate-setup `
+                (Join-Path $p.installPath 'server') (Join-Path $p.privatePath 'worker.json')
+            if ($LASTEXITCODE -eq 2) { throw 'SETUP_SOURCE_EVIDENCE_REQUIRED_NO_FLAGS_INFERRED' }
+            if ($LASTEXITCODE -ne 0) { throw 'SETUP_EFFECTIVE_CONFIGURATION_INVALID' }
+        }
+        Activate = {
+            param($p)
+            Assert-ScomSetupIisTarget $p
+            Add-Type -Path "$env:WINDIR\System32\inetsrv\Microsoft.Web.Administration.dll"
+            $manager = [Microsoft.Web.Administration.ServerManager]::new()
+            try {
+                if ($manager.ApplicationPools[$p.poolName]) { throw 'SETUP_EXISTING_POOL_CONFLICT' }
+                $pool = $manager.ApplicationPools.Add($p.poolName)
+                $pool.ManagedRuntimeVersion = ''
+                $pool.ManagedPipelineMode = [Microsoft.Web.Administration.ManagedPipelineMode]::Integrated
+                $pool.ProcessModel.IdentityType = [Microsoft.Web.Administration.ProcessModelIdentityType]::ApplicationPoolIdentity
+                $pool.AutoStart = $false
+                if ($p.applicationPath -eq '/') {
+                    if ($manager.Sites[$p.siteName]) { throw 'SETUP_EXISTING_SITE_CONFLICT' }
+                    $uri = [uri]$p.httpsBaseUrl
+                    $site = $manager.Sites.Add($p.siteName, 'https', "*:$($uri.Port):$($uri.DnsSafeHost)", (Join-Path $p.installPath 'server'))
+                    $site.ServerAutoStart = $false
+                    $site.Applications['/'].ApplicationPoolName = $p.poolName
+                    $site.Bindings[0].CertificateHash = (Get-Item "Cert:\LocalMachine\My\$($p.tlsThumbprint)").GetCertHash()
+                    $site.Bindings[0].CertificateStoreName = 'My'
+                    $site.Bindings[0].SslFlags = [Microsoft.Web.Administration.SslFlags]::Sni
+                } else {
+                    $site = $manager.Sites[$p.siteName]
+                    if (-not $site -or $site.Applications[$p.applicationPath]) { throw 'SETUP_EXISTING_APPLICATION_CONFLICT_OR_SITE_MISSING' }
+                    $application = $site.Applications.Add($p.applicationPath, (Join-Path $p.installPath 'server'))
+                    $application.ApplicationPoolName = $p.poolName
+                }
+                # Commit pool and TLS-bound site/app together, both stopped.
+                $manager.CommitChanges()
+            }
+            finally { $manager.Dispose() }
+            $poolAccount = "IIS APPPOOL\$($p.poolName)"
+            Set-ScomSetupDirectoryAcl $p.installPath @{$p.workerAccount='ReadAndExecute'; $poolAccount='ReadAndExecute'}
+            Set-ScomSetupDirectoryAcl $p.receiverStatePath @{$poolAccount='Modify'}
+            if ($p.applicationPath -eq '/') {
+                Start-Website -Name $p.siteName
+            }
+            Assert-ScomSetupOwnedPool $p
+            Start-WebAppPool -Name $p.poolName
+        }
+        Publish = {
+            param($p)
+            Assert-ScomSetupOwnedPool $p
+            $receipt = Read-ScomSetupJson (Join-Path $p.workerStatePath 'setup-publication.json')
+            if ($receipt.schemaVersion -ne 1 -or $receipt.event -cne 'SCOM_WORKER_PUBLISHED' -or
+                $receipt.workerAccount -ne $p.workerAccount -or
+                $receipt.workerHash -ne (Get-ScomSetupHash (Join-Path $p.privatePath 'worker.json')) -or
+                $receipt.receiverHash -ne (Get-ScomSetupHash (Join-Path $p.installPath 'server\appsettings.json'))) {
+                throw 'SETUP_PUBLICATION_RECEIPT_MISMATCH'
+            }
+        }
+        Accept = { param($p) Assert-ScomSetupOwnedPool $p }
+        EnableStartup = {
+            param($p)
+            Assert-ScomSetupOwnedPool $p
+            $manager = [Microsoft.Web.Administration.ServerManager]::new()
+            try {
+                $manager.ApplicationPools[$p.poolName].AutoStart = $true
+                if ($p.applicationPath -eq '/') { $manager.Sites[$p.siteName].ServerAutoStart = $true }
+                $manager.CommitChanges()
+            }
+            finally { $manager.Dispose() }
+        }
+        Health = {
+            param($p)
+            $response = Invoke-WebRequest -UseBasicParsing -Uri ($p.httpsBaseUrl.TrimEnd('/') + '/healthz') -TimeoutSec 30 -MaximumRedirection 0
+            $health = $response.Content | ConvertFrom-Json -ErrorAction Stop
+            if ($response.StatusCode -ne 200 -or $health.service -cne 'ScomReadOnlyMcp' -or $health.version -cne '1.0.0') {
+                throw 'SETUP_HTTPS_HEALTH_FAILED_NOT_READER_ACCEPTANCE'
+            }
+        }
+        Stop = {
+            param($p)
+            Assert-ScomSetupOwnedPool $p
+            Set-ItemProperty "IIS:\AppPools\$($p.poolName)" -Name autoStart -Value $false
+            Stop-WebAppPool -Name $p.poolName
+        }
+    }
+}
+
+Export-ModuleMember -Function Get-ScomSetupPrerequisites, Set-ScomSetupDirectoryAcl, Assert-ScomSetupPrivateDirectory, New-ScomSetupWindowsAdapters

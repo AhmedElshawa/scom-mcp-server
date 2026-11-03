@@ -23,6 +23,10 @@ static class CollectionWorkerHostChecks
         }
         await Reject(["--worker"]);
         await Reject(["--worker-once"]);
+        await Reject(["--validate-setup"]);
+        await Reject(["--validate-setup", "relative"]);
+        await Reject(["--validate-setup-json"]);
+        await Reject(["--validate-setup-json", "relative"]);
         await Reject(["--worker", Path.Combine(root, "does-not-exist.json")]);
         await Reject(["--worker-once", "relative.json"]);
         var invalidJson = Path.Combine(root, "invalid-worker.json");
