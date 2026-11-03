@@ -58,15 +58,22 @@ jobs:
           $failure = $null
           $suiteExitCode = $null
           $suite = $null
+          $engineMatches = $false
 
           try {
             & $env:TEST_EXECUTABLE -NoProfile -File .\Operations\SupervisedIndexedRun\Run-SyntheticSupervisedIndexedRunTests.ps1 -OutputRoot $suiteRoot -KeepArtifacts
             $suiteExitCode = $LASTEXITCODE
             if (Test-Path -LiteralPath $suitePath) {
               $suite = Get-Content -LiteralPath $suitePath -Raw | ConvertFrom-Json
+              if ($env:TEST_EXECUTABLE -eq 'powershell.exe') {
+                $engineMatches = [string]$suite.engine -like 'Desktop 5.1*'
+              }
+              else {
+                $engineMatches = [string]$suite.engine -like 'Core 7.*'
+              }
             }
-            if ($suiteExitCode -ne 0 -or $null -eq $suite -or -not $suite.passed) {
-              $failure = 'Synthetic suite failed or did not produce a passing summary.'
+            if ($suiteExitCode -ne 0 -or $null -eq $suite -or -not $suite.passed -or -not $engineMatches) {
+              $failure = 'Synthetic suite failed, used the wrong engine, or did not produce a passing summary.'
             }
           }
           catch {
@@ -76,16 +83,16 @@ jobs:
           $result = [ordered]@{
             testedCommit = $actual
             engine = $env:TEST_ENGINE
-            powershellVersion = $PSVersionTable.PSVersion.ToString()
+            runtime = if ($null -ne $suite) { [string]$suite.engine } else { $null }
             suiteExitCode = $suiteExitCode
-            suitePassed = ($null -ne $suite -and [bool]$suite.passed -and $suiteExitCode -eq 0)
+            suitePassed = ($null -ne $suite -and [bool]$suite.passed -and $suiteExitCode -eq 0 -and $engineMatches)
             tests = if ($null -ne $suite) { @($suite.tests) } else { @() }
             failure = $failure
           }
           $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $artifactRoot 'ci-results.json') -Encoding utf8
 
           if ($failure) { throw $failure }
-          "Tested commit: $actual; engine: $env:TEST_ENGINE $($PSVersionTable.PSVersion); suite passed." |
+          "Tested commit: $actual; runtime: $($suite.engine); suite passed." |
             Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append
 
       - name: Retain safe results for the tested commit
