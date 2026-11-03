@@ -1,0 +1,98 @@
+name: Supervised indexed-run synthetic tests
+
+on:
+  pull_request:
+    paths:
+      - 'Operations/SupervisedIndexedRun/**'
+      - '.github/workflows/supervised-indexed-run.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: supervised-indexed-run-${{ github.event.pull_request.head.sha }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-tests:
+    name: Synthetic suite (${{ matrix.engine }})
+    runs-on: windows-2022
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: Windows PowerShell 5.1
+            executable: powershell.exe
+          - engine: PowerShell 7
+            executable: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+      TESTED_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      TEST_ENGINE: ${{ matrix.engine }}
+      TEST_EXECUTABLE: ${{ matrix.executable }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout the exact reviewed head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Verify reviewed head and run the complete synthetic suite
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:TESTED_HEAD_SHA) {
+            throw 'Checkout does not match the reviewed pull-request head.'
+          }
+
+          $suiteRoot = Join-Path $env:RUNNER_TEMP ("supervised-indexed-run-" + [guid]::NewGuid().ToString('N'))
+          $artifactRoot = Join-Path $env:RUNNER_TEMP ("supervised-indexed-run-results-" + [guid]::NewGuid().ToString('N'))
+          $null = New-Item -ItemType Directory -Path $artifactRoot
+          $suitePath = Join-Path $suiteRoot 'synthetic-test-results.json'
+          $failure = $null
+          $suiteExitCode = $null
+          $suite = $null
+
+          try {
+            & $env:TEST_EXECUTABLE -NoProfile -File .\Operations\SupervisedIndexedRun\Run-SyntheticSupervisedIndexedRunTests.ps1 -OutputRoot $suiteRoot -KeepArtifacts
+            $suiteExitCode = $LASTEXITCODE
+            if (Test-Path -LiteralPath $suitePath) {
+              $suite = Get-Content -LiteralPath $suitePath -Raw | ConvertFrom-Json
+            }
+            if ($suiteExitCode -ne 0 -or $null -eq $suite -or -not $suite.passed) {
+              $failure = 'Synthetic suite failed or did not produce a passing summary.'
+            }
+          }
+          catch {
+            $failure = 'Synthetic suite invocation failed.'
+          }
+
+          $result = [ordered]@{
+            testedCommit = $actual
+            engine = $env:TEST_ENGINE
+            powershellVersion = $PSVersionTable.PSVersion.ToString()
+            suiteExitCode = $suiteExitCode
+            suitePassed = ($null -ne $suite -and [bool]$suite.passed -and $suiteExitCode -eq 0)
+            tests = if ($null -ne $suite) { @($suite.tests) } else { @() }
+            failure = $failure
+          }
+          $result | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath (Join-Path $artifactRoot 'ci-results.json') -Encoding utf8
+
+          if ($failure) { throw $failure }
+          "Tested commit: $actual; engine: $env:TEST_ENGINE $($PSVersionTable.PSVersion); suite passed." |
+            Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Retain safe results for the tested commit
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: supervised-indexed-run-${{ github.event.pull_request.head.sha }}-${{ matrix.engine }}
+          path: ${{ runner.temp }}\supervised-indexed-run-results-*
+          if-no-files-found: warn
+          retention-days: 7
