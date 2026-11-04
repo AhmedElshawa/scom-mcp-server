@@ -86,7 +86,13 @@ try {
     $process.StartInfo=$start
     try {
         $null=$process.Start()
-        $process.StandardInput.Write($inputData);$process.StandardInput.Close()
+        # Desktop Process.StandardInput inherits the parent console code page;
+        # the profile protocol explicitly reads UTF-8. Write protocol bytes,
+        # rather than depending on that host-specific StreamWriter encoding.
+        $inputBytes=(New-Object Text.UTF8Encoding($false)).GetBytes($inputData)
+        $process.StandardInput.BaseStream.Write($inputBytes,0,$inputBytes.Length)
+        $process.StandardInput.BaseStream.Flush()
+        $process.StandardInput.BaseStream.Close()
         $stdout=$process.StandardOutput.ReadToEnd();$stderr=$process.StandardError.ReadToEnd()
         $process.WaitForExit()
         if ($process.ExitCode -ne 1 -or $stdout -cne '' -or $stderr -cne 'SCOM_GENERIC_PROFILE_FAILED') {
@@ -158,7 +164,9 @@ catch {}
         $diagnostic.StartInfo=$start
         try {
             $null=$diagnostic.Start()
-            $diagnostic.StandardInput.Write($inputData);$diagnostic.StandardInput.Close()
+            $diagnostic.StandardInput.BaseStream.Write($inputBytes,0,$inputBytes.Length)
+            $diagnostic.StandardInput.BaseStream.Flush()
+            $diagnostic.StandardInput.BaseStream.Close()
             $stage=$diagnostic.StandardOutput.ReadToEnd()
             $null=$diagnostic.StandardError.ReadToEnd()
             $diagnostic.WaitForExit()
