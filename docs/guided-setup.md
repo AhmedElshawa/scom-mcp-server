@@ -136,6 +136,22 @@ server. Array indices are replaced with `[]`; unknown fields/types become
 catalog or raw JSON. Validation remains fail-closed; arbitrary arrays, objects,
 strings-as-booleans or missing check results are not silently accepted.
 
+`Contract field: ok; expected: boolean; received: missing` means a JSON
+object was received without the required top-level boolean. It does not identify
+a missing prerequisite. All normal backend results and entrypoint error
+envelopes include `ok`; a BOM/banner or CLIXML outside JSON would instead fail
+JSON parsing. Preserve this distinction rather than assuming a signing or
+component-installation remedy.
+
+Maintainers can run `Validation\Get-BootstrapTransportShape.ps1` under Windows
+PowerShell 5.1 with `-PackageDirectory` set to the extracted package. It uses
+the production entrypoint, UTF-8 stdin and native launch environment allowlist,
+and reports only exit code, root kind/count, allowlisted top-level property
+names/types and a count of unknown names. It never prints unknown names,
+values, stdout or stderr. `Validation\Test-BootstrapTransport.ps1` also
+exercises empty, malformed, null and unknown-action input against that actual
+entrypoint, without installation, SCOM access or policy overrides.
+
 For a minimal read-only diagnostic, open Windows PowerShell in the extracted
 `ci-evaluation` folder (the folder containing `ScomSetup.exe`) and run:
 
