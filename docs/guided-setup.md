@@ -111,6 +111,7 @@ prove that a prerequisite probe ran; only returned individual checks do.
 | `SETUP_GUI_POLICY_BLOCKED` | PowerShell emitted specific policy/security markers. Have the customer security process inspect signing/zone/policy; do not bypass it. |
 | `SETUP_GUI_MODULE_LOAD_FAILED` | The entry script ran but could not import its setup module. Verify all setup modules and their approved signatures; this alone does not establish a policy cause. |
 | `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | Returned output was not accepted. The schema message/report includes an allowlisted `contractField`, `expectedType` and `actualType` (no values). Report those; mixed files, a missing prerequisite or a policy problem has not been established by this code alone. |
+| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy and approved Authenticode signing/trust for the entrypoint and imported modules. This does not establish AllSigned versus RemoteSigned, nor a missing SDK. Do not bypass policy. |
 | `SETUP_GUI_CHILD_EXIT` / `SETUP_GUI_NO_RESPONSE` | No usable response was obtained. Collect the read-only diagnostic; no missing component is inferred. |
 | `SETUP_GUI_BOOTSTRAP_PROBE_FAILED` | Local probes could not complete. Privately inspect local component access; do not install based on this code alone. |
 
@@ -142,6 +143,17 @@ a missing prerequisite. All normal backend results and entrypoint error
 envelopes include `ok`; a BOM/banner or CLIXML outside JSON would instead fail
 JSON parsing. Preserve this distinction rather than assuming a signing or
 component-installation remedy.
+
+An observed exception to the usual envelope path is PowerShell refusing to
+authorize `-File` before executing the entrypoint while echoing piped request
+JSON to stdout. That object contains `action`, not response `ok`. On a nonzero
+exit, the native decoder now recognizes the fixed AuthorizationManager message
+plus SecurityError/UnauthorizedAccess markers instead of reporting only missing
+`ok`. Valid sanitized backend failure envelopes still take precedence. No raw
+stderr/request is displayed or logged, and this classification grants no
+installation or navigation approval. Customer-approved signing and trust of
+the `.ps1`/`.psm1` chain must be resolved through the administrator's process;
+the evaluation package does not provide a trusted publisher signature.
 
 Maintainers can run `Validation\Get-BootstrapTransportShape.ps1` under Windows
 PowerShell 5.1 with `-PackageDirectory` set to the extracted package. It uses

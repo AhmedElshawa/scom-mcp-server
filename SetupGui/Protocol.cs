@@ -232,6 +232,7 @@ internal static class BridgeDiagnostics
         ["SETUP_GUI_START_DENIED"] = "Windows denied launching the setup bridge. Ask the administrator to inspect application-control and process-launch policy. Execution-policy blocking has not been established.",
         ["SETUP_GUI_START_FAILED"] = "Windows PowerShell could not start. Check the Windows PowerShell component and approved application-control configuration.",
         ["SETUP_GUI_POLICY_BLOCKED"] = "PowerShell reported an execution-policy/security block. Review the script signature, zone marking and effective customer execution policy with your administrator. Do not bypass policy.",
+        ["SETUP_GUI_AUTHORIZATION_BLOCKED"] = "PowerShell AuthorizationManager rejected the setup script before a usable response. Ask your administrator to review effective policy and approved Authenticode signing/trust for the bridge and modules. The exact policy cause is not established. Do not bypass policy.",
         ["SETUP_GUI_CHILD_EXIT"] = "The bridge exited unsuccessfully without a usable error response. Run the approved read-only bridge diagnostic to inspect the failure privately.",
         ["SETUP_GUI_NO_RESPONSE"] = "The bridge returned no JSON response. Verify the complete reviewed setup files and run the approved read-only bridge diagnostic.",
         ["SETUP_GUI_INVALID_JSON"] = "The bridge returned invalid JSON. Verify matching GUI and setup files from the same package and run the approved read-only diagnostic.",
@@ -357,17 +358,27 @@ internal sealed class SetupBridge(string packageRoot) : ISetupBridge
     internal static BridgeResponse Decode(string json, string stderr, int exitCode, bool oversized = false, bool writeFailed = false)
     {
         bool policy = HasPolicyFailure(stderr);
+        bool authorization = exitCode != 0 && HasAuthorizationFailure(stderr);
         if (oversized) throw new BridgeFailureException("SETUP_GUI_RESPONSE_TOO_LARGE");
         if (string.IsNullOrWhiteSpace(json))
-            throw new BridgeFailureException(policy ? "SETUP_GUI_POLICY_BLOCKED" : writeFailed ? "SETUP_GUI_IO_FAILED" :
+            throw new BridgeFailureException(authorization ? "SETUP_GUI_AUTHORIZATION_BLOCKED" : policy ? "SETUP_GUI_POLICY_BLOCKED" : writeFailed ? "SETUP_GUI_IO_FAILED" :
                 exitCode != 0 ? "SETUP_GUI_CHILD_EXIT" : "SETUP_GUI_NO_RESPONSE");
         JsonDocument document;
         try { document = JsonDocument.Parse(json); }
-        catch (JsonException) { throw new BridgeFailureException(policy ? "SETUP_GUI_POLICY_BLOCKED" : "SETUP_GUI_INVALID_JSON"); }
+        catch (JsonException) { throw new BridgeFailureException(authorization ? "SETUP_GUI_AUTHORIZATION_BLOCKED" : policy ? "SETUP_GUI_POLICY_BLOCKED" : "SETUP_GUI_INVALID_JSON"); }
         using (document)
         {
             var root = document.RootElement;
-            SchemaContract.Validate(root);
+            try { SchemaContract.Validate(root); }
+            catch (BridgeFailureException) when (exitCode != 0 && HasAuthorizationFailure(stderr))
+            {
+                // A denied -File launch can echo stdin JSON without ever running the bridge.
+                throw new BridgeFailureException("SETUP_GUI_AUTHORIZATION_BLOCKED");
+            }
+            catch (BridgeFailureException) when (exitCode != 0 && policy)
+            {
+                throw new BridgeFailureException("SETUP_GUI_POLICY_BLOCKED");
+            }
 
             BridgeResponse response;
             try { response = root.Deserialize<BridgeResponse>(Json) ?? throw new JsonException(); }
@@ -396,6 +407,13 @@ internal sealed class SetupBridge(string packageRoot) : ISetupBridge
              stderr.Contains("running scripts is disabled", StringComparison.OrdinalIgnoreCase) ||
              Token(stderr, "about_Execution_Policies"));
     }
+
+    internal static bool HasAuthorizationFailure(string stderr) =>
+        stderr.Contains("AuthorizationManager check failed", StringComparison.OrdinalIgnoreCase) &&
+        System.Text.RegularExpressions.Regex.IsMatch(stderr, @"\bSecurityError\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase) &&
+        System.Text.RegularExpressions.Regex.IsMatch(stderr, @"\bUnauthorizedAccess\b",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
 
     private sealed record CapturedText(string Text, bool Oversized);
     private static async Task<CapturedText> ReadBoundedAsync(StreamReader reader, int limit)

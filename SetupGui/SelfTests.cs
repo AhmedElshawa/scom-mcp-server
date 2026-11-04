@@ -381,6 +381,21 @@ internal static class SelfTests
             "about_Execution_Policies + CategoryInfo : SecurityError: (:) [], ParentContainsErrorRecordException " +
             "+ FullyQualifiedErrorId : UnauthorizedAccess";
         Require(FailureCode(() => SetupBridge.Decode("", realPolicyShape, 1)) == "SETUP_GUI_POLICY_BLOCKED");
+        string authorization = customer + " AuthorizationManager check failed. " +
+            "CategoryInfo : SecurityError: (:) [], ParentContainsErrorRecordException " +
+            "FullyQualifiedErrorId : UnauthorizedAccess";
+        string echoedRequest = "{\"action\":\"Bootstrap\",\"private\":\"" + customer + "\"}";
+        Require(FailureCode(() => SetupBridge.Decode(echoedRequest, authorization, 1)) == "SETUP_GUI_AUTHORIZATION_BLOCKED");
+        Require(FailureCode(() => SetupBridge.Decode("", authorization, 1)) == "SETUP_GUI_AUTHORIZATION_BLOCKED");
+        Require(FailureCode(() => SetupBridge.Decode("not json", authorization, 1)) == "SETUP_GUI_AUTHORIZATION_BLOCKED");
+        Require(FailureCode(() => SetupBridge.Decode(echoedRequest, authorization, 0)) == "SETUP_GUI_INVALID_SCHEMA");
+        Require(FailureCode(() => SetupBridge.Decode(echoedRequest, "SecurityError UnauthorizedAccess", 1)) == "SETUP_GUI_INVALID_SCHEMA");
+        Require(FailureCode(() => SetupBridge.Decode(echoedRequest, realPolicyShape, 1)) == "SETUP_GUI_POLICY_BLOCKED");
+        var preserved = SetupBridge.Decode("{\"ok\":false,\"code\":\"SETUP_GUI_MODULE_LOAD_FAILED\"}", authorization, 1);
+        Require(preserved.Code == "SETUP_GUI_MODULE_LOAD_FAILED" && !preserved.Ok);
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":true}", authorization, 1)) == "SETUP_GUI_CHILD_EXIT");
+        Require(!BridgeDiagnostics.Record("SETUP_GUI_AUTHORIZATION_BLOCKED").Contains(customer) &&
+            !BridgeDiagnostics.Remedy("SETUP_GUI_AUTHORIZATION_BLOCKED").Contains(customer));
         Require(!BridgeDiagnostics.Remedy("SETUP_GUI_POLICY_BLOCKED").Contains(customer));
         Require(!SetupBridge.HasPolicyFailure("SecurityError UnauthorizedAccess Access denied to a file"));
         Require(!SetupBridge.HasPolicyFailure("UnauthorizedAccess not digitally signed"));
