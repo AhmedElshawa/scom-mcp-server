@@ -114,6 +114,7 @@ internal static class SelfTests
         // The form's constructor and handle creation use NoCallsBridge, so any startup action fails this test.
         TestWorkflow();
         TestSequentialBootstrap();
+        TestWorkerWithBlockedCatalog();
     }
 
     private static void TestWorkflow()
@@ -308,6 +309,49 @@ internal static class SelfTests
         task.GetAwaiter().GetResult();
     }
 
+    private static void TestWorkerWithBlockedCatalog()
+        {
+            var responses = new Queue<BridgeResponse>();
+            var bridge = new RecordingBridge(() => Task.FromResult(responses.Dequeue()));
+            using var form = new WizardForm(AppContext.BaseDirectory, bridge);
+            _ = form.Handle;
+            form.BusyCloseNotice = () => { };
+            responses.Enqueue(new BridgeResponse { Ok = false, Checks = [
+                new BridgeCheck { Name = "Local OperationsManager module manifest", Passed = true },
+                new BridgeCheck { Name = "Local IIS/certificate discovery", Passed = false, Remedy = "Use an authorized host session for IIS." }] });
+            Complete(form.OnFirstShownAsync());
+            Require(!form.CanInstall && form.CheckColors.Contains(Color.Firebrick));
+            form.SetField("privatePath", @"C:\installed-private");
+            form.SetField("stateDirectory", "");
+            form.UseWorkerPlan(true);
+            var plan = new SetupPlan { PrivatePath = @"C:\installed-private", WorkerAccount = @"DOMAIN\worker" };
+            responses.Enqueue(new BridgeResponse { Ok = true, Code = "SETUP_GUI_WORKER_PLAN_READY", Plan = plan });
+            Complete(form.RunActionAsync("Status"));
+            Require(bridge.Requests[^1].Action == "Status" &&
+                bridge.Requests[^1].PlanPath == @"C:\installed-private\setup-plan.json" &&
+                bridge.Requests[^1].StateDirectory == "" && !form.CanInstall &&
+                form.StatusText.Contains("Host journal was not read"));
+            responses.Enqueue(new BridgeResponse { Ok = false, Code = "SETUP_EXACT_WORKER_ACCOUNT_REQUIRED_NO_IMPERSONATION" });
+            int decisions = 0;
+            form.EffectDecision = (_, _) => { decisions++; return true; };
+            int before = bridge.Requests.Count;
+            Complete(form.RunActionAsync("Connect"));
+            Require(bridge.Requests.Count == before + 1 && decisions == 0 &&
+                form.StatusText.Contains("exact configured worker"));
+            responses.Enqueue(new BridgeResponse { Ok = false, ApprovalRequired = true, Summary = "Explicit bounded worker connection only." });
+            responses.Enqueue(new BridgeResponse { Ok = true, Code = "SETUP_GUI_WORKER_ACTION_COMPLETE" });
+            Complete(form.RunActionAsync("Connect"));
+            Require(decisions == 1 && bridge.Requests[^1].Approval == "Explicit bounded worker connection only.");
+            responses.Enqueue(new BridgeResponse { Ok = false, ApprovalRequired = true, Summary = "ONE bounded publication attempt." });
+            responses.Enqueue(new BridgeResponse { Ok = true, Code = "SETUP_GUI_WORKER_ACTION_COMPLETE" });
+            Complete(form.RunActionAsync("PublishWorker"));
+            Require(decisions == 2 && bridge.Requests[^1].Approval == "ONE bounded publication attempt.");
+            Require(bridge.Requests.Skip(1).All(request => request.StateDirectory == "" &&
+                request.PlanPath == @"C:\installed-private\setup-plan.json"));
+            before = bridge.Requests.Count;
+            Complete(form.RunActionAsync("Prepare"));
+            Require(bridge.Requests.Count == before && !form.CanInstall);
+        }
     private sealed class RecordingBridge(Func<Task<BridgeResponse>> next) : ISetupBridge
     {
         internal Func<Task<BridgeResponse>> Next { get; set; } = next;
