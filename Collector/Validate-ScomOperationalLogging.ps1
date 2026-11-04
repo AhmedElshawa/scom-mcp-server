@@ -115,6 +115,60 @@ try {
     $activeEvents=@(Get-Content -LiteralPath $path | ForEach-Object {($_ | ConvertFrom-Json).event})
     if (($lifecycle -join ',') -cne 'profile.started,profile.failed' -or
         $activeEvents[-1] -cne 'profile.failed') {
+        $allowedEvents=@('profile.started','configuration.validated','source.connected','scan.completed','profile.failed',
+            'setup.started','setup.completed','setup.failed')
+        $safeEvents=@($events | Where-Object {$_ -cin $allowedEvents})
+        Write-Output ('Lifecycle diagnostic: retainedCount={0}; activeCount={1}; unknownCount={2}; events={3}' -f
+            $events.Count,$activeEvents.Count,($events.Count-$safeEvents.Count),($safeEvents -join ','))
+        # Replay only the pre-source initialization in an isolated child. Emit
+        # fixed stage codes, never input, paths, exception text or raw stderr.
+        $probePath=Join-Path $directory 'logging-initialization-probe.ps1'
+        $probe=@'
+param([string]$LoggingModule)
+Set-StrictMode -Version Latest
+$ErrorActionPreference='Stop'
+$stage='diagnostic.encoding'
+try {
+    [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
+    [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
+    $stage='diagnostic.stdin'
+    $text=[Console]::In.ReadToEnd()
+    if ([string]::IsNullOrWhiteSpace($text)) {throw 'EMPTY'}
+    $stage='diagnostic.json'
+    $data=$text | ConvertFrom-Json
+    $stage='diagnostic.protocol'
+    if ($data.protocolVersion -ne 1 -or $null -eq $data.configuration -or $null -eq $data.request) {throw 'PROTOCOL'}
+    $stage='diagnostic.inventoryKind'
+    if ($data.configuration.inventoryKind -cne 'supportedWindows') {throw 'KIND'}
+    $stage='diagnostic.moduleImport'
+    Import-Module $LoggingModule -ErrorAction Stop | Out-Null
+    $stage='diagnostic.logConfiguration'
+    $log=New-SCOMOperationalLog -Configuration $data.configuration.operationalLogging
+    $stage='diagnostic.logWrite'
+    Write-SCOMOperationalEvent -Log $log -Event 'profile.started'
+    $stage='diagnostic.initializationSucceeded'
+}
+catch {}
+[Console]::Out.Write($stage)
+'@
+        [IO.File]::WriteAllText($probePath,$probe,(New-Object Text.UTF8Encoding($false)))
+        $start.Arguments='-NoProfile -File "'+$probePath+'" -LoggingModule "'+
+            (Join-Path $PSScriptRoot 'ScomOperationalLogging.psm1')+'"'
+        $diagnostic=New-Object Diagnostics.Process
+        $diagnostic.StartInfo=$start
+        try {
+            $null=$diagnostic.Start()
+            $diagnostic.StandardInput.Write($inputData);$diagnostic.StandardInput.Close()
+            $stage=$diagnostic.StandardOutput.ReadToEnd()
+            $null=$diagnostic.StandardError.ReadToEnd()
+            $diagnostic.WaitForExit()
+            $allowedStages=@('diagnostic.encoding','diagnostic.stdin','diagnostic.json','diagnostic.protocol',
+                'diagnostic.inventoryKind','diagnostic.moduleImport','diagnostic.logConfiguration',
+                'diagnostic.logWrite','diagnostic.initializationSucceeded')
+            if ($stage -cin $allowedStages) {Write-Output $stage}
+            else {Write-Output 'diagnostic.childInvocationFailed'}
+        }
+        finally {$diagnostic.Dispose()}
         throw 'Profile stream did not persist ordered sanitized failure lifecycle events.'
     }
     Write-Output 'Collector logging: schema allowlist, all three Setup events in collector stream, no customer values, silent stdout, bounded rotation, invalid/missing/UNC/ADS/reparse paths, locked-file fail-closed and offline profile stderr/stdout passed.'
