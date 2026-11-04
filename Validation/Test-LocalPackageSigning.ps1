@@ -19,6 +19,7 @@ function Reject {
     if (-not $rejected) { throw 'Signing rejection test unexpectedly succeeded.' }
 }
 try {
+    Write-Output 'Signing CI: validating rejection paths before any certificate creation.'
     $arguments=@{PackageDirectory=$source;DestinationDirectory=(Join-Path $root 'signed')
         ExpectedManifestSha256=$hash;ExpectedSourceCommit=$manifest.sourceCommit}
     $bad=$arguments.Clone();$bad.ExpectedManifestSha256='0'*64;Reject $bad
@@ -43,6 +44,7 @@ try {
         $store=[Security.Cryptography.X509Certificates.X509Store]::new($name,'CurrentUser')
         try { $store.Open('ReadWrite');$store.Add($cert) } finally { $store.Close() }
     }
+    Write-Output 'Signing CI: signing and verifying application-owned targets with disposable CurrentUser key.'
     $proof=& $helper @arguments
     if ($proof.status -cne 'VerifiedLocalSignedDerivative' -or $proof.signerThumbprint -ine $cert.Thumbprint -or
         $proof.signedFiles -lt 10 -or $proof.trustScope -cne 'CurrentUserOnly') { throw 'Signed derivative proof invalid.' }
@@ -54,6 +56,7 @@ try {
     Reject $arguments
     Write-Output 'PASS: original manifest pins, overlap/existing outputs, missing signer/trust rejection, actual SHA256 EXE/script signing, archive revalidation, derivative provenance and original preservation. Disposable CI CurrentUser certificate/trust only.'
 } finally {
+    Write-Output 'Signing CI: removing only the disposable certificate/trust and named test directory.'
     if ($null -ne $cert) {
         foreach ($name in @('TrustedPublisher','Root')) {
             $store=[Security.Cryptography.X509Certificates.X509Store]::new($name,'CurrentUser')

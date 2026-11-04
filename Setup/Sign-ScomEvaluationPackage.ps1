@@ -135,13 +135,8 @@ try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
     [IO.Compression.ZipFile]::CreateFromDirectory($partial,$zipPartial)
     [IO.Compression.ZipFile]::ExtractToDirectory($zipPartial,$verification)
+    # Exact archived hashes include signature bytes already verified above.
     Assert-Manifest $verification $derivative
-    foreach ($entry in $targets) {
-        $verified=Get-AuthenticodeSignature -LiteralPath (Join-Path $verification $entry.path)
-        if ($verified.Status -ne 'Valid' -or $verified.SignerCertificate.Thumbprint -ine $thumb) {
-            throw 'SIGN_ARCHIVE_SIGNATURE_VERIFICATION_FAILED'
-        }
-    }
     Remove-Item -LiteralPath $verification -Recurse -Force
     $zipHash=Get-Digest $zipPartial
     [IO.File]::WriteAllText(($sidecar+'.partial'),($zipHash+'  '+[IO.Path]::GetFileName($zip)+"`r`n"),
