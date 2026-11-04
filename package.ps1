@@ -12,6 +12,9 @@ $null = New-Item -ItemType Directory -Path $output
 dotnet publish (Join-Path $PSScriptRoot 'ScomMcp\ScomMcp.csproj') --configuration Release `
     --no-restore --no-self-contained --output (Join-Path $output 'server') --verbosity quiet
 if ($LASTEXITCODE -ne 0) { throw 'Server publication failed. The incomplete output must not be deployed.' }
+dotnet publish (Join-Path $PSScriptRoot 'SetupGui\ScomSetup.csproj') --configuration Release `
+    --no-restore --runtime win-x64 --self-contained true --output $output --verbosity quiet
+if ($LASTEXITCODE -ne 0) { throw 'Native self-contained setup publication failed. Do not deploy the incomplete package.' }
 $collector = Join-Path $output 'collector'
 $null = New-Item -ItemType Directory -Path $collector
 foreach ($name in @('Collect-SCOMSnapshot.ps1', 'collector.example.json', 'Get-SCOMCompatibilityReport.ps1', 'Test-SCOMPreflight.ps1', 'Get-SCOMMetricCompatibilityReport.ps1',
@@ -24,7 +27,7 @@ $setup = Join-Path $output 'setup'
 $null = New-Item -ItemType Directory -Path $setup
 foreach ($name in @('ScomSetup.psm1', 'ScomSetup.Windows.psm1', 'ScomEntra.psm1', 'Start-ScomSetup.ps1',
     'Start-ScomWorkerSetup.ps1', 'Provision-ScomEntra.ps1', 'Initialize-ScomSetupState.ps1',
-    'Install-ScomPrerequisites.ps1', 'ScomPrerequisiteInstall.psm1')) {
+    'Install-ScomPrerequisites.ps1', 'ScomPrerequisiteInstall.psm1','ScomSetup.Gui.psm1','Invoke-ScomSetupGui.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Setup\$name") -Destination $setup
 }
 foreach ($name in @('appsettings.example.json', 'appsettings.ReadModel.example.json', 'appsettings.Worker.example.json')) {

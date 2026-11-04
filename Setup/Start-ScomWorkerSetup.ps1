@@ -1,17 +1,19 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string]$PlanPath,
-    [Parameter(Mandatory)][ValidateSet('Connect','Publish')][string]$Step
+    [Parameter(Mandatory)][ValidateSet('Connect','Publish')][string]$Step,
+    [scriptblock]$Approve
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'ScomSetup.psm1')
+if ($null -eq $Approve) { $Approve = { param($summary) Confirm-ScomSetupEffect $summary } }
 $plan = Read-ScomSetupJson $PlanPath
 Assert-ScomSetupPlan $plan
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) { throw 'SETUP_WINDOWS_POWERSHELL51_REQUIRED' }
 if ([Security.Principal.WindowsIdentity]::GetCurrent().Name -ne $plan.workerAccount) { throw 'SETUP_EXACT_WORKER_ACCOUNT_REQUIRED_NO_IMPERSONATION' }
 if ($Step -eq 'Connect') {
-    if (-not (Confirm-ScomSetupEffect "Connect to $($plan.managementServer), check ONLY management-group identity and, for group scope, its existing group GUID. Selected scope: $(Get-ScomSetupScopeDescription $plan). Timeout 60 seconds; no members, alerts or inventory enumerated; no scope flags set.")) {
+    if (-not (& $Approve "Connect to $($plan.managementServer), check ONLY management-group identity and, for group scope, its existing group GUID. Selected scope: $(Get-ScomSetupScopeDescription $plan). Timeout 60 seconds; no members, alerts or inventory enumerated; no scope flags set.")) {
         throw 'SETUP_CANCELLED_NO_ACTION'
     }
     $job = Start-Job -ArgumentList $plan,(Join-Path $PSScriptRoot 'ScomSetup.psm1') -ScriptBlock {
@@ -34,7 +36,7 @@ if ($Step -eq 'Connect') {
     finally { Remove-Job $job -Force }
     return
 }
-Invoke-ScomSetupWorkerPublication -Plan $plan -CallerName ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -Validate {
+Invoke-ScomSetupWorkerPublication -Plan $plan -CallerName ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -Approve $Approve -Validate {
     param($p)
     $server = Join-Path $p.installPath 'server'
     & dotnet (Join-Path $server 'ScomMcp.dll') --validate-setup $server (Join-Path $p.privatePath 'worker.json')

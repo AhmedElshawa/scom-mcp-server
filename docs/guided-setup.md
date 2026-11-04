@@ -1,5 +1,68 @@
 # Guided, resumable setup (evaluation installer)
 
+## Double-click quickstart
+
+Download the reviewed CI evaluation artifact, verify the supplied SHA-256, then
+extract **the entire `scom-evaluation.zip`**. Open the extracted `ci-evaluation`
+folder and double-click **`ScomSetup.exe`**. Keep the executable, its bundled
+runtime DLLs, `server`, `collector`, `setup` and documentation together; copying
+only the EXE is not supported. This is a genuine Windows Forms application with
+its own x64 .NET runtime, not a renamed PowerShell script or a console launcher.
+It can open before the application's .NET 8 Hosting Bundle has been installed.
+Windows Server **Desktop Experience** is required for the graphical wizard;
+Server Core uses the separate console lane below.
+
+The wizard opens without making host changes or contacting SCOM. Enter the
+deployment locations and existing identities, then select **Check prerequisites**.
+Review each result and remedy. If required, use the wizard's explicit elevation
+action and approve the real Windows UAC prompt yourself. Enter new install/private/
+state directories, distinct local NTFS MCP/collector log destinations, HTTPS
+certificate, new dedicated pool and new site or new application placement.
+Use **Discover groups** only after approving the bounded read-only source
+connection, then choose a group or separately confirm all supported Windows
+inventory. **Prepare** shows the exact staging/journal effect for confirmation
+before doing it. Subsequent configuration/activation/worker/publication/acceptance
+stages remain guided and separately confirmed, not automatically run at startup.
+
+The prerequisite page can install only explicitly selected IIS features and an
+operator-supplied Microsoft Hosting Bundle whose official signature, version and
+independently approved SHA-256 pass the existing verifier. No installer is
+downloaded. Supported OS servicing, SCOM console/SDK installation, approved script
+signing, reboot/IIS maintenance, Entra grants/certificates and reviewed source
+mapping/visibility/query contracts are real customer prerequisites. The wizard
+identifies these gates and accepts the separately reviewed identity/receiver/worker
+JSON files; it does not invent source evidence or silently grant cloud access.
+
+Use the wizard's resume/status action with the same protected journal location.
+An interrupted action stays pending until operator review; closing or cancelling
+does not claim rollback. While an approved operation is active, wait for its
+reported result rather than terminating setup. For the worker identity lane,
+open `ScomSetup.exe` through the customer's approved existing-account mechanism
+as the **exact selected worker account**, choose its installed private
+`setup-plan.json`, then explicitly connect or publish once. The GUI does not
+capture credentials, impersonate the worker or require that account to read the
+administrator-only host journal. Return as the host administrator to record the
+receipt and reader acceptance. Durable task registration and recurrence remain
+separate opt-in operations, not a consequence of double-clicking.
+
+**Trust/signing limitation:** this evaluation EXE and repository scripts do not
+carry a customer-trusted publisher signature. A self-contained EXE does not
+establish trust or override PowerShell `AllSigned`/RemoteSigned, UAC, SmartScreen,
+certificate, antivirus or unsafe-content warnings. The native GUI invokes the
+existing Windows PowerShell 5.1 scripts using normal `-File` execution with no
+policy override; customer-approved signing of the scripts/modules may be needed
+before checks/actions can run. Have the customer's authorized signing/review
+process approve the EXE and scripts. If Windows blocks it, stop and use that
+process; do not bypass the warning. No embedded credentials or fake signing
+certificate are supplied.
+
+Offline CI starts the packaged EXE with shared .NET lookup paths disabled and
+checks that its loaded runtime is the packaged runtime and the native form can
+be constructed without invoking the bridge. That is a loader/entrypoint proof,
+not a completed clean-server installation or production certification.
+
+## Console lane and detailed contract
+
 The console wizard stages an **opt-in indexed** on-premises installation and
 keeps customer Entra provisioning separate. It does not provision an Azure VM:
 an existing approved customer Windows host is sufficient. ARM/Bicep is not an

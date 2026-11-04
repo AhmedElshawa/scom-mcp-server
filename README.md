@@ -287,6 +287,16 @@ make the agent return inventory.
 
 ## Guided installation
 
+For the double-click experience, extract the complete reviewed evaluation ZIP and
+open **`ci-evaluation\ScomSetup.exe`**. The native Windows Forms wizard bundles its
+own x64 runtime, so it opens before the app's .NET Hosting Bundle is present.
+It guides prerequisite checks, placement/log/scope selection and separately
+confirmed installation stages; it does not start collection or recurrence merely
+by opening. Keep all extracted files together. See the
+[double-click quickstart and signing limitations](docs/guided-setup.md#double-click-quickstart).
+The evaluation executable is unsigned, not automatically customer-trusted;
+normal Windows/UAC and PowerShell signing policies still apply.
+
 For a new opt-in indexed installation, use the
 [resumable console setup](docs/guided-setup.md). It separates host prerequisites,
 bounded existing-group discovery/selection and staging, authorized customer Entra provisioning,

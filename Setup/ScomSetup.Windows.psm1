@@ -51,13 +51,13 @@ function Get-ScomSetupPrerequisites {
 }
 
 function Get-ScomSetupGroupCatalog {
-    param($Plan)
+    param($Plan,[scriptblock]$Approve = ${function:Confirm-ScomSetupEffect})
     Assert-ScomSetupPath $Plan.operationsManagerModule
     $managementGroupId = [guid]::Empty
     if ($Plan.managementServer -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' -or
         -not [guid]::TryParseExact($Plan.managementGroupId,'D',[ref]$managementGroupId) -or
         $managementGroupId -eq [guid]::Empty) { throw 'SETUP_DISCOVERY_SOURCE_INVALID' }
-    if (-not (Confirm-ScomSetupEffect "Read-only group discovery from the selected management group using this console identity. Maximum 200 groups, 60 seconds; reads group IDs/display names only, never inventory/members. No worker evidence flags are set.")) {
+    if (-not (& $Approve "Read-only group discovery from the selected management group using this console identity. Maximum 200 groups, 60 seconds; reads group IDs/display names only, never inventory/members. No worker evidence flags are set.")) {
         throw 'SETUP_CANCELLED_NO_ACTION'
     }
     $job = Start-Job -ArgumentList $Plan,(Join-Path $PSScriptRoot 'ScomSetup.psm1') -ScriptBlock {
