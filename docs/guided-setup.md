@@ -111,7 +111,7 @@ prove that a prerequisite probe ran; only returned individual checks do.
 | `SETUP_GUI_POLICY_BLOCKED` | PowerShell emitted specific policy/security markers. Have the customer security process inspect signing/zone/policy; do not bypass it. |
 | `SETUP_GUI_MODULE_LOAD_FAILED` | The entry script ran but could not import its setup module. Verify all setup modules and their approved signatures; this alone does not establish a policy cause. |
 | `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | Returned output was not accepted. The schema message/report includes an allowlisted `contractField`, `expectedType` and `actualType` (no values). Report those; mixed files, a missing prerequisite or a policy problem has not been established by this code alone. |
-| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy and approved Authenticode signing/trust for the entrypoint and imported modules. This does not establish AllSigned versus RemoteSigned, nor a missing SDK. Do not bypass policy. |
+| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy, downloaded-file zone/trust prompts, signatures and application-control policy. Even Unrestricted can warn about Internet-zone scripts; signing is not always mandatory. This does not establish a missing SDK. Do not bypass warnings or policy. |
 | `SETUP_GUI_CHILD_EXIT` / `SETUP_GUI_NO_RESPONSE` | No usable response was obtained. Collect the read-only diagnostic; no missing component is inferred. |
 | `SETUP_GUI_BOOTSTRAP_PROBE_FAILED` | Local probes could not complete. Privately inspect local component access; do not install based on this code alone. |
 
@@ -151,9 +151,14 @@ exit, the native decoder now recognizes the fixed AuthorizationManager message
 plus SecurityError/UnauthorizedAccess markers instead of reporting only missing
 `ok`. Valid sanitized backend failure envelopes still take precedence. No raw
 stderr/request is displayed or logged, and this classification grants no
-installation or navigation approval. Customer-approved signing and trust of
-the `.ps1`/`.psm1` chain must be resolved through the administrator's process;
-the evaluation package does not provide a trusted publisher signature.
+installation or navigation approval. The administrator must review the
+`.ps1`/`.psm1` trust and authorization chain. Unrestricted permits unsigned
+scripts but can still prompt for Internet-zone files; redirected protocol stdin
+is not an appropriate channel for answering a Windows trust prompt. Do not
+send prompt answers through the bridge, remove zone markings or change policy
+as a diagnostic workaround. Approved signing/trust may be an appropriate
+deployment remedy, but is not proven mandatory by this error. The evaluation
+package does not provide a trusted publisher signature.
 
 Maintainers can run `Validation\Get-BootstrapTransportShape.ps1` under Windows
 PowerShell 5.1 with `-PackageDirectory` set to the extracted package. It uses
