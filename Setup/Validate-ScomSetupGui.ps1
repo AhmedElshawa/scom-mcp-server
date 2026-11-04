@@ -98,6 +98,13 @@ try {
     $r=Run
     Check ($r.approvalRequired -and -not (Test-Path -LiteralPath (Join-Path $request.stateDirectory 'setup.lock')))
     Check ((Get-Content -LiteralPath (Join-Path $request.stateDirectory 'setup-state.json') -Raw | ConvertFrom-Json).stage -ceq 'prepared')
+    $windows.Configure={ throw 'SETUP_SYNTHETIC_CONFIGURE_FAILURE: private-marker' }
+    $request.approval=$r.summary
+    $r=Run
+    if ($r.code -cne 'SETUP_SYNTHETIC_CONFIGURE_FAILURE') { throw "Accepted configuration returned unexpected safe code: $($r.code)" }
+    Check ($r.code -ceq 'SETUP_SYNTHETIC_CONFIGURE_FAILURE' -and -not $r.ok)
+    Check ((Get-Content -LiteralPath (Join-Path $request.stateDirectory 'setup-state.json') -Raw | ConvertFrom-Json).pendingAction -ceq 'Configure')
+    Check (Test-Path -LiteralPath (Join-Path $request.stateDirectory 'setup.lock'))
     $request.action='Connect'
     $script:worker='SYNTHETIC\wrong'
     $r=Run

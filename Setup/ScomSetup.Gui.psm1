@@ -53,8 +53,9 @@ function Invoke-ScomSetupGuiRequest {
         }
         $approvalState.required=$summary
         throw 'SETUP_GUI_APPROVAL_REQUIRED'
-    }.GetNewClosure()
+    }
     $lease=$null
+    $hashFile=Get-Command Get-ScomSetupHash -ErrorAction Stop
     try {
         $action=[string](Get-ScomGuiValue $Request 'action' '')
         if ($action -cnotin @('Preflight','Discover','Prepare','Configure','Activate','Status','Recover',
@@ -170,11 +171,11 @@ function Invoke-ScomSetupGuiRequest {
                 $accepted=& $approve $summary
                 if ($accepted -and $null -eq $prerequisiteLease.handle) {
                     $prerequisiteLease.handle=[IO.File]::Open((Join-Path $stateDirectory 'setup.lock'),'OpenOrCreate','ReadWrite','None')
-                    $currentHash=if (Test-Path -LiteralPath $prerequisiteJournal) { Get-ScomSetupHash $prerequisiteJournal } else { $null }
+                    $currentHash=if (Test-Path -LiteralPath $prerequisiteJournal) { & $hashFile $prerequisiteJournal } else { $null }
                     if ($currentHash -cne $prerequisiteHash) { throw 'SETUP_GUI_CONCURRENT_STATE_CHANGED' }
                 }
                 $accepted
-            }.GetNewClosure()
+            }
             try {
             Invoke-ScomPrerequisiteInstall -JournalPath (Join-Path $stateDirectory 'prerequisite-state.json') `
                 -Adapters (& $Adapters.PrerequisiteWindows $stateDirectory) `
@@ -238,8 +239,8 @@ function Invoke-ScomSetupGuiRequest {
                     $accepted=& $approve $summary
                     if ($accepted) {
                         $transitionLease.handle=[IO.File]::Open((Join-Path $stateDirectory 'setup.lock'),'OpenOrCreate','ReadWrite','None')
-                        if ($stateHash -cne (Get-ScomSetupHash $statePath) -or
-                            $state.planHash -cne (Get-ScomSetupHash $savedPlan)) { throw 'SETUP_GUI_CONCURRENT_STATE_CHANGED' }
+                        if ($stateHash -cne (& $hashFile $statePath) -or
+                            $state.planHash -cne (& $hashFile $savedPlan)) { throw 'SETUP_GUI_CONCURRENT_STATE_CHANGED' }
                     }
                     $accepted
                 }.GetNewClosure()
