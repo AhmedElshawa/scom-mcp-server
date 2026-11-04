@@ -77,6 +77,14 @@ try {
             windowsMapping=@{verified=$true};scopeKind='DO_NOT_LOG_CUSTOMER_TOKEN';scopeVisibilityVerified=$true
         };request=@{}
     } | ConvertTo-Json -Depth 6 -Compress
+    $roundtrip=$inputData | ConvertFrom-Json
+    if ($inputData -isnot [string] -or $roundtrip.protocolVersion -ne 1 -or
+        $roundtrip.configuration.inventoryKind -cne 'supportedWindows' -or
+        $roundtrip.configuration.operationalLogging.directory -cne $configuration.directory -or
+        $roundtrip.configuration.operationalLogging.maxFileBytes -ne 1024 -or
+        $roundtrip.configuration.operationalLogging.retainedFiles -ne 3 -or
+        $roundtrip.configuration.scopeKind -cne 'DO_NOT_LOG_CUSTOMER_TOKEN' -or
+        $null -eq $roundtrip.request) {throw 'Logging fixture sender JSON roundtrip failed.'}
     $start=New-Object Diagnostics.ProcessStartInfo
     $start.FileName=(Get-Process -Id $PID).Path
     $start.Arguments='-NoProfile -File "'+(Join-Path $PSScriptRoot 'Invoke-SCOMGenericGroupProfile.ps1')+'"'
@@ -126,6 +134,9 @@ try {
         $safeEvents=@($events | Where-Object {$_ -cin $allowedEvents})
         Write-Output ('Lifecycle diagnostic: retainedCount={0}; activeCount={1}; unknownCount={2}; events={3}' -f
             $events.Count,$activeEvents.Count,($events.Count-$safeEvents.Count),($safeEvents -join ','))
+        $senderNulls=@($inputData.ToCharArray() | Where-Object {[int]$_ -eq 0}).Count
+        Write-Output ('Sender shape: chars={0}; bytes={1}; first={2}; last={3}; nulls={4}' -f
+            $inputData.Length,$inputBytes.Length,[int]$inputData[0],[int]$inputData[$inputData.Length-1],$senderNulls)
         # Replay only the pre-source initialization in an isolated child. Emit
         # fixed stage codes, never input, paths, exception text or raw stderr.
         $probePath=Join-Path $directory 'logging-initialization-probe.ps1'
@@ -134,12 +145,16 @@ param([string]$LoggingModule)
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
 $stage='diagnostic.encoding'
+$shape='diagnostic.shapeUnavailable'
+$failure='diagnostic.noException'
 try {
     [Console]::InputEncoding=New-Object System.Text.UTF8Encoding($false)
     [Console]::OutputEncoding=New-Object System.Text.UTF8Encoding($false)
     $stage='diagnostic.stdin'
     $text=[Console]::In.ReadToEnd()
     if ([string]::IsNullOrWhiteSpace($text)) {throw 'EMPTY'}
+    $nulls=@($text.ToCharArray() | Where-Object {[int]$_ -eq 0}).Count
+    $shape='diagnostic.shape chars={0}; first={1}; last={2}; nulls={3}' -f $text.Length,[int]$text[0],[int]$text[$text.Length-1],$nulls
     $stage='diagnostic.json'
     $data=$text | ConvertFrom-Json
     $stage='diagnostic.protocol'
@@ -154,8 +169,14 @@ try {
     Write-SCOMOperationalEvent -Log $log -Event 'profile.started'
     $stage='diagnostic.initializationSucceeded'
 }
-catch {}
+catch {
+    $types=@('System.ArgumentException','System.InvalidOperationException','System.Management.Automation.RuntimeException')
+    $type=$_.Exception.GetType().FullName
+    if ($type -cnotin $types) {$type='Other'}
+    $failure='diagnostic.exception type={0}; category={1}' -f $type,[int]$_.CategoryInfo.Category
+}
 [Console]::Out.Write($stage)
+[Console]::Out.Write("`n"+$shape+"`n"+$failure)
 '@
         [IO.File]::WriteAllText($probePath,$probe,(New-Object Text.UTF8Encoding($false)))
         $start.Arguments='-NoProfile -File "'+$probePath+'" -LoggingModule "'+
@@ -173,8 +194,14 @@ catch {}
             $allowedStages=@('diagnostic.encoding','diagnostic.stdin','diagnostic.json','diagnostic.protocol',
                 'diagnostic.inventoryKind','diagnostic.moduleImport','diagnostic.logConfiguration',
                 'diagnostic.logWrite','diagnostic.initializationSucceeded')
-            if ($stage -cin $allowedStages) {Write-Output $stage}
+            $diagnosticLines=@($stage -split '\r?\n')
+            if ($diagnosticLines[0] -cin $allowedStages) {Write-Output $diagnosticLines[0]}
             else {Write-Output 'diagnostic.childInvocationFailed'}
+            foreach ($line in @($diagnosticLines | Select-Object -Skip 1)) {
+                if ($line -cmatch '^diagnostic\.shape chars=\d+; first=\d+; last=\d+; nulls=\d+$' -or
+                    $line -cmatch '^diagnostic\.exception type=(System\.ArgumentException|System\.InvalidOperationException|System\.Management\.Automation\.RuntimeException|Other); category=\d+$' -or
+                    $line -cin @('diagnostic.shapeUnavailable','diagnostic.noException')) {Write-Output $line}
+            }
         }
         finally {$diagnostic.Dispose()}
         throw 'Profile stream did not persist ordered sanitized failure lifecycle events.'
