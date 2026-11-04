@@ -26,6 +26,7 @@ try {
     $bad=$arguments.Clone();$bad.DestinationDirectory=Join-Path $source 'nested';Reject $bad
     $bad=$arguments.Clone();$bad.DestinationDirectory=$root;Reject $bad
     $bad=$arguments.Clone();$bad.CertificateThumbprint='0'*40;Reject $bad
+    Write-Output 'Signing CI: missing signer rejected; validating file-set and digest tampering.'
     $changed=Join-Path $root 'changed'
     Copy-Item -LiteralPath $source -Destination $changed -Recurse
     $bad=$arguments.Clone();$bad.PackageDirectory=$changed
@@ -35,14 +36,26 @@ try {
     [IO.File]::AppendAllText((Join-Path $changed 'README.md'),'synthetic tamper')
     Reject $bad
     if (Test-Path -LiteralPath $arguments.DestinationDirectory) { throw 'Rejected signing mutated destination.' }
+    Write-Output 'Signing CI: creating nonexportable disposable software Code Signing key.'
     $cert=New-SelfSignedCertificate -Type CodeSigningCert -Subject ('CN=SCOM disposable CI '+[guid]::NewGuid().ToString('N')) `
-        -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable -NotAfter (Get-Date).AddDays(1)
+        -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable -NotAfter (Get-Date).AddDays(1) `
+        -Provider 'Microsoft Software Key Storage Provider' -KeyAlgorithm RSA -KeyLength 2048 -HashAlgorithm SHA256
+    Write-Output 'Signing CI: disposable key created; rejecting signer without existing trust.'
     $arguments.CertificateThumbprint=$cert.Thumbprint
     Reject $arguments
     if (Test-Path -LiteralPath ($arguments.DestinationDirectory+'.partial')) { throw 'Untrusted signer created partial output.' }
+    Write-Output 'Signing CI: adding only disposable CurrentUser trust in the isolated runner.'
     foreach ($name in @('Root','TrustedPublisher')) {
         $store=[Security.Cryptography.X509Certificates.X509Store]::new($name,'CurrentUser')
         try { $store.Open('ReadWrite');$store.Add($cert) } finally { $store.Close() }
+    }
+    $failure=$arguments.Clone();$failure.DestinationDirectory=Join-Path $root 'failed-signing'
+    function Set-AuthenticodeSignature { throw 'Synthetic signing failure; no key used.' }
+    try { Reject $failure } finally { Remove-Item -LiteralPath Function:\Set-AuthenticodeSignature }
+    if (-not (Test-Path -LiteralPath ($failure.DestinationDirectory+'.partial')) -or
+        (Test-Path -LiteralPath ($failure.DestinationDirectory+'.zip')) -or
+        (Test-Path -LiteralPath ($failure.DestinationDirectory+'.zip.sha256'))) {
+        throw 'Partial signing failure published a success artifact or lost partial evidence.'
     }
     Write-Output 'Signing CI: signing and verifying application-owned targets with disposable CurrentUser key.'
     $proof=& $helper @arguments

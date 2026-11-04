@@ -23,6 +23,12 @@ returns `Valid` with the exact signer, then invoke its file normally. Do not
 load it with `Invoke-Expression`, remove its zone stream, bypass warnings or
 change policy.
 
+The unsigned standalone helper's SHA-256 for this revision is
+`8708A4FFCA7CD17AC007442A85EEA7659780FB01B6A7B26E2DE586E11725B359`.
+Verify this **before** signing the helper; signing intentionally changes its
+bytes. The public source and its matching exact-commit checksum must be
+reviewed before using the lab key.
+
 For the already downloaded **1b6dc4c** package, the independent original manifest
 pin is:
 
