@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$PackageDirectory)
+param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$RunBridgeDiagnostic)
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath($PackageDirectory)
 $exe=Join-Path $root 'ScomSetup.exe'
@@ -55,6 +55,25 @@ try {
     $tests=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
     if (-not $tests.ok -or $tests.bridgeCalls -ne 0) { throw 'Native wizard did not pass its no-effect UI/protocol self-tests.' }
     Write-Output 'PASS: packaged native wizard sequential navigation, automatic fake preflight/status colors, defaults/resume, identity handoff arguments and approval/cancellation/failure assertions; no production bridge calls or host/source effects.'
+    if ($RunBridgeDiagnostic) {
+        Remove-Item -LiteralPath $report
+        $start.Arguments='--diagnose-bootstrap "'+$report+'"'
+        $process=[Diagnostics.Process]::Start($start)
+        if (-not $process.WaitForExit(120000)) {
+            Stop-Process -Id $process.Id
+            throw 'Read-only native bridge diagnostic timed out.'
+        }
+        if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report)) {
+            throw 'Actual native-to-Windows-PowerShell bootstrap did not obtain results. Inspect fixed diagnostic code; never bypass policy.'
+        }
+        $diagnostic=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
+        if ($diagnostic.bridgeCalls -ne 1 -or $diagnostic.action -cne 'Bootstrap' -or
+            $diagnostic.checks.Count -lt 10 -or
+            @($diagnostic.checks | Where-Object { $_.name -ceq 'Windows PowerShell 5.1' -and $_.passed }).Count -ne 1) {
+            throw 'Actual packaged GUI/PowerShell protocol did not return real individual local prerequisite results.'
+        }
+        Write-Output 'PASS: actual packaged native-to-Windows-PowerShell 5.1 Bootstrap transport/JSON/check contract; read-only local probes only, no SCOM connection or installation.'
+    }
 } finally {
     if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
 }

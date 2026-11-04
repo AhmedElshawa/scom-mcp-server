@@ -13,6 +13,7 @@ internal sealed class WizardForm : Form
     internal Action? BusyCloseNotice { get; set; }
     internal bool IsBusy => busy;
     internal string StatusText => status.Text;
+    internal Func<string, bool> DiagnosticWriter { get; set; }
     private readonly Panel pages = new() { Dock = DockStyle.Fill };
     private readonly List<FlowLayoutPanel> pagePanels = [];
     private readonly List<string> pageTitles = [];
@@ -63,6 +64,7 @@ internal sealed class WizardForm : Form
     {
         packageRoot = Path.GetFullPath(root).TrimEnd('\\');
         bridge = setupBridge;
+        DiagnosticWriter = setupBridge is SetupBridge ? BridgeDiagnostics.TryLog : _ => true;
         Text = "SCOM deployment setup";
         Width = 1040; Height = 830; MinimumSize = new Size(900, 680);
         StartPosition = FormStartPosition.CenterScreen;
@@ -346,7 +348,7 @@ internal sealed class WizardForm : Form
         .All(key => !string.IsNullOrWhiteSpace(fields[key].Text) && File.Exists(fields[key].Text.Trim()));
     internal bool CanMoveNext => !busy && pageIndex < pagePanels.Count - 1 && (pageIndex switch
     {
-        0 => true,
+        0 => CanInstall || workerPlanMode.Checked,
         1 => !string.IsNullOrWhiteSpace(fields["mcpLogPath"].Text) && !string.IsNullOrWhiteSpace(fields["collectorLogPath"].Text),
         2 => true,
         3 => fields["workerAccount"].Text.Contains('\\'),
@@ -572,12 +574,24 @@ internal sealed class WizardForm : Form
             {
                 status.Text = "Waiting for setup bridge. Do not close; accepted effects are not cancellable or automatically rolled back.";
                 var response = await bridge.InvokeAsync(request);
+                if (action is "Bootstrap" or "Preflight" && !response.Ok && !(response.Checks?.Length > 0))
+                {
+                    ShowBridgeFailure(response.Code, action);
+                    break;
+                }
                 RenderResponse(response, action);
+                if (action is "Bootstrap" or "Preflight")
+                {
+                    string code = BridgeDiagnostics.SafeCode(response.Code);
+                    bool written = DiagnosticWriter(code);
+                    Append(code + (written ? " — local fixed-code diagnostic recorded." : " — diagnostic log write failed."));
+                    if (!written) status.Text += " Diagnostic log unavailable: write failed.";
+                }
                 if (!response.ApprovalRequired) break;
                 if (action is "Bootstrap" or "Preflight" or "Status")
-                    throw new InvalidOperationException("READONLY_ACTION_CANNOT_REQUEST_APPROVAL");
+                    throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA");
                 if (!DisplayText.IsExactSummarySafe(response.Summary))
-                    throw new InvalidOperationException("UNSAFE_APPROVAL_SUMMARY");
+                    throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA");
                 if (!ConfirmEffect(response.Summary!, request.Approval is not null))
                 {
                     status.Text = "Further approval declined. Earlier accepted effects may have completed; review Status before continuing.";
@@ -588,13 +602,26 @@ internal sealed class WizardForm : Form
                 request.Approval = response.Summary;
             }
         }
-        catch
+        catch (BridgeFailureException failure)
         {
-            if (action is "Bootstrap" or "Preflight") RenderChecks(new BridgeResponse());
-            status.Text = "Setup communication failed. No raw diagnostics are shown. Review Status and the private journal before retrying.";
-            Append("Bridge failed or returned an invalid response. Preserve the journal; do not assume rollback.");
+            ShowBridgeFailure(failure.Code, action);
         }
+        catch { ShowBridgeFailure("SETUP_GUI_UNKNOWN_FAILURE", action); }
         finally { SetBusy(false); }
+    }
+
+    private void ShowBridgeFailure(string? failureCode, string action)
+    {
+        string code = BridgeDiagnostics.SafeCode(failureCode);
+        if (action is "Bootstrap" or "Preflight") RenderChecks(new BridgeResponse());
+        bool written = DiagnosticWriter(code);
+        string diagnostic = written ? $"Fixed-code diagnostic log: {BridgeDiagnostics.LogPath}" :
+            $"Diagnostic log write FAILED: {BridgeDiagnostics.LogPath}. No diagnostic record was saved.";
+        string effects = action is "Bootstrap" or "Preflight" ? "No host/source action was requested." :
+            "Accepted effects may have completed. Review Status and the private journal before retrying.";
+        status.Text = $"{code}: {BridgeDiagnostics.Remedy(code)} {effects} {diagnostic}";
+        Append($"{code}: {BridgeDiagnostics.Remedy(code)}");
+        Append(diagnostic);
     }
 
     private bool ConfirmEffect(string summary, bool priorEffects)
@@ -612,6 +639,7 @@ internal sealed class WizardForm : Form
             if (!defaultsApplied)
             {
                 if (response.Defaults is not null)
+                {
                     foreach (var property in typeof(SetupPlan).GetProperties().Where(p => p.PropertyType == typeof(string)))
                     {
                         string key = char.ToLowerInvariant(property.Name[0]) + property.Name[1..];
@@ -621,10 +649,11 @@ internal sealed class WizardForm : Form
                             string proposed = DisplayText.Clean(property.GetValue(response.Defaults) as string, 32767);
                             if (!string.IsNullOrWhiteSpace(proposed)) box.Text = proposed;
                         }
+                    }
+                }
                 updating = true;
                 SyncLogRoot();
                 updating = false;
-                    }
                 if (fields["stateDirectory"].Text == initialValues["stateDirectory"] && !string.IsNullOrWhiteSpace(response.StateDirectory))
                     fields["stateDirectory"].Text = DisplayText.Clean(response.StateDirectory, 32767);
                 defaultsApplied = response.Defaults is not null;
@@ -680,7 +709,7 @@ internal sealed class WizardForm : Form
         actualChecksReceived = checks.Length > 0;
         prerequisitesPassed = response.Ok && actualChecksReceived && checks.All(check => check.Passed) && !response.ApprovalRequired;
         if (checks.Length == 0)
-            checkResults.Controls.Add(new Label { Text = "NOT CHECKED — prerequisite results unavailable. Verify the signed package and Windows PowerShell policy.",
+            checkResults.Controls.Add(new Label { Text = "NOT CHECKED — no prerequisite results were received. Review the specific diagnostic code below; the cause is not yet established.",
                 ForeColor = Color.Firebrick, AutoSize = true, MaximumSize = new Size(800, 0) });
         foreach (var check in checks.Take(100))
         {

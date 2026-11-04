@@ -79,7 +79,7 @@ jobs:
         run: |
           .\package.ps1 -OutputDirectory .\artifacts\ci-evaluation
           .\Validation\Test-Package.ps1 -PackageDirectory .\artifacts\ci-evaluation
-          .\Validation\Test-NativeSetup.ps1 -PackageDirectory .\artifacts\ci-evaluation
+          .\Validation\Test-NativeSetup.ps1 -PackageDirectory .\artifacts\ci-evaluation -RunBridgeDiagnostic
           Compress-Archive -LiteralPath .\artifacts\ci-evaluation -DestinationPath .\artifacts\scom-evaluation.zip
           $hash = (Get-FileHash -LiteralPath .\artifacts\scom-evaluation.zip -Algorithm SHA256).Hash
           "$hash  scom-evaluation.zip" | Set-Content -LiteralPath .\artifacts\scom-evaluation.zip.sha256 -Encoding ascii

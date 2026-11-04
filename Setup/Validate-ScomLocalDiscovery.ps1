@@ -41,6 +41,22 @@ try {
     [IO.File]::WriteAllText($manifest,"throw 'must not execute manifest text'")
     $r=& $module { param($p) Get-ScomSetupLocalScom $p } $manifest
     Check (-not $r.moduleValid -and -not $r.sdkValid -and $r.failureCode -ceq 'SETUP_LOCAL_SCOM_METADATA_PROBE_FAILED')
+    & $module {
+        function script:Get-ScomSetupLocalScom { [pscustomobject]@{modulePath='';moduleValid=$false;sdkValid=$false;failureCode=$null} }
+        function script:Get-Module { param($ListAvailable) [pscustomobject]@{Name='WebAdministration'} }
+        function script:Import-Module {}
+        function script:Get-Website { [pscustomobject]@{Name='Existing'} }
+        function script:Get-WebApplication { param($Site) @() }
+        function script:Get-WebBinding { param($Name,$Protocol) [pscustomobject]@{bindingInformation='*:443:example.invalid'} }
+        function script:Get-ChildItem {
+            param($Path)
+            if ($Path -ceq 'IIS:\AppPools') { [pscustomobject]@{Name='Shared'} }
+            elseif ($Path -cne 'Cert:\LocalMachine\My') { throw 'Unexpected local catalog fixture probe' }
+        }
+    }
+    $catalog=Get-ScomSetupLocalCatalog
+    Check ($catalog.sites[0].httpsBindings[0].port -is [int] -and $catalog.sites[0].httpsBindings[0].port -eq 443)
+    Check (($catalog | ConvertTo-Json -Depth 10 -Compress) -match '"port":443' -and $catalog.certificates.Count -eq 0)
     Write-Output "PASS: $count local SCOM manifest/SDK metadata assertions; fixtures only, no code import or connection. Metadata is not source compatibility."
 } finally {
     Remove-Module ScomSetup.Windows

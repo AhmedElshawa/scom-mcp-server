@@ -167,10 +167,17 @@ try {
     $request.action='Preflight'
     $r=Invoke-ScomSetupGuiRequest $request (Join-Path $root 'wrong-package') -Adapters $adapters
     Check ($r.code -ceq 'SETUP_GUI_PACKAGE_LOCATION_MISMATCH')
-    foreach ($inputText in @('{"action":"Invalid","secret":"synthetic-private-marker"}','synthetic-private-marker')) {
+    $bridgeFixture=Join-Path $root 'missing-module'
+    $null=New-Item -ItemType Directory -Path $bridgeFixture
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Invoke-ScomSetupGui.ps1') -Destination $bridgeFixture
+    foreach ($case in @(
+        [pscustomobject]@{text='{"action":"Invalid","secret":"synthetic-private-marker"}';script=(Join-Path $PSScriptRoot 'Invoke-ScomSetupGui.ps1');code='SETUP_GUI_ACTION_INVALID';exit=0},
+        [pscustomobject]@{text='synthetic-private-marker';script=(Join-Path $PSScriptRoot 'Invoke-ScomSetupGui.ps1');code='SETUP_GUI_REQUEST_INVALID';exit=1},
+        [pscustomobject]@{text='{"action":"Bootstrap","secret":"synthetic-private-marker"}';script=(Join-Path $bridgeFixture 'Invoke-ScomSetupGui.ps1');code='SETUP_GUI_MODULE_LOAD_FAILED';exit=1}
+    )) {
         $start=[Diagnostics.ProcessStartInfo]::new()
         $start.FileName=(Get-Process -Id $PID).Path
-        $start.Arguments='-NoProfile -File "'+(Join-Path $PSScriptRoot 'Invoke-ScomSetupGui.ps1')+'"'
+        $start.Arguments='-NoProfile -File "'+$case.script+'"'
         $start.UseShellExecute=$false
         $start.RedirectStandardInput=$true;$start.RedirectStandardOutput=$true;$start.RedirectStandardError=$true
         $encoding=[Console]::InputEncoding
@@ -178,14 +185,13 @@ try {
             [Console]::InputEncoding=[Text.UTF8Encoding]::new($false)
             $child=[Diagnostics.Process]::Start($start)
         } finally { [Console]::InputEncoding=$encoding }
-        $child.StandardInput.WriteLine($inputText);$child.StandardInput.Close()
+        $child.StandardInput.WriteLine($case.text);$child.StandardInput.Close()
         $stdout=$child.StandardOutput.ReadToEnd();$stderr=$child.StandardError.ReadToEnd()
         if (-not $child.WaitForExit(30000)) { Stop-Process -Id $child.Id; throw 'GUI bridge protocol test timed out' }
         $response=$stdout | ConvertFrom-Json
         Check (-not $response.ok -and $stdout.StartsWith('{') -and $stdout.EndsWith('}'))
         Check (($stdout+$stderr) -notmatch 'synthetic-private-marker')
-        $expected=if ($inputText.StartsWith('{')) {'SETUP_GUI_ACTION_INVALID'} else {'SETUP_GUI_BRIDGE_BLOCKED'}
-        Check ($response.code -ceq $expected)
+        Check ($response.code -ceq $case.code -and $child.ExitCode -eq $case.exit)
     }
     Write-Output "PASS: $count native GUI bridge contract assertions; mocked host/source effects only, no installation or collection."
 }

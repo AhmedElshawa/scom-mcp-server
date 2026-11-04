@@ -81,7 +81,11 @@ function Get-ScomSetupLocalCatalog {
                 applications=@(Get-WebApplication -Site $site.Name | Select-Object -First 200 | ForEach-Object { [string]$_.Path })
                 httpsBindings=@(Get-WebBinding -Name $site.Name -Protocol https | Select-Object -First 100 | ForEach-Object {
                     $parts=([string]$_.bindingInformation) -split ':'
-                    [pscustomobject]@{host=$parts[-1];port=$parts[-2]}
+                    $port=0
+                    if (-not [int]::TryParse($parts[-2],[ref]$port) -or $port -lt 1 -or $port -gt 65535) {
+                        throw 'SETUP_LOCAL_IIS_BINDING_PROBE_FAILED'
+                    }
+                    [pscustomobject]@{host=$parts[-1];port=$port}
                 })}
         })
         $pools=@(Get-ChildItem IIS:\AppPools | Select-Object -First 200 | ForEach-Object { [string]$_.Name })
@@ -103,30 +107,40 @@ function Get-ScomSetupPrerequisites {
     $codes = [Collections.Generic.List[string]]::new()
     if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or
         $PSVersionTable.PSVersion -lt [version]'5.1') { $codes.Add('WINDOWS_POWERSHELL_51_REQUIRED') }
-    $os = Get-CimInstance Win32_OperatingSystem
-    if ($os.ProductType -eq 1 -or [int]$os.BuildNumber -notin @(17763,20348,26100)) { $codes.Add('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED') }
+    try {
+        $os = Get-CimInstance Win32_OperatingSystem
+        if ($os.ProductType -eq 1 -or [int]$os.BuildNumber -notin @(17763,20348,26100)) { $codes.Add('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED') }
+    } catch { $codes.Add('OS_PROBE_FAILED'); $codes.Add('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED') }
+    try {
     $dotnet = Get-Command dotnet.exe -CommandType Application -ErrorAction SilentlyContinue
     if (-not $dotnet) { $codes.Add('DOTNET8_RUNTIME_REQUIRED') }
     else {
         $runtimes = & $dotnet.Source --list-runtimes
-        if ($LASTEXITCODE -ne 0) { throw 'SETUP_RUNTIME_PROBE_FAILED' }
+        if ($LASTEXITCODE -ne 0) { $codes.Add('DOTNET8_RUNTIME_PROBE_FAILED') }
         foreach ($runtime in @('Microsoft.NETCore.App','Microsoft.AspNetCore.App')) {
             if (-not ($runtimes -match "^$([regex]::Escape($runtime)) 8\.")) { $codes.Add("$runtime`_8_REQUIRED") }
         }
     }
-    if (-not (Get-Module -ListAvailable WebAdministration)) { $codes.Add('IIS_MANAGEMENT_TOOLS_REQUIRED') }
-    $iisServices = @(Get-Service -Name W3SVC,WAS -ErrorAction SilentlyContinue)
-    if ($iisServices.Count -ne 2) { $codes.Add('IIS_WEB_SERVER_REQUIRED') }
-    $bundles = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-        Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft \.NET 8\.0\..*Windows Server Hosting' })
-    if ($bundles.Count -eq 0 -or -not (Test-Path "$env:ProgramFiles\IIS\Asp.Net Core Module\V2\aspnetcorev2.dll")) {
-        $codes.Add('DOTNET8_HOSTING_BUNDLE_REQUIRED')
-    }
+    } catch { $codes.Add('DOTNET8_RUNTIME_PROBE_FAILED') }
+    try {
+        if (-not (Get-Module -ListAvailable WebAdministration)) { $codes.Add('IIS_MANAGEMENT_TOOLS_REQUIRED') }
+        $iisServices = @(Get-Service -Name W3SVC,WAS -ErrorAction SilentlyContinue)
+        if ($iisServices.Count -ne 2) { $codes.Add('IIS_WEB_SERVER_REQUIRED') }
+    } catch { $codes.Add('IIS_PROBE_FAILED');$codes.Add('IIS_MANAGEMENT_TOOLS_REQUIRED');$codes.Add('IIS_WEB_SERVER_REQUIRED') }
+    try {
+        $bundles = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
+            Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft \.NET 8\.0\..*Windows Server Hosting' })
+        if ($bundles.Count -eq 0 -or -not (Test-Path "$env:ProgramFiles\IIS\Asp.Net Core Module\V2\aspnetcorev2.dll")) {
+            $codes.Add('DOTNET8_HOSTING_BUNDLE_REQUIRED')
+        }
+    } catch { $codes.Add('HOSTING_BUNDLE_PROBE_FAILED');$codes.Add('DOTNET8_HOSTING_BUNDLE_REQUIRED') }
     if (-not [Environment]::Is64BitProcess) { $codes.Add('X64_POWERSHELL_AND_HOSTING_REQUIRED') }
-    $localScom=Get-ScomSetupLocalScom $Plan.operationsManagerModule
+    try { $localScom=Get-ScomSetupLocalScom $Plan.operationsManagerModule }
+    catch { $localScom=[pscustomobject]@{failureCode='SETUP_LOCAL_SCOM_METADATA_PROBE_FAILED';moduleValid=$false;sdkValid=$false} }
     if ($localScom.failureCode) { $codes.Add($localScom.failureCode) }
     if (-not $localScom.moduleValid) { $codes.Add('APPROVED_SCOM_CONSOLE_SDK_REQUIRED') }
     if (-not $localScom.sdkValid) { $codes.Add('SCOM_SDK_ASSEMBLY_METADATA_REQUIRED') }
+    try {
     foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
         if (Test-Path $key) { $codes.Add('RESTART_REQUIRED') }
@@ -135,6 +149,7 @@ function Get-ScomSetupPrerequisites {
     if ($sessionManager.PSObject.Properties['PendingFileRenameOperations'] -and $sessionManager.PendingFileRenameOperations) {
         $codes.Add('RESTART_REQUIRED')
     }
+    } catch { $codes.Add('RESTART_PROBE_FAILED');$codes.Add('RESTART_REQUIRED') }
     $checks = @(
         [pscustomobject]@{name='Windows PowerShell 5.1'; passed=('WINDOWS_POWERSHELL_51_REQUIRED' -notin $codes)}
         [pscustomobject]@{name='Supported Windows Server family'; passed=('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED' -notin $codes)}
@@ -160,6 +175,11 @@ function Get-ScomSetupPrerequisites {
         'No detected pending reboot'='Complete the required customer-approved reboot, then rerun checks. Setup never reboots automatically.'
     }
     foreach ($check in $checks) { $check | Add-Member NoteProperty remedy $remedies[$check.name] }
+    $probeFailures=@($codes | Where-Object { $_ -match 'PROBE_FAILED$' })
+    if ($probeFailures.Count -gt 0) {
+        $checks+=@([pscustomobject]@{name='Local prerequisite probe completion';passed=$false
+            remedy=('Unable to inspect one or more local prerequisites ('+($probeFailures -join ', ')+'). Unknown is not missing or passed. Review local component access and approved administrator context; do not install based on an unreadable probe alone.')})
+    }
     [pscustomobject]@{ ready=($codes.Count -eq 0); codes=$codes.ToArray(); checks=$checks; certificationStatus='notCertified' }
 }
 

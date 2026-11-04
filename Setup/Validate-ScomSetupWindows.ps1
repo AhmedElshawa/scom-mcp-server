@@ -5,18 +5,22 @@ $module = Get-Module ScomSetup.Windows
 $facts = [pscustomobject]@{
     osBuild=20348; productType=3; dotnet=$true; runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]','Microsoft.AspNetCore.App 8.0.0 [synthetic]')
     iis=$true; iisServer=$true; ancm=$true; hostingBundle=$true; sdk=$true; sdkMetadata=$true; restart=$false; poolExists=$false; siteExists=$false
+    osProbeFails=$false;registryProbeFails=$false;runtimeExit=0
 }
 # Substitute read-only command probes INSIDE the adapter module. No IIS
 # commands, registry writes, runtime execution or source connection can occur.
 & $module {
     param($fixture)
     $script:facts=$fixture
-    function script:Get-CimInstance { [pscustomobject]@{BuildNumber=$script:facts.osBuild;ProductType=$script:facts.productType} }
+    function script:Get-CimInstance {
+        if ($script:facts.osProbeFails) { throw 'Synthetic CIM access denied: private-marker' }
+        [pscustomobject]@{BuildNumber=$script:facts.osBuild;ProductType=$script:facts.productType}
+    }
     function script:Get-Command {
         if ($script:facts.dotnet) { [pscustomobject]@{Source='synthetic-dotnet'} }
     }
     function script:synthetic-dotnet {
-        $global:LASTEXITCODE=0
+        $global:LASTEXITCODE=$script:facts.runtimeExit
         $script:facts.runtimeLines
     }
     function script:Get-Module { if ($script:facts.iis) { [pscustomobject]@{Name='synthetic-IIS'} } }
@@ -29,6 +33,7 @@ $facts = [pscustomobject]@{
     function script:Get-ItemProperty {
         param($Path)
         if ($Path -match 'Uninstall') {
+            if ($script:facts.registryProbeFails) { throw 'Synthetic registry access denied: private-marker' }
             if ($script:facts.hostingBundle) { [pscustomobject]@{DisplayName='Microsoft .NET 8.0.0 - Windows Server Hosting'} }
         } else { [pscustomobject]@{} }
     }
@@ -79,6 +84,21 @@ try {
     $facts.ancm=$false; Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'; $facts.ancm=$true
     $facts.sdk=$false; Check-Code 'APPROVED_SCOM_CONSOLE_SDK_REQUIRED'; $facts.sdk=$true
     $facts.sdkMetadata=$false; Check-Code 'SCOM_SDK_ASSEMBLY_METADATA_REQUIRED'; $facts.sdkMetadata=$true
+    $facts.osProbeFails=$true;Check-Code 'OS_PROBE_FAILED';$facts.osProbeFails=$false
+    $facts.registryProbeFails=$true;Check-Code 'HOSTING_BUNDLE_PROBE_FAILED'
+    $result=Get-ScomSetupPrerequisites $plan
+    if (@($result.checks | Where-Object { $_.name -eq 'Local prerequisite probe completion' -and -not $_.passed }).Count -ne 1 -or
+        ($result | ConvertTo-Json -Depth 10) -match 'private-marker') { throw 'Unreadable probe must be explicit, blocked and sanitized' }
+    $count++;$facts.registryProbeFails=$false
+    $facts.runtimeExit=1;Check-Code 'DOTNET8_RUNTIME_PROBE_FAILED';$facts.runtimeExit=0
+    $facts.dotnet=$false;$facts.iis=$false;$facts.iisServer=$false;$facts.hostingBundle=$false;$facts.ancm=$false;$facts.sdk=$false;$facts.sdkMetadata=$false
+    $missing=Get-ScomSetupPrerequisites $plan
+    if ($missing.ready -or $missing.checks.Count -ne 10 -or
+        @($missing.checks | Where-Object { $_.passed -and $_.name -match '\.NET|IIS|SCOM|OperationsManager' }).Count -ne 0) {
+        throw 'Fresh server missing components must return individual blocked checks, not transport failure or false green'
+    }
+    $count++
+    $facts.dotnet=$true;$facts.iis=$true;$facts.iisServer=$true;$facts.hostingBundle=$true;$facts.ancm=$true;$facts.sdk=$true;$facts.sdkMetadata=$true
     $checks=(Get-ScomSetupPrerequisites $plan).checks
     if (@($checks | Where-Object { -not $_.remedy }).Count -ne 0 -or
         @($checks | Where-Object { $_.name -match 'Local.*SCOM SDK' }).Count -ne 1) { throw 'Every actual prerequisite requires an actionable remedy and SDK metadata label' }

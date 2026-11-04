@@ -75,11 +75,13 @@ function Invoke-ScomSetupGuiRequest {
     }
     $lease=$null
     $hashFile=Get-Command Get-ScomSetupHash -ErrorAction Stop
+    $failureCode='SETUP_GUI_FAILED'
     try {
         $action=[string](Get-ScomGuiValue $Request 'action' '')
         if ($action -cnotin @('Bootstrap','Preflight','Discover','Prepare','Configure','Activate','Status','Recover',
             'InstallPrerequisites','Connect','PublishWorker','Publish','Accept')) { throw 'SETUP_GUI_ACTION_INVALID' }
         if ($action -ceq 'Bootstrap') {
+            $failureCode='SETUP_GUI_BOOTSTRAP_PROBE_FAILED'
             $catalogBlocked=$false
             try { $catalog=& $Adapters.LocalCatalog }
             catch {
@@ -117,6 +119,7 @@ function Invoke-ScomSetupGuiRequest {
             throw 'SETUP_GUI_PACKAGE_LOCATION_MISMATCH'
         }
         if ($action -eq 'Preflight') {
+            $failureCode='SETUP_GUI_PREFLIGHT_PROBE_FAILED'
             if ($plan.operationsManagerModule) { Assert-ScomSetupPath $plan.operationsManagerModule }
             $facts=& $Adapters.Prerequisites $plan
             $answer.checks=$facts.checks
@@ -310,7 +313,7 @@ function Invoke-ScomSetupGuiRequest {
             $answer.message='Review this exact action. Cancel performs no unapproved effect. Earlier independently approved prerequisite actions may already have completed.'
         } else {
             $code=[regex]::Match($_.Exception.Message,'^SETUP_[A-Z0-9_]+').Value
-            if ($code) { $answer.code=$code }
+            if ($code) { $answer.code=$code } else { $answer.code=$failureCode }
             $answer.message='Blocked or failed. No success is claimed. Preserve any pending journal and private logs; review the code and deployment guide. Signing/UAC/identity/source prerequisites must be resolved through the customer process.'
         }
     }

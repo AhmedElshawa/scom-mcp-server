@@ -90,6 +90,60 @@ checks that its loaded runtime is the packaged runtime and the native form can
 be constructed without invoking the bridge. That is a loader/entrypoint proof,
 not a completed clean-server installation or production certification.
 
+### If the first prerequisite screen cannot obtain results
+
+**NOT CHECKED is not a missing-prerequisite diagnosis.** Do not install the SDK,
+Hosting Bundle or IIS based on a communication error alone. Before a successful
+Prepare there may be no deployment journal at all. The corrected wizard displays
+a fixed startup failure code and remedy without copying private exceptions,
+request JSON or raw PowerShell output into logs.
+
+The first-screen fixed-code log is
+`%LOCALAPPDATA%\ScomSetup\Logs\bootstrap.jsonl` for the Windows user running the
+wizard. It is separate from the not-yet-selected MCP/collector logs and protected
+deployment journal, contains allowlisted codes only, and is bounded to about
+64 KiB. The screen reports an early-log write failure explicitly. A log does not
+prove that a prerequisite probe ran; only returned individual checks do.
+
+| Code | Meaning / next read-only action |
+|---|---|
+| `SETUP_GUI_BRIDGE_MISSING` | The adjacent `setup\Invoke-ScomSetupGui.ps1` is missing. Verify complete extraction. |
+| `SETUP_GUI_POLICY_BLOCKED` | PowerShell emitted specific policy/security markers. Have the customer security process inspect signing/zone/policy; do not bypass it. |
+| `SETUP_GUI_MODULE_LOAD_FAILED` | The entry script ran but could not import its setup module. Verify all setup modules and their approved signatures; this alone does not establish a policy cause. |
+| `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | GUI and bridge output did not agree. Use the complete matching reviewed package and collect the diagnostic. |
+| `SETUP_GUI_CHILD_EXIT` / `SETUP_GUI_NO_RESPONSE` | No usable response was obtained. Collect the read-only diagnostic; no missing component is inferred. |
+| `SETUP_GUI_BOOTSTRAP_PROBE_FAILED` | Local probes could not complete. Privately inspect local component access; do not install based on this code alone. |
+
+The EXE also supports a single real read-only transport diagnostic:
+
+```powershell
+.\ScomSetup.exe --diagnose-bootstrap "$env:TEMP\scom-bootstrap-diagnostic.json"
+```
+
+Use a new report filename (existing reports are not overwritten). It makes one
+local Bootstrap request and writes fixed codes/check names/results only, no plan,
+catalog, paths, configuration or raw exception output. A nonzero exit means no
+individual results were obtained, not that any specific prerequisite is missing.
+No setup stage, source access or policy change is performed.
+
+For a minimal read-only diagnostic, open Windows PowerShell in the extracted
+`ci-evaluation` folder (the folder containing `ScomSetup.exe`) and run:
+
+```powershell
+Test-Path .\setup\Invoke-ScomSetupGui.ps1
+Get-ExecutionPolicy -List
+'{"action":"Bootstrap"}' | & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -File (Join-Path $PWD 'setup\Invoke-ScomSetupGui.ps1')
+```
+
+This uses normal `-File` execution, performs only local read-only checks and
+neither connects to SCOM nor installs anything. Do not change execution policy,
+unblock files or bypass a Windows warning to make it run. If policy prevents the
+script from starting, the customer signing/security process must review that
+specific error. If JSON is returned, report the fixed `code` and the check names
+and PASS/BLOCKED values; do not share raw configuration, paths, identity details
+or credentials. Missing files require the complete reviewed package to be
+extracted, not prerequisite installation.
+
 ## Console lane and detailed contract
 
 The console wizard stages an **opt-in indexed** on-premises installation and

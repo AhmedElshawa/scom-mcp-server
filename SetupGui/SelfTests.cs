@@ -115,6 +115,7 @@ internal static class SelfTests
         TestWorkflow();
         TestSequentialBootstrap();
         TestWorkerWithBlockedCatalog();
+        TestBridgeFailures();
     }
 
     private static void TestWorkflow()
@@ -224,9 +225,9 @@ internal static class SelfTests
         }));
         using var form = new WizardForm(AppContext.BaseDirectory, bridge);
         _ = form.Handle;
-        Require(bridge.Requests.Count == 0 && form.CurrentPage == 0 && !form.CanInstall && form.CanMoveNext);
+        Require(bridge.Requests.Count == 0 && form.CurrentPage == 0 && !form.CanInstall && !form.CanMoveNext);
         form.MovePage(1);
-        Require(form.CurrentPage == 1);
+        Require(form.CurrentPage == 0);
         form.MovePage(-1);
         Require(form.CurrentPage == 0);
         form.Show();
@@ -321,9 +322,11 @@ internal static class SelfTests
                 new BridgeCheck { Name = "Local IIS/certificate discovery", Passed = false, Remedy = "Use an authorized host session for IIS." }] });
             Complete(form.OnFirstShownAsync());
             Require(!form.CanInstall && form.CheckColors.Contains(Color.Firebrick));
+            Require(!form.CanMoveNext);
             form.SetField("privatePath", @"C:\installed-private");
             form.SetField("stateDirectory", "");
             form.UseWorkerPlan(true);
+            Require(form.CanMoveNext);
             var plan = new SetupPlan { PrivatePath = @"C:\installed-private", WorkerAccount = @"DOMAIN\worker" };
             responses.Enqueue(new BridgeResponse { Ok = true, Code = "SETUP_GUI_WORKER_PLAN_READY", Plan = plan });
             Complete(form.RunActionAsync("Status"));
@@ -352,6 +355,79 @@ internal static class SelfTests
             Complete(form.RunActionAsync("Prepare"));
             Require(bridge.Requests.Count == before && !form.CanInstall);
         }
+
+    private static void TestBridgeFailures()
+    {
+        const string customer = "CUSTOMER_SECRET_SHOULD_NEVER_DISPLAY";
+        static string FailureCode(Action call)
+        {
+            try { call(); }
+            catch (BridgeFailureException error) { return error.Code; }
+            throw new InvalidOperationException("Expected classified bridge failure");
+        }
+        Require(FailureCode(() => SetupBridge.Decode("", "", 0)) == "SETUP_GUI_NO_RESPONSE");
+        Require(FailureCode(() => SetupBridge.Decode("", "", 1)) == "SETUP_GUI_CHILD_EXIT");
+        Require(FailureCode(() => SetupBridge.Decode("not json " + customer, customer, 0)) == "SETUP_GUI_INVALID_JSON");
+        Require(FailureCode(() => SetupBridge.Decode("{}", "", 0)) == "SETUP_GUI_INVALID_SCHEMA");
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":\"false\"}", "", 0)) == "SETUP_GUI_INVALID_SCHEMA");
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":true}", "", 1)) == "SETUP_GUI_CHILD_EXIT");
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":true}", "", 0, oversized: true)) == "SETUP_GUI_RESPONSE_TOO_LARGE");
+        Require(FailureCode(() => SetupBridge.Decode("", "", 0, writeFailed: true)) == "SETUP_GUI_IO_FAILED");
+        Require(FailureCode(() => SetupBridge.Decode("", customer + " PSSecurityException", 1)) == "SETUP_GUI_POLICY_BLOCKED");
+        Require(FailureCode(() => SetupBridge.Decode("", customer + " UnauthorizedAccessException", 1)) == "SETUP_GUI_CHILD_EXIT");
+        string realPolicyShape = "File C:\\CUSTOMER_SECRET_SHOULD_NEVER_DISPLAY\\setup.ps1 cannot be loaded. " +
+            "The file is not digitally signed. You cannot run this script on the current system. " +
+            "about_Execution_Policies + CategoryInfo : SecurityError: (:) [], ParentContainsErrorRecordException " +
+            "+ FullyQualifiedErrorId : UnauthorizedAccess";
+        Require(FailureCode(() => SetupBridge.Decode("", realPolicyShape, 1)) == "SETUP_GUI_POLICY_BLOCKED");
+        Require(!BridgeDiagnostics.Remedy("SETUP_GUI_POLICY_BLOCKED").Contains(customer));
+        Require(!SetupBridge.HasPolicyFailure("SecurityError UnauthorizedAccess Access denied to a file"));
+        Require(!SetupBridge.HasPolicyFailure("UnauthorizedAccess not digitally signed"));
+        Require(!SetupBridge.HasPolicyFailure("SecurityError about_Execution_Policies"));
+        Require(SetupBridge.HasPolicyFailure("SecurityError UnauthorizedAccess running scripts is disabled on this system"));
+        var failure = SetupBridge.Decode("{\"ok\":false,\"code\":\"SETUP_GUI_BRIDGE_BLOCKED\",\"message\":\"" + customer + "\"}", "", 1);
+        Require(!failure.Ok && failure.Code == "SETUP_GUI_BRIDGE_BLOCKED");
+        foreach (var port in new[] { "443", "\"443\"" })
+        {
+            var response = SetupBridge.Decode("{\"ok\":false,\"checks\":[{\"name\":\"IIS\",\"passed\":false}]," +
+                "\"sites\":[{\"name\":\"Default\",\"httpsBindings\":[{\"host\":\"scom.invalid\",\"port\":" + port + "}]}]}", "", 0);
+            Require(response.Sites[0].HttpsBindings[0].Port == 443);
+        }
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":true,\"sites\":[{\"httpsBindings\":[{\"port\":\"invalid\"}]}]}", "", 0)) ==
+            "SETUP_GUI_INVALID_SCHEMA");
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":true,\"checks\":[null]}", "", 0)) == "SETUP_GUI_INVALID_SCHEMA");
+        Require(FailureCode(() => SetupBridge.Decode("{\"ok\":true,\"checks\":[{\"name\":\"Missing actual boolean\"}]}", "", 0)) ==
+            "SETUP_GUI_INVALID_SCHEMA");
+        foreach (var phaseCode in new[] { "SETUP_GUI_REQUEST_INVALID", "SETUP_GUI_MODULE_LOAD_FAILED", "SETUP_GUI_DISPATCH_FAILED",
+            "SETUP_GUI_RESPONSE_SERIALIZATION_FAILED", "SETUP_GUI_FAILED", "SETUP_GUI_BOOTSTRAP_FAILED" })
+        {
+            var safeFailure = SetupBridge.Decode("{\"ok\":false,\"code\":\"" + phaseCode + "\",\"message\":\"" + customer + "\"}", "", 1);
+            Require(BridgeDiagnostics.SafeCode(safeFailure.Code) == phaseCode &&
+                BridgeDiagnostics.Record(safeFailure.Code).Contains(phaseCode) &&
+                !BridgeDiagnostics.Remedy(safeFailure.Code).Contains(customer));
+        }
+        Require(BridgeDiagnostics.Record(customer) == "{\"code\":\"SETUP_GUI_UNKNOWN_FAILURE\"}\n");
+        Require(!BridgeDiagnostics.Remedy("SETUP_GUI_BRIDGE_BLOCKED").Contains("bypass", StringComparison.OrdinalIgnoreCase));
+        var missing = new SetupBridge(Path.Combine(AppContext.BaseDirectory, "nonexistent-package-for-readonly-test"));
+        Require(FailureCode(() => Complete(missing.InvokeAsync(new BridgeRequest { Action = "Bootstrap" }))) == "SETUP_GUI_BRIDGE_MISSING");
+        var bridge = new RecordingBridge(() => throw new BridgeFailureException("SETUP_GUI_INVALID_JSON"));
+        using var form = new WizardForm(AppContext.BaseDirectory, bridge);
+        _ = form.Handle;
+        var codes = new List<string>();
+        form.DiagnosticWriter = code => { codes.Add(code); return true; };
+        Complete(form.RunActionAsync("Bootstrap"));
+        Require(form.StatusText.Contains("SETUP_GUI_INVALID_JSON") && form.StatusText.Contains(BridgeDiagnostics.LogPath) &&
+            !form.StatusText.Contains(customer) && !form.StatusText.Contains("private journal") && !form.CanMoveNext && !form.CanInstall &&
+            codes.SequenceEqual(new[] { "SETUP_GUI_INVALID_JSON" }));
+        bridge.Next = () => Task.FromResult(failure);
+        form.DiagnosticWriter = code => { codes.Add(code); return false; };
+        Complete(form.RunActionAsync("Bootstrap"));
+        Require(form.StatusText.Contains("SETUP_GUI_BRIDGE_BLOCKED") && form.StatusText.Contains("write FAILED") &&
+            !form.StatusText.Contains(customer) && !form.CanMoveNext && !form.CanInstall);
+        bridge.Next = () => throw new InvalidOperationException(customer);
+        Complete(form.RunActionAsync("Bootstrap"));
+        Require(form.StatusText.Contains("SETUP_GUI_UNKNOWN_FAILURE") && !form.StatusText.Contains(customer));
+    }
     private sealed class RecordingBridge(Func<Task<BridgeResponse>> next) : ISetupBridge
     {
         internal Func<Task<BridgeResponse>> Next { get; set; } = next;

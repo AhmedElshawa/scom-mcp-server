@@ -11,6 +11,8 @@ internal static class Program
         ApplicationConfiguration.Initialize();
         try
         {
+            if (args.Length == 2 && args[0] == "--diagnose-bootstrap")
+                return DiagnoseBootstrap(args[1]);
             if (args.Length is 1 or 2 && args[0] is "--self-test" or "--smoke-readonly")
             {
                 SelfTests.Run();
@@ -46,6 +48,42 @@ internal static class Program
                     "SCOM setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
+    }
+
+    private static int DiagnoseBootstrap(string reportPath)
+    {
+        string[] knownChecks = ["Windows PowerShell 5.1", "Supported Windows Server family",
+            ".NET and ASP.NET Core 8 runtimes", "IIS management tools", "IIS web server and activation services installed",
+            ".NET 8 Hosting Bundle and ANCM", "64-bit execution", "Local OperationsManager module manifest",
+            "Local SCOM SDK assembly identity metadata", "No detected pending reboot",
+            "Local IIS/certificate discovery", "Local prerequisite probe completion"];
+        BridgeResponse response;
+        try
+        {
+            response = new SetupBridge(AppContext.BaseDirectory).InvokeAsync(new BridgeRequest { Action = "Bootstrap" })
+                .GetAwaiter().GetResult();
+        }
+        catch (BridgeFailureException error)
+        {
+            response = new BridgeResponse { Code = error.Code };
+        }
+        catch
+        {
+            response = new BridgeResponse { Code = "SETUP_GUI_UNKNOWN_FAILURE" };
+        }
+        var code = BridgeDiagnostics.SafeCode(response.Code);
+        using var output = new FileStream(Path.GetFullPath(reportPath), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        JsonSerializer.Serialize(output, new
+        {
+            action = "Bootstrap", ok = response.Ok, code, remedy = BridgeDiagnostics.Remedy(code), bridgeCalls = 1,
+            checks = (response.Checks ?? []).Select(check => new
+            {
+                name = knownChecks.Contains(check.Name) ? check.Name : "Additional prerequisite",
+                passed = check.Passed
+            })
+        });
+        // A completed diagnostic with blocked prerequisites is not an installation failure or approval.
+        return (response.Checks ?? []).Length > 0 ? 0 : 1;
     }
 }
 
