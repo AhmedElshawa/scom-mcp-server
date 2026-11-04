@@ -3,6 +3,7 @@ $env:DOTNET_CLI_TELEMETRY_OPTOUT = '1'
 $env:DOTNET_NOLOGO = '1'
 Push-Location $PSScriptRoot
 try {
+    $powerShell = (Get-Process -Id $PID).Path
     & (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetup.ps1')
     & (Join-Path $PSScriptRoot 'Setup\Validate-ScomSetupWindows.ps1')
     & (Join-Path $PSScriptRoot 'Setup\Validate-ScomPrerequisiteInstall.ps1')
@@ -14,11 +15,12 @@ try {
     & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomPrerequisiteInstall.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell prerequisite installer validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-Collector.ps1')
-    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomSupportedWindowsScope.ps1')
-    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomOperationalLogging.ps1')
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomSupportedWindowsScope.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Supported Windows scope validation failed.' }
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomOperationalLogging.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Collector operational logging validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomPreflight.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomMetricCompatibilityReport.ps1')
-    $powerShell = (Get-Process -Id $PID).Path
     & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomSdkReader.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'SDK reader validation failed.' }
     & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomManagementGroupScope.ps1')
