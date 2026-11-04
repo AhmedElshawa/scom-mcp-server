@@ -51,6 +51,29 @@ static class CollectionSchedulerChecks
         Check(calls == 1, "ambiguous publication stops without a new dataset/source scan", ref assertions);
         Check(!logger.Messages.Any(message => message.Contains("SYNTHETIC_AMBIGUOUS_COMMIT", StringComparison.Ordinal)),
             "diagnostics omit adapter exception payload", ref assertions);
+        var deferredSettings = new CollectionScheduleSettings
+        {
+            Interval = TimeSpan.FromSeconds(1), AttemptDeadline = TimeSpan.FromSeconds(1),
+            FailureBackoff = TimeSpan.FromSeconds(1), MaxFailureBackoff = TimeSpan.FromSeconds(2),
+            MaxConsecutiveDeferredAttempts = 2
+        };
+        var deferredCalls = 0;
+        var exhausted = new CollectionScheduler(deferredSettings, _ =>
+        {
+            deferredCalls++;
+            return Task.FromResult(CollectionAttemptOutcome.Deferred);
+        }, logger);
+        try { await exhausted.RunAsync(CancellationToken.None); throw new Exception("Deferred attempt limit not enforced."); }
+        catch (CollectionAttemptsExhaustedException) { assertions++; }
+        Check(deferredCalls == 2, "consecutive deferred attempts stop at the configured bound", ref assertions);
+        Check(logger.Messages.Any(message => message.Contains("SCOM_COLLECTION_STOPPED", StringComparison.Ordinal)),
+            "deferred exhaustion is an actionable stopped state", ref assertions);
+        try
+        {
+            new CollectionScheduleSettings { MaxConsecutiveDeferredAttempts = 0 }.Validate();
+            throw new Exception("Invalid deferred attempt bound accepted.");
+        }
+        catch (InvalidOperationException) { assertions++; }
         var finished = false;
         var noncooperative = new CollectionScheduler(settings, async _ =>
         {
@@ -61,7 +84,7 @@ static class CollectionSchedulerChecks
         try { await noncooperative.RunAsync(CancellationToken.None); throw new Exception("Deadline not enforced."); }
         catch (TimeoutException) { assertions++; }
         Check(finished, "deadline waits for outstanding source work rather than abandoning it", ref assertions);
-        Console.WriteLine($"PASS: {assertions} collection schedule assertions; serialization, cadence/backoff, deadlines and ambiguous-failure stop.");
+        Console.WriteLine($"PASS: {assertions} collection schedule assertions; serialization, cadence/backoff, bounded deferrals, deadlines and ambiguous-failure stop.");
     }
 
     private static void Check(bool condition, string message, ref int count)
