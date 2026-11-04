@@ -9,6 +9,24 @@ function Assert-LogFault([scriptblock]$Action) {
     try { & $Action | Out-Null } catch { $failed=$true }
     if (-not $failed) {throw 'Expected fail-closed logging rejection.'}
 }
+function Start-LogTestChild([Diagnostics.Process]$Process) {
+    $utf8=New-Object Text.UTF8Encoding($false)
+    $originalEncoding=[Console]::InputEncoding
+    try {
+        # Framework Process.Start constructs StandardInput from Console.InputEncoding
+        # and enables AutoFlush, emitting its preamble before BaseStream writes.
+        # Core exposes an explicit override; Framework needs the console setting.
+        [Console]::InputEncoding=$utf8
+        if ($null -ne $Process.StartInfo.PSObject.Properties['StandardInputEncoding']) {
+            $Process.StartInfo.StandardInputEncoding=$utf8
+        }
+        $null=$Process.Start()
+    }
+    finally {[Console]::InputEncoding=$originalEncoding}
+    if ($Process.StandardInput.Encoding.GetPreamble().Length -ne 0) {
+        throw 'Logging fixture child stdin writer must be BOM-free.'
+    }
+}
 try {
     $configuration=[pscustomobject]@{
         directory=$directory;maxFileBytes=1024;retainedFiles=3
@@ -93,10 +111,8 @@ try {
     $process=New-Object Diagnostics.Process
     $process.StartInfo=$start
     try {
-        $null=$process.Start()
-        # Desktop Process.StandardInput inherits the parent console code page;
-        # the profile protocol explicitly reads UTF-8. Write protocol bytes,
-        # rather than depending on that host-specific StreamWriter encoding.
+        Start-LogTestChild $process
+        # Write BOM-free protocol bytes after verifying the writer created by Start.
         $inputBytes=(New-Object Text.UTF8Encoding($false)).GetBytes($inputData)
         $process.StandardInput.BaseStream.Write($inputBytes,0,$inputBytes.Length)
         $process.StandardInput.BaseStream.Flush()
@@ -184,7 +200,7 @@ catch {
         $diagnostic=New-Object Diagnostics.Process
         $diagnostic.StartInfo=$start
         try {
-            $null=$diagnostic.Start()
+            Start-LogTestChild $diagnostic
             $diagnostic.StandardInput.BaseStream.Write($inputBytes,0,$inputBytes.Length)
             $diagnostic.StandardInput.BaseStream.Flush()
             $diagnostic.StandardInput.BaseStream.Close()
