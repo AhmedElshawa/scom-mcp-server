@@ -604,13 +604,13 @@ internal sealed class WizardForm : Form
         }
         catch (BridgeFailureException failure)
         {
-            ShowBridgeFailure(failure.Code, action);
+            ShowBridgeFailure(failure.Code, action, failure);
         }
         catch { ShowBridgeFailure("SETUP_GUI_UNKNOWN_FAILURE", action); }
         finally { SetBusy(false); }
     }
 
-    private void ShowBridgeFailure(string? failureCode, string action)
+    private void ShowBridgeFailure(string? failureCode, string action, BridgeFailureException? failure = null)
     {
         string code = BridgeDiagnostics.SafeCode(failureCode);
         if (action is "Bootstrap" or "Preflight") RenderChecks(new BridgeResponse());
@@ -619,8 +619,11 @@ internal sealed class WizardForm : Form
             $"Diagnostic log write FAILED: {BridgeDiagnostics.LogPath}. No diagnostic record was saved.";
         string effects = action is "Bootstrap" or "Preflight" ? "No host/source action was requested." :
             "Accepted effects may have completed. Review Status and the private journal before retrying.";
-        status.Text = $"{code}: {BridgeDiagnostics.Remedy(code)} {effects} {diagnostic}";
+        string contract = failure?.ContractField is { } field ?
+            $" Contract field: {field}; expected: {failure.ExpectedType}; received: {failure.ActualType}." : "";
+        status.Text = $"{code}: {BridgeDiagnostics.Remedy(code)}{contract} {effects} {diagnostic}";
         Append($"{code}: {BridgeDiagnostics.Remedy(code)}");
+        if (contract.Length > 0) Append(contract);
         Append(diagnostic);
     }
 

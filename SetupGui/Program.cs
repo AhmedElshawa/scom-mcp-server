@@ -13,6 +13,8 @@ internal static class Program
         {
             if (args.Length == 2 && args[0] == "--diagnose-bootstrap")
                 return DiagnoseBootstrap(args[1]);
+            if (args.Length == 3 && args[0] == "--decode-bootstrap-fixture")
+                return DecodeFixture(args[1], args[2]);
             if (args.Length is 1 or 2 && args[0] is "--self-test" or "--smoke-readonly")
             {
                 SelfTests.Run();
@@ -58,6 +60,7 @@ internal static class Program
             "Local SCOM SDK assembly identity metadata", "No detected pending reboot",
             "Local IIS/certificate discovery", "Local prerequisite probe completion"];
         BridgeResponse response;
+        BridgeFailureException? failure = null;
         try
         {
             response = new SetupBridge(AppContext.BaseDirectory).InvokeAsync(new BridgeRequest { Action = "Bootstrap" })
@@ -65,6 +68,7 @@ internal static class Program
         }
         catch (BridgeFailureException error)
         {
+            failure = error;
             response = new BridgeResponse { Code = error.Code };
         }
         catch
@@ -76,6 +80,7 @@ internal static class Program
         JsonSerializer.Serialize(output, new
         {
             action = "Bootstrap", ok = response.Ok, code, remedy = BridgeDiagnostics.Remedy(code), bridgeCalls = 1,
+            contractField = failure?.ContractField, expectedType = failure?.ExpectedType, actualType = failure?.ActualType,
             checks = (response.Checks ?? []).Select(check => new
             {
                 name = knownChecks.Contains(check.Name) ? check.Name : "Additional prerequisite",
@@ -84,6 +89,22 @@ internal static class Program
         });
         // A completed diagnostic with blocked prerequisites is not an installation failure or approval.
         return (response.Checks ?? []).Length > 0 ? 0 : 1;
+    }
+
+    private static int DecodeFixture(string inputPath, string reportPath)
+    {
+        var size = new FileInfo(inputPath).Length;
+        if (size > 2 * 1024 * 1024) return 1;
+        BridgeFailureException? failure = null;
+        try { _ = SetupBridge.Decode(File.ReadAllText(inputPath), "", 0); }
+        catch (BridgeFailureException error) { failure = error; }
+        using var output = new FileStream(Path.GetFullPath(reportPath), FileMode.CreateNew, FileAccess.Write, FileShare.None);
+        JsonSerializer.Serialize(output, new
+        {
+            decoded = failure is null, bridgeCalls = 0, code = failure?.Code,
+            contractField = failure?.ContractField, expectedType = failure?.ExpectedType, actualType = failure?.ActualType
+        });
+        return failure is null ? 0 : 1;
     }
 }
 

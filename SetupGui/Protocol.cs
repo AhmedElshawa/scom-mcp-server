@@ -118,9 +118,109 @@ internal interface ISetupBridge
     Task<BridgeResponse> InvokeAsync(BridgeRequest request);
 }
 
-internal sealed class BridgeFailureException(string code) : Exception(BridgeDiagnostics.SafeCode(code))
+internal sealed class BridgeFailureException : Exception
 {
-    public string Code { get; } = BridgeDiagnostics.SafeCode(code);
+    public string Code { get; }
+    public string? ContractField { get; }
+    public string? ExpectedType { get; }
+    public string? ActualType { get; }
+
+    internal BridgeFailureException(string code, string? contractField = null, string? expectedType = null, string? actualType = null)
+        : base(BridgeDiagnostics.SafeCode(code))
+    {
+        Code = BridgeDiagnostics.SafeCode(code);
+        if (Code != "SETUP_GUI_INVALID_SCHEMA") return;
+        ContractField = SchemaContract.SafeField(contractField);
+        ExpectedType = SchemaContract.SafeType(expectedType);
+        ActualType = SchemaContract.SafeType(actualType);
+    }
+}
+
+internal static class SchemaContract
+{
+    private static readonly HashSet<string> Fields = BuildFields(typeof(BridgeResponse), "");
+    private static readonly HashSet<string> Types = ["object", "array", "string", "boolean", "int32",
+        "int32-or-numeric-string", "null", "number", "missing", "unknown", "safe-approval-summary", "false"];
+
+    internal static string SafeField(string? field) => field is not null && Fields.Contains(field) ? field : "response";
+    internal static string SafeType(string? type) => type is not null && Types.Contains(type) ? type : "unknown";
+    private static string Path(string parent, string child) => parent.Length == 0 ? child : parent + "." + child;
+    private static string PropertyName(System.Reflection.PropertyInfo property) =>
+        char.ToLowerInvariant(property.Name[0]) + property.Name[1..];
+
+    private static HashSet<string> BuildFields(Type type, string path)
+    {
+        var result = new HashSet<string> { path.Length == 0 ? "response" : path };
+        if (type.IsArray)
+        {
+            foreach (var field in BuildFields(type.GetElementType()!, path + "[]")) result.Add(field);
+        }
+        else if (type != typeof(string) && type != typeof(bool) && type != typeof(int))
+            foreach (var property in type.GetProperties())
+                foreach (var field in BuildFields(property.PropertyType, Path(path, PropertyName(property)))) result.Add(field);
+        return result;
+    }
+
+    internal static BridgeFailureException Failure(string field, string expected, string actual) =>
+        new("SETUP_GUI_INVALID_SCHEMA", field, expected, actual);
+
+    private static string Kind(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.Object => "object", JsonValueKind.Array => "array", JsonValueKind.String => "string",
+        JsonValueKind.True or JsonValueKind.False => "boolean", JsonValueKind.Number => "number",
+        JsonValueKind.Null => "null", _ => "unknown"
+    };
+
+    internal static void Validate(JsonElement root) => ValidateValue(root, typeof(BridgeResponse), "", false);
+
+    private static void ValidateValue(JsonElement value, Type type, string path, bool arrayItem)
+    {
+        string field = path.Length == 0 ? "response" : path;
+        bool numericString = path == "sites[].httpsBindings[].port";
+        string expected = type == typeof(string) ? "string" : type == typeof(bool) ? "boolean" :
+            type == typeof(int) ? numericString ? "int32-or-numeric-string" : "int32" : type.IsArray ? "array" : "object";
+        if (value.ValueKind == JsonValueKind.Null)
+        {
+            if (!arrayItem && (type == typeof(string) || type.IsArray || type == typeof(SetupPlan))) return;
+            throw Failure(field, expected, "null");
+        }
+        if (type == typeof(string))
+        {
+            if (value.ValueKind != JsonValueKind.String) throw Failure(field, expected, Kind(value));
+            return;
+        }
+        if (type == typeof(bool))
+        {
+            if (value.ValueKind is not JsonValueKind.True and not JsonValueKind.False) throw Failure(field, expected, Kind(value));
+            return;
+        }
+        if (type == typeof(int))
+        {
+            if (value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out _)) return;
+            if (numericString && value.ValueKind == JsonValueKind.String &&
+                int.TryParse(value.GetString(), System.Globalization.NumberStyles.AllowLeadingSign,
+                    System.Globalization.CultureInfo.InvariantCulture, out _)) return;
+            throw Failure(field, expected, Kind(value));
+        }
+        if (type.IsArray)
+        {
+            if (value.ValueKind != JsonValueKind.Array) throw Failure(field, expected, Kind(value));
+            foreach (var item in value.EnumerateArray()) ValidateValue(item, type.GetElementType()!, path + "[]", true);
+            return;
+        }
+        if (value.ValueKind != JsonValueKind.Object) throw Failure(field, expected, Kind(value));
+        var properties = type.GetProperties().ToDictionary(PropertyName, StringComparer.OrdinalIgnoreCase);
+        bool requiredFound = false;
+        string? required = type == typeof(BridgeResponse) ? "ok" : type == typeof(BridgeCheck) ? "passed" : null;
+        foreach (var member in value.EnumerateObject())
+        {
+            if (!properties.TryGetValue(member.Name, out var property)) continue;
+            string canonicalName = PropertyName(property);
+            if (canonicalName == required) requiredFound = true;
+            ValidateValue(member.Value, property.PropertyType, Path(path, canonicalName), false);
+        }
+        if (required is not null && !requiredFound) throw Failure(Path(path, required), "boolean", "missing");
+    }
 }
 
 internal static class BridgeDiagnostics
@@ -135,7 +235,7 @@ internal static class BridgeDiagnostics
         ["SETUP_GUI_CHILD_EXIT"] = "The bridge exited unsuccessfully without a usable error response. Run the approved read-only bridge diagnostic to inspect the failure privately.",
         ["SETUP_GUI_NO_RESPONSE"] = "The bridge returned no JSON response. Verify the complete reviewed setup files and run the approved read-only bridge diagnostic.",
         ["SETUP_GUI_INVALID_JSON"] = "The bridge returned invalid JSON. Verify matching GUI and setup files from the same package and run the approved read-only diagnostic.",
-        ["SETUP_GUI_INVALID_SCHEMA"] = "The bridge response does not match the GUI contract. Use matching GUI and setup files from the same reviewed package.",
+        ["SETUP_GUI_INVALID_SCHEMA"] = "A bridge response field has an unexpected JSON type or shape. Collect the safe contract field/type diagnostic; the cause is not yet established.",
         ["SETUP_GUI_RESPONSE_TOO_LARGE"] = "The bridge response exceeded its safe limit. Run the approved read-only diagnostic privately; no response content was logged.",
         ["SETUP_GUI_IO_FAILED"] = "Bridge input/output failed. Accepted effects may still have completed. Recheck status explicitly before retrying an effect.",
         ["SETUP_GUI_UNKNOWN_FAILURE"] = "Setup communication failed for an unclassified reason. Run the approved read-only bridge diagnostic; no raw details were logged.",
@@ -267,31 +367,16 @@ internal sealed class SetupBridge(string packageRoot) : ISetupBridge
         using (document)
         {
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object || !root.TryGetProperty("ok", out var ok) ||
-                ok.ValueKind is not JsonValueKind.True and not JsonValueKind.False ||
-                (root.TryGetProperty("approvalRequired", out var approval) &&
-                    approval.ValueKind is not JsonValueKind.True and not JsonValueKind.False))
-                throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA");
-            if (root.TryGetProperty("checks", out var checks) && checks.ValueKind != JsonValueKind.Null)
-            {
-                if (checks.ValueKind != JsonValueKind.Array) throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA");
-                foreach (var check in checks.EnumerateArray())
-                    if (check.ValueKind != JsonValueKind.Object || !check.TryGetProperty("passed", out var passed) ||
-                        passed.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
-                        throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA");
-            }
+            SchemaContract.Validate(root);
 
             BridgeResponse response;
             try { response = root.Deserialize<BridgeResponse>(Json) ?? throw new JsonException(); }
             catch (Exception error) when (error is JsonException or NotSupportedException)
             { throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA"); }
-            if (response.Ok && response.ApprovalRequired ||
-                response.ApprovalRequired && !DisplayText.IsExactSummarySafe(response.Summary) ||
-                (response.Checks ?? []).Any(check => check is null) ||
-                (response.Sites ?? []).Any(site => site is null) ||
-                (response.Groups ?? []).Any(group => group is null) ||
-                (response.Certificates ?? []).Any(certificate => certificate is null))
-                throw new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA");
+            if (response.Ok && response.ApprovalRequired)
+                throw SchemaContract.Failure("ok", "false", "boolean");
+            if (response.ApprovalRequired && !DisplayText.IsExactSummarySafe(response.Summary))
+                throw SchemaContract.Failure("summary", "safe-approval-summary", response.Summary is null ? "null" : "string");
             if (exitCode != 0 && (response.Ok || response.ApprovalRequired))
                 throw new BridgeFailureException("SETUP_GUI_CHILD_EXIT");
             if (writeFailed && response.Ok) throw new BridgeFailureException("SETUP_GUI_IO_FAILED");

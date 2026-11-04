@@ -116,6 +116,7 @@ internal static class SelfTests
         TestSequentialBootstrap();
         TestWorkerWithBlockedCatalog();
         TestBridgeFailures();
+        TestSchemaDiagnostics();
     }
 
     private static void TestWorkflow()
@@ -428,6 +429,67 @@ internal static class SelfTests
         Complete(form.RunActionAsync("Bootstrap"));
         Require(form.StatusText.Contains("SETUP_GUI_UNKNOWN_FAILURE") && !form.StatusText.Contains(customer));
     }
+    private static void TestSchemaDiagnostics()
+    {
+        static void Reject(string json, string field, string expected, string actual)
+        {
+            try { SetupBridge.Decode(json, "", 0); }
+            catch (BridgeFailureException error)
+            {
+                Require(error.Code == "SETUP_GUI_INVALID_SCHEMA" && error.ContractField == field &&
+                    error.ExpectedType == expected && error.ActualType == actual &&
+                    !error.Message.Contains("CUSTOMER_SECRET") && !error.ContractField.Contains("CUSTOMER_SECRET"));
+                return;
+            }
+            throw new InvalidOperationException("Schema mismatch was not rejected.");
+        }
+        Reject("{\"ok\":false,\"defaults\":{\"operationsManagerModule\":[]}}",
+            "defaults.operationsManagerModule", "string", "array");
+        Reject("{\"ok\":false,\"defaults\":{\"schemaVersion\":\"1\"}}", "defaults.schemaVersion", "int32", "string");
+        Reject("{\"ok\":false,\"defaults\":{\"wholeManagementGroupApproved\":0}}",
+            "defaults.wholeManagementGroupApproved", "boolean", "number");
+        Reject("{\"ok\":false,\"sites\":{\"CUSTOMER_SECRET\":\"value\"}}", "sites", "array", "object");
+        Reject("{\"ok\":false,\"sites\":[{\"httpsBindings\":[{\"port\":{}}]}]}",
+            "sites[].httpsBindings[].port", "int32-or-numeric-string", "object");
+        Reject("{\"ok\":false,\"sites\":[{\"httpsBindings\":[{\"port\":\"CUSTOMER_SECRET\"}]}]}",
+            "sites[].httpsBindings[].port", "int32-or-numeric-string", "string");
+        Reject("{\"ok\":false,\"sites\":[{\"httpsBindings\":[{\"port\":2147483648}]}]}",
+            "sites[].httpsBindings[].port", "int32-or-numeric-string", "number");
+        Reject("{\"ok\":false,\"checks\":[{\"name\":\"CUSTOMER_SECRET\",\"passed\":true},{\"passed\":\"false\"}]}",
+            "checks[].passed", "boolean", "string");
+        Reject("{\"ok\":false,\"checks\":[{\"name\":\"CUSTOMER_SECRET\"}]}",
+            "checks[].passed", "boolean", "missing");
+        Reject("{\"ok\":false,\"checks\":[null]}", "checks[]", "object", "null");
+        Reject("{\"ok\":false,\"pools\":[null]}", "pools[]", "string", "null");
+        Reject("{\"ok\":false,\"certificates\":[{\"dnsNames\":[{\"CUSTOMER_SECRET\":false}]}]}",
+            "certificates[].dnsNames[]", "string", "object");
+        Reject("{\"ok\":false,\"groups\":[{\"id\":22}]}", "groups[].id", "string", "number");
+        Reject("{\"code\":\"CUSTOMER_SECRET\"}", "ok", "boolean", "missing");
+        Reject("[]", "response", "object", "array");
+        foreach (int count in new[] { 0, 1, 3 })
+        {
+            var response = new BridgeResponse
+            {
+                Ok = false, Checks = Enumerable.Range(0, count).Select(i => new BridgeCheck { Name = "check", Passed = false }).ToArray(),
+                Defaults = new SetupPlan(), Sites = Enumerable.Range(0, count).Select(i => new SiteOption
+                {
+                    Name = "site", Applications = Enumerable.Repeat("/new", count).ToArray(),
+                    HttpsBindings = Enumerable.Range(0, count).Select(j => new HttpsBinding { Host = "example.invalid", Port = 443 }).ToArray()
+                }).ToArray(),
+                Certificates = Enumerable.Range(0, count).Select(i => new CertificateOption { DnsNames = Enumerable.Repeat("example.invalid", count).ToArray() }).ToArray(),
+                Pools = Enumerable.Repeat("pool", count).ToArray(), Groups = Enumerable.Range(0, count).Select(i => new GroupItem()).ToArray()
+            };
+            var decoded = SetupBridge.Decode(JsonSerializer.Serialize(response, SetupBridge.Json), "", 0);
+            Require(decoded.Sites.Length == count && decoded.Checks.Length == count && decoded.Certificates.Length == count);
+        }
+        SetupBridge.Decode("{\"ok\":false,\"checks\":null,\"groups\":null,\"defaults\":null,\"plan\":null,\"message\":null}", "", 0);
+        SetupBridge.Decode("{\"ok\":false,\"CUSTOMER_SECRET\":{\"untrusted/path\":[1]},\"defaults\":{\"groupId\":null}}", "", 0);
+        var untrusted = new BridgeFailureException("SETUP_GUI_INVALID_SCHEMA", "CUSTOMER_SECRET/path[123]", "CUSTOMER_SECRET", "CUSTOMER_SECRET");
+        Require(untrusted.ContractField == "response" && untrusted.ExpectedType == "unknown" && untrusted.ActualType == "unknown");
+        Require(SchemaContract.SafeField("sites[999].httpsBindings[1].port") == "response" &&
+            SchemaContract.SafeField("sites[].httpsBindings[].port") == "sites[].httpsBindings[].port");
+    }
+
     private sealed class RecordingBridge(Func<Task<BridgeResponse>> next) : ISetupBridge
     {
         internal Func<Task<BridgeResponse>> Next { get; set; } = next;

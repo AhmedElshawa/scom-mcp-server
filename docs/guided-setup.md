@@ -110,7 +110,7 @@ prove that a prerequisite probe ran; only returned individual checks do.
 | `SETUP_GUI_BRIDGE_MISSING` | The adjacent `setup\Invoke-ScomSetupGui.ps1` is missing. Verify complete extraction. |
 | `SETUP_GUI_POLICY_BLOCKED` | PowerShell emitted specific policy/security markers. Have the customer security process inspect signing/zone/policy; do not bypass it. |
 | `SETUP_GUI_MODULE_LOAD_FAILED` | The entry script ran but could not import its setup module. Verify all setup modules and their approved signatures; this alone does not establish a policy cause. |
-| `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | GUI and bridge output did not agree. Use the complete matching reviewed package and collect the diagnostic. |
+| `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | Returned output was not accepted. The schema message/report includes an allowlisted `contractField`, `expectedType` and `actualType` (no values). Report those; mixed files, a missing prerequisite or a policy problem has not been established by this code alone. |
 | `SETUP_GUI_CHILD_EXIT` / `SETUP_GUI_NO_RESPONSE` | No usable response was obtained. Collect the read-only diagnostic; no missing component is inferred. |
 | `SETUP_GUI_BOOTSTRAP_PROBE_FAILED` | Local probes could not complete. Privately inspect local component access; do not install based on this code alone. |
 
@@ -125,6 +125,16 @@ local Bootstrap request and writes fixed codes/check names/results only, no plan
 catalog, paths, configuration or raw exception output. A nonzero exit means no
 individual results were obtained, not that any specific prerequisite is missing.
 No setup stage, source access or policy change is performed.
+
+On `SETUP_GUI_INVALID_SCHEMA`, the corrected report also includes only the
+allowlisted rejected DTO field and expected/received JSON types. For example,
+`contractField: defaults.operationsManagerModule`, `expectedType: string`,
+`actualType: array` would identify a string/array contract mismatch **without
+revealing the module path**. This is an example, not a diagnosis of a particular
+server. Array indices are replaced with `[]`; unknown fields/types become
+`response`/`unknown`. Send those three report fields, not the underlying Bootstrap
+catalog or raw JSON. Validation remains fail-closed; arbitrary arrays, objects,
+strings-as-booleans or missing check results are not silently accepted.
 
 For a minimal read-only diagnostic, open Windows PowerShell in the extracted
 `ci-evaluation` folder (the folder containing `ScomSetup.exe`) and run:
