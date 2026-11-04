@@ -18,6 +18,19 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
 
+if (args is ["--operational-logging-checks"])
+{
+    var root = Path.Combine(Directory.GetCurrentDirectory(), ".validation-data", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        OperationalLoggingChecks.Run(root);
+        WorkerRuntimeStateChecks.Run(root);
+        await CollectionWorkerHostChecks.Run(root);
+    }
+    finally { Directory.Delete(root, true); }
+    return 0;
+}
 if (args is ["--targeted-live-checks"])
 {
     await TargetedLiveValidation.Run();
@@ -64,6 +77,7 @@ static class Checks
             auth.Validate();
             TestAuth(auth);
             SetupConfigurationChecks.Run(root);
+            OperationalLoggingChecks.Run(root);
             var snapshot = Fixture();
             var dataset = Validate(snapshot, source);
             var codec = new CursorCodec(Clock, source);

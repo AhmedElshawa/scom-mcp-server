@@ -14,6 +14,8 @@ try {
     & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomPrerequisiteInstall.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell prerequisite installer validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-Collector.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomSupportedWindowsScope.ps1')
+    & (Join-Path $PSScriptRoot 'Collector\Validate-ScomOperationalLogging.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomPreflight.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomMetricCompatibilityReport.ps1')
     $powerShell = (Get-Process -Id $PID).Path

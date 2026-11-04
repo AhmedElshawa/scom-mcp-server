@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $root -PathType Container)) {
     throw 'Package directory does not exist.'
 }
 $required = @(
-    'README.md', 'LICENSE',
+    'README.md', 'LICENSE', 'package-manifest.json',
     'server\ScomMcp.dll', 'server\ScomMcp.deps.json', 'server\ScomMcp.runtimeconfig.json',
     'server\web.config', 'server\appsettings.example.json',
     'server\appsettings.ReadModel.example.json', 'server\appsettings.Worker.example.json',
@@ -27,7 +27,7 @@ $required = @(
     'collector\Get-SCOMMetricCompatibilityReport.ps1',
     'collector\Invoke-SCOMGenericGroupProfile.ps1', 'collector\ScomSdkReader.psm1',
     'collector\ScomNormalization.psm1', 'collector\ScomMetricProfile.psm1',
-    'collector\ScomWindowsProjection.psm1', 'docs\indexed-deployment-runbook.md',
+    'collector\ScomWindowsProjection.psm1', 'collector\ScomOperationalLogging.psm1', 'docs\indexed-deployment-runbook.md',
     'docs\deployment-issue-log.md', 'docs\customer-evaluation.md',
     'docs\enterprise-readiness-roadmap.md',
     'docs\os-lifecycle-assessment.md',
@@ -54,6 +54,22 @@ foreach ($file in $files) {
 }
 foreach ($file in $files | Where-Object Extension -eq '.json') {
     $null = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
+}
+$manifest = Get-Content -LiteralPath (Join-Path $root 'package-manifest.json') -Raw | ConvertFrom-Json
+if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -notmatch '^[a-f0-9]{40}$' -or
+    $manifest.certificationStatus -cne 'notCertified' -or $manifest.files.Count -ne ($files.Count - 1)) {
+    throw 'Package manifest identity or file count mismatch.'
+}
+$seen = [Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+foreach ($entry in $manifest.files) {
+    if (-not $seen.Add($entry.path) -or $entry.path -match '(^|\\)\.\.?($|\\)' -or [IO.Path]::IsPathRooted($entry.path)) {
+        throw 'Package manifest contains duplicate or unsafe relative paths.'
+    }
+    $target = [IO.Path]::GetFullPath((Join-Path $root $entry.path))
+    if (-not $target.StartsWith($root + '\',[StringComparison]::OrdinalIgnoreCase) -or
+        $entry.sha256 -cne (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash) {
+        throw 'Package manifest file digest mismatch.'
+    }
 }
 foreach ($file in $files | Where-Object Extension -eq '.md') {
     $text = Get-Content -LiteralPath $file.FullName -Raw

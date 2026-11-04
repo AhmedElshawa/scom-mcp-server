@@ -247,6 +247,17 @@ $wire=$scan | ConvertTo-Json -Depth 24 | ConvertFrom-Json
 if ($wire.inventory.complete -ne ($BridgeMode -ne 'unknownRole') -or $wire.windowsInventory.devices.Count -ne 1 -or
     $wire.expectedComputerIds.Count -ne 1 -or $wire.expectedComputerIds[0] -ne $computer.Id.ToString('D') -or
     $wire.windowsInventory.devices[0].groupIds[0] -ne 'scom-lab') { throw 'Generic scan lost typed Windows wire contract.' }
+if ($BridgeMode -eq '') {
+    $mapping | Add-Member -NotePropertyName computerClassName -NotePropertyValue $projectionArgs.ComputerClass.Name
+    $mapping | Add-Member -NotePropertyName operatingSystemClassName -NotePropertyValue $projectionArgs.OperatingSystemClass.Name
+    $mapping | Add-Member -NotePropertyName volumeClassName -NotePropertyValue $projectionArgs.VolumeClass.Name
+    $scanArgs.InventoryKind='supportedWindows'
+    $wizardGroup=Get-SCOMGenericGroupScan @scanArgs
+    if ($wizardGroup.inventoryKind -cne 'supportedWindows' -or
+        $wizardGroup.groupId -ne $root.Id.ToString('D') -or -not $wizardGroup.inventory.complete -or
+        $wizardGroup.windowsInventory.devices.Count -ne 1) {throw 'Wizard group supportedWindows regression.'}
+    $scanArgs.Remove('InventoryKind')
+}
 if ($BridgeMode -in @('complete','direct','managementServer','unknownRole')) {
     [Console]::Out.Write((@{protocolVersion=1;scan=$scan} | ConvertTo-Json -Depth 24 -Compress))
     return

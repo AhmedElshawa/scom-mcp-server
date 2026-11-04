@@ -68,10 +68,19 @@ jobs:
           .\validate.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Offline validation failed.' }
 
+      - name: Run complete offline suite under Windows PowerShell 5.1
+        run: |
+          powershell.exe -NoProfile -File .\validate.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 offline validation failed.' }
+
       - name: Publish and validate evaluation package
         run: |
           .\package.ps1 -OutputDirectory .\artifacts\ci-evaluation
           .\Validation\Test-Package.ps1 -PackageDirectory .\artifacts\ci-evaluation
+          Compress-Archive -LiteralPath .\artifacts\ci-evaluation -DestinationPath .\artifacts\scom-evaluation.zip
+          $hash = (Get-FileHash -LiteralPath .\artifacts\scom-evaluation.zip -Algorithm SHA256).Hash
+          "$hash  scom-evaluation.zip" | Set-Content -LiteralPath .\artifacts\scom-evaluation.zip.sha256 -Encoding ascii
+          "Evaluation ZIP SHA-256: ``$hash``" | Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append
           git diff --exit-code
           if ($LASTEXITCODE -ne 0) { throw 'Validation changed tracked source.' }
           "Offline build, full regression suite and evaluation package checks passed. No live SCOM/customer acceptance." |
@@ -81,6 +90,8 @@ jobs:
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: evaluation-${{ github.event.pull_request.head.sha || github.sha }}
-          path: artifacts/ci-evaluation
+          path: |
+            artifacts/scom-evaluation.zip
+            artifacts/scom-evaluation.zip.sha256
           if-no-files-found: error
           retention-days: 7

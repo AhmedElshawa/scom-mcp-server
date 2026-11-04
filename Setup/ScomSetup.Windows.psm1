@@ -5,10 +5,11 @@ Import-Module (Join-Path $PSScriptRoot 'ScomSetup.psm1')
 function Get-ScomSetupPrerequisites {
     param($Plan)
     $codes = [Collections.Generic.List[string]]::new()
-    if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) { $codes.Add('WINDOWS_POWERSHELL_51_REQUIRED') }
+    if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or
+        $PSVersionTable.PSVersion -lt [version]'5.1') { $codes.Add('WINDOWS_POWERSHELL_51_REQUIRED') }
     $os = Get-CimInstance Win32_OperatingSystem
     if ($os.ProductType -eq 1 -or [int]$os.BuildNumber -notin @(17763,20348,26100)) { $codes.Add('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED') }
-    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    $dotnet = Get-Command dotnet.exe -CommandType Application -ErrorAction SilentlyContinue
     if (-not $dotnet) { $codes.Add('DOTNET8_RUNTIME_REQUIRED') }
     else {
         $runtimes = & $dotnet.Source --list-runtimes
@@ -18,6 +19,8 @@ function Get-ScomSetupPrerequisites {
         }
     }
     if (-not (Get-Module -ListAvailable WebAdministration)) { $codes.Add('IIS_MANAGEMENT_TOOLS_REQUIRED') }
+    $iisServices = @(Get-Service -Name W3SVC,WAS -ErrorAction SilentlyContinue)
+    if ($iisServices.Count -ne 2) { $codes.Add('IIS_WEB_SERVER_REQUIRED') }
     $bundles = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
         Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft \.NET 8\.0\..*Windows Server Hosting' })
     if ($bundles.Count -eq 0 -or -not (Test-Path "$env:ProgramFiles\IIS\Asp.Net Core Module\V2\aspnetcorev2.dll")) {
@@ -33,7 +36,71 @@ function Get-ScomSetupPrerequisites {
     if ($sessionManager.PSObject.Properties['PendingFileRenameOperations'] -and $sessionManager.PendingFileRenameOperations) {
         $codes.Add('RESTART_REQUIRED')
     }
-    [pscustomobject]@{ ready=($codes.Count -eq 0); codes=$codes.ToArray(); certificationStatus='notCertified' }
+    $checks = @(
+        [pscustomobject]@{name='Windows PowerShell 5.1'; passed=('WINDOWS_POWERSHELL_51_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='Supported Windows Server family'; passed=('REVIEW_SUPPORTED_WINDOWS_SERVER_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='.NET and ASP.NET Core 8 runtimes'; passed=(@($codes | Where-Object { $_ -match 'DOTNET8_RUNTIME|_8_REQUIRED' }).Count -eq 0)}
+        [pscustomobject]@{name='IIS management tools'; passed=('IIS_MANAGEMENT_TOOLS_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='IIS web server and activation services installed'; passed=('IIS_WEB_SERVER_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='.NET 8 Hosting Bundle and ANCM'; passed=('DOTNET8_HOSTING_BUNDLE_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='64-bit execution'; passed=('X64_POWERSHELL_AND_HOSTING_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='Approved OperationsManager module exists'; passed=('APPROVED_SCOM_CONSOLE_SDK_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='No detected pending reboot'; passed=('RESTART_REQUIRED' -notin $codes)}
+    )
+    [pscustomobject]@{ ready=($codes.Count -eq 0); codes=$codes.ToArray(); checks=$checks; certificationStatus='notCertified' }
+}
+
+function Get-ScomSetupGroupCatalog {
+    param($Plan)
+    Assert-ScomSetupPath $Plan.operationsManagerModule
+    $managementGroupId = [guid]::Empty
+    if ($Plan.managementServer -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' -or
+        -not [guid]::TryParseExact($Plan.managementGroupId,'D',[ref]$managementGroupId) -or
+        $managementGroupId -eq [guid]::Empty) { throw 'SETUP_DISCOVERY_SOURCE_INVALID' }
+    if (-not (Confirm-ScomSetupEffect "Read-only group discovery from the selected management group using this console identity. Maximum 200 groups, 60 seconds; reads group IDs/display names only, never inventory/members. No worker evidence flags are set.")) {
+        throw 'SETUP_CANCELLED_NO_ACTION'
+    }
+    $job = Start-Job -ArgumentList $Plan,(Join-Path $PSScriptRoot 'ScomSetup.psm1') -ScriptBlock {
+        param($p,$setupModule)
+        $ErrorActionPreference = 'Stop'
+        Import-Module $setupModule -ErrorAction Stop
+        Import-Module $p.operationsManagerModule -ErrorAction Stop | Out-Null
+        New-SCOMManagementGroupConnection -ComputerName $p.managementServer -ErrorAction Stop | Out-Null
+        $managementGroups = @(Get-SCOMManagementGroup -ErrorAction Stop)
+        if ($managementGroups.Count -ne 1 -or [string]$managementGroups[0].Id -ne $p.managementGroupId) {
+            throw 'SETUP_MANAGEMENT_GROUP_MISMATCH'
+        }
+        $classes = @(Get-SCOMClass -Name 'Microsoft.SystemCenter.InstanceGroup' -ErrorAction Stop)
+        if ($classes.Count -ne 1 -or $classes[0].Name -cne 'Microsoft.SystemCenter.InstanceGroup') {
+            throw 'SETUP_DISCOVERY_CLASS_INVALID'
+        }
+        $optionsType = 'Microsoft.EnterpriseManagement.Common.ObjectQueryOptions' -as [type]
+        $objectType = 'Microsoft.EnterpriseManagement.Monitoring.MonitoringObject' -as [type]
+        $classType = 'Microsoft.EnterpriseManagement.Configuration.ManagementPackClass' -as [type]
+        if (-not $optionsType -or -not $objectType -or -not $classType) { throw 'SETUP_DISCOVERY_SDK_CONTRACT_UNAVAILABLE' }
+        $manager = $managementGroups[0].EntityObjects
+        $methods = @($manager.GetType().GetMethods() | Where-Object {
+            $parameters = $_.GetParameters()
+            $_.Name -eq 'GetObjectReader' -and $_.IsGenericMethodDefinition -and
+                $parameters.Count -eq 2 -and $parameters[0].ParameterType -eq $classType -and
+                $parameters[1].ParameterType -eq $optionsType
+        })
+        if ($methods.Count -ne 1) { throw 'SETUP_DISCOVERY_SDK_CONTRACT_UNAVAILABLE' }
+        $options = [Activator]::CreateInstance($optionsType)
+        $options.MaxResultCount = 201
+        if ($options.MaxResultCount -ne 201) { throw 'SETUP_DISCOVERY_SDK_LIMIT_NOT_HONORED' }
+        $reader = $methods[0].MakeGenericMethod($objectType).Invoke($manager, @($classes[0].PSObject.BaseObject,$options))
+        try {
+            Read-ScomSetupGroupRows $reader $classes[0]
+        }
+        finally { if ($reader -is [IDisposable]) { $reader.Dispose() } }
+    }
+    try {
+        if (-not (Wait-Job $job -Timeout 60)) { Stop-Job $job; throw 'SETUP_DISCOVERY_TIMEOUT' }
+        if ($job.State -ne 'Completed') { throw 'SETUP_DISCOVERY_FAILED' }
+        Receive-Job $job -ErrorAction Stop
+    }
+    finally { Remove-Job $job -Force }
 }
 
 function Set-ScomSetupDirectoryAcl {
@@ -52,6 +119,14 @@ function Set-ScomSetupDirectoryAcl {
         $acl.AddAccessRule($rule)
     }
     Set-Acl -LiteralPath $Path -AclObject $acl
+    $actual = Get-Acl -LiteralPath $Path
+    if (-not $actual.AreAccessRulesProtected) { throw 'SETUP_ACL_VERIFICATION_FAILED' }
+    $expectedRules = @($acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) |
+        ForEach-Object { "$($_.IdentityReference.Value)|$($_.FileSystemRights)|$($_.InheritanceFlags)|$($_.PropagationFlags)|$($_.AccessControlType)" } | Sort-Object)
+    $actualRules = @($actual.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]) |
+        ForEach-Object { "$($_.IdentityReference.Value)|$($_.FileSystemRights)|$($_.InheritanceFlags)|$($_.PropagationFlags)|$($_.AccessControlType)" } | Sort-Object)
+    if (@(Compare-Object $expectedRules $actualRules).Count -ne 0 -or
+        $actual.GetOwner([Security.Principal.SecurityIdentifier]).Value -ne 'S-1-5-32-544') { throw 'SETUP_ACL_VERIFICATION_FAILED' }
 }
 
 function Assert-ScomSetupPrivateDirectory {
@@ -117,21 +192,37 @@ function Assert-ScomSetupOwnedPool {
     }
 }
 
+function Assert-ScomSetupNewTargets {
+    param($Plan)
+    Assert-ScomSetupPlan $Plan
+    Assert-ScomSetupIisTarget $Plan
+    $null = [Security.Principal.NTAccount]::new($Plan.workerAccount).Translate([Security.Principal.SecurityIdentifier])
+    foreach ($path in @($Plan.installPath,$Plan.privatePath,$Plan.receiverStatePath,$Plan.workerStatePath,$Plan.mcpLogPath,$Plan.collectorLogPath)) {
+        if (Test-Path -LiteralPath $path) { throw 'SETUP_NEW_DIRECTORIES_REQUIRED' }
+        if (-not (Test-Path -LiteralPath (Split-Path $path -Parent) -PathType Container)) { throw 'SETUP_EXISTING_PARENT_DIRECTORY_REQUIRED' }
+    }
+    foreach ($file in @('server\ScomMcp.dll','server\web.config','server\appsettings.ReadModel.example.json',
+        'server\appsettings.Worker.example.json','collector\Invoke-SCOMGenericGroupProfile.ps1','collector\ScomOperationalLogging.psm1')) {
+        if (-not (Test-Path -LiteralPath (Join-Path $Plan.packagePath $file) -PathType Leaf)) { throw 'SETUP_PACKAGE_INCOMPLETE' }
+    }
+}
+
 function New-ScomSetupWindowsAdapters {
     @{
         Prerequisites = ${function:Get-ScomSetupPrerequisites}
+        Log = {
+            param($p,$eventName)
+            Assert-ScomSetupInstalledFiles $p
+            Import-Module (Join-Path $p.installPath 'collector\ScomOperationalLogging.psm1') -ErrorAction Stop
+            $log = New-SCOMOperationalLog -Configuration ([pscustomobject]@{
+                directory=$p.collectorLogPath; maxFileBytes=1048576; retainedFiles=5
+            })
+            Write-SCOMOperationalEvent -Log $log -Event $eventName
+        }
         Prepare = {
             param($p)
-            Assert-ScomSetupIisTarget $p
-            foreach ($path in @($p.installPath,$p.privatePath,$p.receiverStatePath,$p.workerStatePath)) {
-                if (Test-Path -LiteralPath $path) { throw 'SETUP_NEW_DIRECTORIES_REQUIRED' }
-                if (-not (Test-Path -LiteralPath (Split-Path $path -Parent) -PathType Container)) { throw 'SETUP_EXISTING_PARENT_DIRECTORY_REQUIRED' }
-            }
-            foreach ($file in @('server\ScomMcp.dll','server\web.config','server\appsettings.ReadModel.example.json',
-                'server\appsettings.Worker.example.json','collector\Invoke-SCOMGenericGroupProfile.ps1')) {
-                if (-not (Test-Path -LiteralPath (Join-Path $p.packagePath $file) -PathType Leaf)) { throw 'SETUP_PACKAGE_INCOMPLETE' }
-            }
-            foreach ($path in @($p.installPath,$p.privatePath,$p.receiverStatePath,$p.workerStatePath)) {
+            Assert-ScomSetupNewTargets $p
+            foreach ($path in @($p.installPath,$p.privatePath,$p.receiverStatePath,$p.workerStatePath,$p.mcpLogPath,$p.collectorLogPath)) {
                 $null = New-Item -ItemType Directory -Path $path
                 Set-ScomSetupDirectoryAcl $path @{}
             }
@@ -139,6 +230,7 @@ function New-ScomSetupWindowsAdapters {
             Set-ScomSetupDirectoryAcl $p.installPath @{$p.workerAccount='ReadAndExecute'}
             Set-ScomSetupDirectoryAcl $p.privatePath @{$p.workerAccount='ReadAndExecute'}
             Set-ScomSetupDirectoryAcl $p.workerStatePath @{$p.workerAccount='Modify'}
+            Set-ScomSetupDirectoryAcl $p.collectorLogPath @{$p.workerAccount='Modify'}
             foreach ($directory in @('server','collector')) {
                 foreach ($file in Get-ChildItem -LiteralPath (Join-Path $p.packagePath $directory) -Recurse -Force) {
                     Assert-ScomSetupPath $file.FullName
@@ -222,6 +314,7 @@ function New-ScomSetupWindowsAdapters {
             $poolAccount = "IIS APPPOOL\$($p.poolName)"
             Set-ScomSetupDirectoryAcl $p.installPath @{$p.workerAccount='ReadAndExecute'; $poolAccount='ReadAndExecute'}
             Set-ScomSetupDirectoryAcl $p.receiverStatePath @{$poolAccount='Modify'}
+            Set-ScomSetupDirectoryAcl $p.mcpLogPath @{$poolAccount='Modify'}
             if ($p.applicationPath -eq '/') {
                 Start-Website -Name $p.siteName
             }
@@ -268,4 +361,4 @@ function New-ScomSetupWindowsAdapters {
     }
 }
 
-Export-ModuleMember -Function Get-ScomSetupPrerequisites, Set-ScomSetupDirectoryAcl, Assert-ScomSetupPrivateDirectory, New-ScomSetupWindowsAdapters
+Export-ModuleMember -Function Get-ScomSetupPrerequisites, Get-ScomSetupGroupCatalog, Set-ScomSetupDirectoryAcl, Assert-ScomSetupPrivateDirectory, Assert-ScomSetupNewTargets, New-ScomSetupWindowsAdapters

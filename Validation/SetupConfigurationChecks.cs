@@ -24,6 +24,10 @@ static class SetupConfigurationChecks
         worker["profile"]!["scriptSha256"] = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(script)));
         worker["profile"]!["executablePath"] = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows),
             "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+        receiver["OperationalLogging"] = LogSettings(Path.Combine(directory, "mcp-logs"));
+        worker["operationalLogging"] = LogSettings(Path.Combine(directory, "collector-logs"));
+        worker["profile"]!["configuration"]!["operationalLogging"] = worker["operationalLogging"]!.DeepClone();
+        worker["profile"]!["configuration"]!["inventoryKind"] = "supportedWindows";
         var count = 0;
         Save();
         Check(!SetupConfigurationValidation.Validate(directory, workerPath));
@@ -42,6 +46,41 @@ static class SetupConfigurationChecks
         Reject(() => receiver["ReadModel"]!["AllowedPropertiesByClass"] = JsonNode.Parse("""{"Example.Class":["Name"]}"""));
         Reject(() => worker["maxCheckpointBytes"] = 0);
         Reject(() => worker["profile"]!["scriptSha256"] = new string('0', 64));
+        Reject(() => worker["operationalLogging"]!["directory"] = receiver["OperationalLogging"]!["directory"]!.GetValue<string>());
+        Reject(() => worker["profile"]!["configuration"]!["operationalLogging"]!["directory"] = Path.Combine(directory, "other-logs"));
+        Reject(() => worker["operationalLogging"]!["maxFileBytes"] = 0);
+        Reject(() => receiver["OperationalLogging"]!["retainedFiles"] = 100);
+        Reject(() => worker["profile"]!["configuration"]!["inventoryKind"] = "allClasses");
+        Reject(() => receiver["OperationalLogging"]!["directory"] = @"\\synthetic\share\logs");
+        Reject(() => receiver["OperationalLogging"]!["directory"] = @"C:\logs\..\Windows");
+        var groupReceiver = receiver.DeepClone();
+        var groupWorker = worker.DeepClone();
+        receiver["ReadModel"]!["ScopeKind"] = "managementGroup";
+        receiver["ReadModel"]!["GroupId"] = null;
+        receiver["ReadModel"]!["WindowsToolsEnabled"] = true;
+        worker["profile"]!["configuration"]!["scopeKind"] = "managementGroup";
+        worker["profile"]!["configuration"]!["groupId"] = null;
+        worker["profile"]!["configuration"]!["wholeManagementGroupApproved"] = true;
+        worker["profile"]!["configuration"]!["windowsMapping"] = JsonNode.Parse("""
+            {
+              "computerClassName":"Microsoft.Windows.Computer",
+              "operatingSystemClassName":"Microsoft.Windows.OperatingSystem",
+              "volumeClassName":"Microsoft.Windows.LogicalDisk",
+              "computerHostsOsRelationship":"Microsoft.Windows.ComputerHostsOperatingSystem",
+              "osHostsVolumeRelationship":"Microsoft.Windows.OperatingSystemHostsLogicalDisk"
+            }
+            """);
+        Save();
+        Check(!SetupConfigurationValidation.Validate(directory, workerPath));
+        worker["profile"]!["configuration"]!["enumerationQueryContractVerified"] = true;
+        Save();
+        Check(SetupConfigurationValidation.Validate(directory, workerPath));
+        Reject(() => worker["profile"]!["configuration"]!["groupId"] = "");
+        Reject(() => worker["profile"]!["configuration"]!["wholeManagementGroupApproved"] = false);
+        Reject(() => receiver["ReadModel"]!["WindowsToolsEnabled"] = false);
+        receiver = groupReceiver;
+        worker = groupWorker;
+        Save();
         var production = Path.Combine(directory, "appsettings.Production.json");
         File.WriteAllText(production, """{"Auth":{"Callers":[{"ObjectId":"44444444-4444-4444-8444-444444444444"}]}}""");
         ExpectReject();
@@ -53,6 +92,13 @@ static class SetupConfigurationChecks
             ExpectReject();
         }
         finally { Environment.SetEnvironmentVariable("ReadModel__GroupId", prior); }
+        prior = Environment.GetEnvironmentVariable("OperationalLogging__directory");
+        try
+        {
+            Environment.SetEnvironmentVariable("OperationalLogging__directory", Path.Combine(directory, "override-logs"));
+            ExpectReject();
+        }
+        finally { Environment.SetEnvironmentVariable("OperationalLogging__directory", prior); }
         File.WriteAllText(workerPath, """{"identity":{},"identity":{}}""");
         ExpectReject();
         Save();
@@ -64,6 +110,10 @@ static class SetupConfigurationChecks
             File.WriteAllText(receiverPath, receiver.ToJsonString());
             File.WriteAllText(workerPath, worker.ToJsonString());
         }
+        JsonObject LogSettings(string path) => new()
+        {
+            ["directory"] = path, ["maxFileBytes"] = 1048576, ["retainedFiles"] = 5
+        };
         void Check(bool value)
         {
             if (!value) throw new InvalidOperationException("Setup configuration assertion failed.");

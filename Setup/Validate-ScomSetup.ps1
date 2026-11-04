@@ -24,9 +24,11 @@ function New-Fixture {
     $plan = [pscustomobject]@{
         schemaVersion=1; packagePath=(Join-Path $path 'package'); installPath=(Join-Path $path 'install')
         privatePath=(Join-Path $path 'private'); receiverStatePath=(Join-Path $path 'receiver'); workerStatePath=(Join-Path $path 'worker')
+        mcpLogPath=(Join-Path $path 'mcp-logs'); collectorLogPath=(Join-Path $path 'collector-logs')
         siteName='synthetic-site'; applicationPath='/'; poolName='synthetic-pool'; httpsBaseUrl='https://synthetic.invalid'
         tlsThumbprint=('A' * 40); workerAccount='SYNTHETIC\worker'; managementServer='synthetic-scom.invalid'
         managementGroupId='22222222-2222-4222-8222-222222222222'; groupId='33333333-3333-4333-8333-333333333333'
+        scopeKind='group'; wholeManagementGroupApproved=$false
         operationsManagerModule=(Join-Path $path 'OperationsManager.psd1')
     }
     $state = [pscustomobject]@{schemaVersion=1; stage='new'; pendingAction=$null; receiverHash=$null; workerHash=$null}
@@ -58,10 +60,42 @@ try {
     $f = New-Fixture
     $f.plan.groupId=[guid]::Empty.ToString('D')
     Reject { Assert-ScomSetupPlan $f.plan } 'SETUP_SCOPE_GUID_INVALID'
+    $f = New-Fixture
+    $catalog = @([pscustomobject]@{Id=$f.plan.groupId;DisplayName='Synthetic only'})
+    $row = [pscustomobject]@{Id=$f.plan.groupId;DisplayName='Synthetic only'}
+    $row | Add-Member ScriptMethod IsInstanceOf { param($class) $class -ceq 'synthetic-group-class' }
+    $rows = @(Read-ScomSetupGroupRows @($row) 'synthetic-group-class')
+    Check ($rows.Count -eq 1 -and $rows[0].Id -eq $f.plan.groupId)
+    Reject { Read-ScomSetupGroupRows @($row,$row) 'synthetic-group-class' } 'SETUP_DISCOVERY_ROW_INVALID'
+    Reject { Read-ScomSetupGroupRows @($row) 'wrong-class' } 'SETUP_DISCOVERY_ROW_INVALID'
+    $many = @(1..201 | ForEach-Object {
+        $r = [pscustomobject]@{Id=[guid]::NewGuid().ToString('D');DisplayName='Synthetic only'}
+        $r | Add-Member ScriptMethod IsInstanceOf {$true}
+        $r
+    })
+    Reject { Read-ScomSetupGroupRows $many 'synthetic-group-class' } 'SETUP_DISCOVERY_BUDGET_EXCEEDED'
+    Reject { Set-ScomSetupScopeSelection $f.plan $catalog 'ALL' -Approve {$false} } 'SETUP_CANCELLED_NO_ACTION'
+    Check ($f.plan.scopeKind -ceq 'group' -and -not $f.plan.wholeManagementGroupApproved)
+    Set-ScomSetupScopeSelection $f.plan $catalog 'ALL' -Approve {$true}
+    Assert-ScomSetupPlan $f.plan
+    Check ($f.plan.scopeKind -ceq 'managementGroup' -and $null -eq $f.plan.groupId -and $f.plan.wholeManagementGroupApproved)
+    Assert-ScomSetupConnectionIdentity $f.plan @([pscustomobject]@{Id=$f.plan.managementGroupId}) @()
+    $f.plan.groupId=''
+    Reject { Assert-ScomSetupPlan $f.plan } 'SETUP_SCOPE_APPROVAL_INVALID'
+    Set-ScomSetupScopeSelection $f.plan $catalog '1'
+    Assert-ScomSetupPlan $f.plan
+    Check ($f.plan.groupId -eq $catalog[0].Id -and -not $f.plan.wholeManagementGroupApproved)
+    Reject { Set-ScomSetupScopeSelection $f.plan $catalog '0' } 'SETUP_GROUP_SELECTION_INVALID'
+    Reject { Set-ScomSetupScopeSelection $f.plan $catalog '2' } 'SETUP_GROUP_SELECTION_INVALID'
+    $f.plan.mcpLogPath = $f.plan.collectorLogPath
+    Reject { Assert-ScomSetupPlan $f.plan } 'SETUP_PATH_COLLISION'
+    Reject { Show-ScomSetupPrerequisites ([pscustomobject]@{ready=$false;codes=@('SYNTHETIC_BLOCKER')}) } 'SETUP_PREREQUISITES_BLOCKED'
 
     $script:mutations = [Collections.Generic.List[string]]::new()
+    $script:logEvents = [Collections.Generic.List[string]]::new()
     $adapters = @{
         Prerequisites={ param($p) [pscustomobject]@{ready=$true;codes=@()} }
+        Log={ param($p,$eventName) $script:logEvents.Add($eventName) }
         Prepare={ param($p) $script:mutations.Add('Prepare') }
         Configure={
             param($p)
@@ -94,8 +128,13 @@ try {
     $blocked = $adapters.Clone()
     $blocked.Prerequisites={ [pscustomobject]@{ready=$false;codes=@('RESTART_REQUIRED','IIS_REQUIRED')} }
     $script:mutations.Clear()
+    $script:logEvents.Clear()
     Reject { Invoke-ScomSetupTransition $f.plan $f.state $f.statePath Prepare $blocked -Approve {$true} } 'SETUP_PREREQUISITES_BLOCKED'
-    Check ($script:mutations.Count -eq 0 -and -not (Test-Path -LiteralPath $f.statePath))
+    Check ($script:mutations.Count -eq 0 -and $script:logEvents.Count -eq 0 -and -not (Test-Path -LiteralPath $f.statePath))
+    $logFailure=$adapters.Clone()
+    $logFailure.Log={ throw 'SYNTHETIC_LOG_IO_FAILURE' }
+    Reject { Invoke-ScomSetupTransition $f.plan $f.state $f.statePath Prepare $logFailure -Approve {$true} } 'SYNTHETIC_LOG_IO_FAILURE'
+    Check ((Read-ScomSetupJson $f.statePath).pendingAction -eq 'Prepare')
     foreach ($action in @('Prepare','Configure','Activate','Publish','Accept')) {
         $f = New-Fixture
         $f.state.stage = @{Prepare='new';Configure='prepared';Activate='configured';Publish='activated';Accept='published'}[$action]
@@ -149,6 +188,21 @@ try {
     Check ($merged.receiver.ReadModel.PublisherObjectIds[0] -eq $identity.publisherObjectId)
     Check (-not $merged.worker.profile.configuration.scopeVisibilityVerified -and -not $merged.worker.profile.configuration.membershipQueryContractVerified)
     Check (-not $merged.worker.liveChecks.enabled -and -not $merged.receiver.TargetedLive.Enabled)
+    Check ($merged.receiver.OperationalLogging.directory -eq $f.plan.mcpLogPath -and
+        $merged.worker.operationalLogging.directory -eq $f.plan.collectorLogPath -and
+        $merged.worker.profile.configuration.operationalLogging.directory -eq $f.plan.collectorLogPath -and
+        $merged.worker.profile.configuration.inventoryKind -ceq 'supportedWindows')
+    Set-ScomSetupScopeSelection $f.plan @() 'ALL' -Approve {$true}
+    Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_CONFIGURATION_SCOPE_OR_DISABLED_GUARDS'
+    $receiver.ReadModel.ScopeKind='managementGroup'; $receiver.ReadModel.GroupId=$null
+    $receiver.ReadModel.WindowsToolsEnabled=$true
+    $worker.profile.configuration.scopeKind='managementGroup'; $worker.profile.configuration.groupId=$null
+    $worker.profile.configuration.wholeManagementGroupApproved=$true
+    Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_CONFIGURATION_SCOPE_OR_DISABLED_GUARDS'
+    $worker.profile.configuration.windowsMapping=[pscustomobject]@{reviewed='synthetic-only'}
+    $whole = Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity
+    Check ($null -eq $whole.receiver.ReadModel.GroupId -and $null -eq $whole.worker.profile.configuration.groupId -and
+        -not $whole.worker.profile.configuration.enumerationQueryContractVerified)
     $worker.liveChecks.enabled=$true
     Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_CONFIGURATION_SCOPE_OR_DISABLED_GUARDS'
     $identity.publisherClientId=$identity.apiClientId

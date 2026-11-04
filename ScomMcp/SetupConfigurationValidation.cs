@@ -26,7 +26,7 @@ public static class SetupConfigurationValidation
             .AddEnvironmentVariables().Build();
         var fileConfiguration = new ConfigurationBuilder().SetBasePath(serverDirectory)
             .AddJsonFile("appsettings.json", optional: false).Build();
-        foreach (var section in new[] { "Auth", "Source", "ReadModel", "Lifecycle", "TargetedLive", "AllowedHosts" })
+        foreach (var section in new[] { "Auth", "Source", "ReadModel", "Lifecycle", "TargetedLive", "AllowedHosts", "OperationalLogging" })
         {
             var expected = fileConfiguration.GetSection(section).AsEnumerable().Where(p => p.Value is not null)
                 .ToDictionary(p => p.Key, p => p.Value, StringComparer.OrdinalIgnoreCase);
@@ -50,6 +50,17 @@ public static class SetupConfigurationValidation
         worker.LiveChecks.Validate();
         _ = new PowerShellNormalizationProfile(worker.Profile);
         var profile = worker.Profile.Configuration;
+        var mcpLogs = ReviewedLogDirectory(receiverDocument.RootElement.GetProperty("OperationalLogging"));
+        var workerLogs = ReviewedLogDirectory(workerDocument.RootElement.GetProperty("operationalLogging"));
+        var profileLogs = ReviewedLogDirectory(profile.GetProperty("operationalLogging"));
+        if (string.Equals(mcpLogs, workerLogs, StringComparison.OrdinalIgnoreCase) ||
+            mcpLogs.StartsWith(workerLogs + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            workerLogs.StartsWith(mcpLogs + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase) ||
+            !string.Equals(workerLogs, profileLogs, StringComparison.OrdinalIgnoreCase) ||
+            profile.GetProperty("inventoryKind").GetString() != "supportedWindows" ||
+            model.ScopeKind == "managementGroup" && (!model.WindowsToolsEnabled ||
+                !profile.GetProperty("wholeManagementGroupApproved").GetBoolean()))
+            throw new InvalidOperationException("Setup requires separate reviewed operational logs and explicit supported Windows scope.");
         var properties = profile.GetProperty("allowedPropertiesByClass").Deserialize<Dictionary<string, string[]>>(Wire.Json)
             ?? throw new InvalidOperationException("Reviewed property exposure is required.");
         if (!model.Enabled || source.SnapshotEnabled || live.Enabled || worker.LiveChecks.Enabled ||
@@ -87,6 +98,27 @@ public static class SetupConfigurationValidation
             return resource.StartsWith("api://", StringComparison.Ordinal) &&
                 Guid.TryParse(resource[6..], out var id) ? id.ToString("D") : resource;
         }
+    }
+
+    private static string ReviewedLogDirectory(JsonElement settings)
+    {
+        var parsed = settings.Deserialize<OperationalLoggingSettings>(Wire.Json)
+            ?? throw new InvalidOperationException("Setup operational logging is required.");
+        parsed.Validate();
+        if (parsed.MaxFileBytes != 1048576 || parsed.RetainedFiles != 5)
+            throw new InvalidOperationException("Setup operational log retention must match the reviewed wizard policy.");
+        if (string.IsNullOrWhiteSpace(parsed.Directory))
+            throw new InvalidOperationException("Setup operational logging cannot be disabled.");
+        var path = Path.TrimEndingDirectorySeparator(Path.GetFullPath(parsed.Directory));
+        if (path.Length <= 3) throw new InvalidOperationException("Setup operational log directory cannot be a volume root.");
+        var drive = new DriveInfo(Path.GetPathRoot(path)!);
+        if (drive.DriveType != DriveType.Fixed || drive.DriveFormat != "NTFS")
+            throw new InvalidOperationException("Setup operational logs require fixed local NTFS.");
+        for (var current = path; current is not null; current = Path.GetDirectoryName(current))
+            if ((Directory.Exists(current) || File.Exists(current)) &&
+                (File.GetAttributes(current) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException("Setup operational logs cannot traverse reparse points.");
+        return path;
     }
 
     private static JsonDocument Read(string path)

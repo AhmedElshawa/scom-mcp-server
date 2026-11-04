@@ -35,9 +35,13 @@ function Assert-ScomSetupPath {
 function Assert-ScomSetupPlan {
     param([Parameter(Mandatory)]$Plan)
     if ($Plan.schemaVersion -ne 1) { throw 'SETUP_PLAN_VERSION' }
-    $paths = @($Plan.packagePath, $Plan.installPath, $Plan.privatePath, $Plan.receiverStatePath, $Plan.workerStatePath)
+    $paths = @($Plan.packagePath, $Plan.installPath, $Plan.privatePath, $Plan.receiverStatePath, $Plan.workerStatePath,
+        $Plan.mcpLogPath, $Plan.collectorLogPath)
     foreach ($path in $paths) { Assert-ScomSetupPath $path }
-    foreach ($target in @($Plan.installPath,$Plan.privatePath,$Plan.receiverStatePath,$Plan.workerStatePath)) {
+    foreach ($path in @($Plan.mcpLogPath,$Plan.collectorLogPath)) {
+        if ([IO.DriveInfo]::new([IO.Path]::GetPathRoot($path)).DriveFormat -cne 'NTFS') { throw 'SETUP_LOG_NTFS_REQUIRED' }
+    }
+    foreach ($target in @($Plan.installPath,$Plan.privatePath,$Plan.receiverStatePath,$Plan.workerStatePath,$Plan.mcpLogPath,$Plan.collectorLogPath)) {
         $windows = [IO.Path]::GetFullPath($env:WINDIR).TrimEnd('\') + '\'
         if (([IO.Path]::GetFullPath($target).TrimEnd('\') + '\').StartsWith($windows,[StringComparison]::OrdinalIgnoreCase)) {
             throw 'SETUP_TARGET_MUST_NOT_BE_WINDOWS_DIRECTORY'
@@ -59,7 +63,13 @@ function Assert-ScomSetupPlan {
     if (-not $uri.IsAbsoluteUri -or $uri.Scheme -ne 'https' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
         $uri.HostNameType -ne 'Dns' -or $uri.AbsolutePath.TrimEnd('/') -ne $Plan.applicationPath.TrimEnd('/') -or
         $Plan.tlsThumbprint -notmatch '^[a-fA-F0-9]{40}$') { throw 'SETUP_HTTPS_INVALID' }
-    foreach ($id in @($Plan.managementGroupId, $Plan.groupId)) {
+    if ($Plan.scopeKind -cnotin @('group','managementGroup') -or
+        $Plan.wholeManagementGroupApproved -isnot [bool] -or
+        ($Plan.scopeKind -ceq 'managementGroup' -and (-not $Plan.wholeManagementGroupApproved -or $null -ne $Plan.groupId)) -or
+        ($Plan.scopeKind -ceq 'group' -and $Plan.wholeManagementGroupApproved)) { throw 'SETUP_SCOPE_APPROVAL_INVALID' }
+    $ids = @($Plan.managementGroupId)
+    if ($Plan.scopeKind -ceq 'group') { $ids += $Plan.groupId }
+    foreach ($id in $ids) {
         $parsed = [guid]::Empty
         if (-not [guid]::TryParseExact($id, 'D', [ref]$parsed) -or $parsed -eq [guid]::Empty) { throw 'SETUP_SCOPE_GUID_INVALID' }
     }
@@ -73,6 +83,12 @@ function Get-ScomSetupHash {
     param([Parameter(Mandatory)][string]$Path)
     Assert-ScomSetupPath $Path
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
+}
+
+function Get-ScomSetupScopeDescription {
+    param($Plan)
+    if ($Plan.scopeKind -ceq 'managementGroup') { return 'all supported Windows inventory in the selected management group (not every SCOM class)' }
+    "existing approved group $($Plan.groupId)"
 }
 
 function Save-ScomSetupJson {
@@ -109,7 +125,7 @@ function Invoke-ScomSetupWorkerPublication {
     if ($CallerName -ne $Plan.workerAccount) { throw 'SETUP_EXACT_WORKER_ACCOUNT_REQUIRED_NO_IMPERSONATION' }
     Assert-ScomSetupInstalledFiles $Plan
     & $Validate $Plan | Out-Null
-    if (-not (& $Approve "ONE bounded collection/publication/checkpoint attempt for group $($Plan.groupId), as $($Plan.workerAccount), to $($Plan.httpsBaseUrl). Uses reviewed worker deadlines. No recurrence, metrics or live checks. Existing pending dataset can resume under the same policy.")) {
+    if (-not (& $Approve "ONE bounded collection/publication/checkpoint attempt for $(Get-ScomSetupScopeDescription $Plan), as $($Plan.workerAccount), to $($Plan.httpsBaseUrl). Uses reviewed worker deadlines. No recurrence, metrics or live checks. Existing pending dataset can resume under the same policy.")) {
         throw 'SETUP_CANCELLED_NO_ACTION'
     }
     $lease = [IO.File]::Open((Join-Path $Plan.workerStatePath 'setup-worker.lock'), 'OpenOrCreate','ReadWrite','None')
@@ -149,7 +165,65 @@ function Assert-ScomSetupConnectionIdentity {
     if ($ManagementGroups.Count -ne 1 -or [string]$ManagementGroups[0].Id -ne $Plan.managementGroupId) {
         throw 'SETUP_MANAGEMENT_GROUP_MISMATCH'
     }
-    if ($Groups.Count -ne 1 -or [string]$Groups[0].Id -ne $Plan.groupId) { throw 'SETUP_APPROVED_GROUP_NOT_VISIBLE' }
+    if ($Plan.scopeKind -ceq 'group' -and ($Groups.Count -ne 1 -or [string]$Groups[0].Id -ne $Plan.groupId)) {
+        throw 'SETUP_APPROVED_GROUP_NOT_VISIBLE'
+    }
+}
+
+function Set-ScomSetupScopeSelection {
+    param($Plan, [object[]]$Groups, [string]$Selection, [scriptblock]$Approve = ${function:Confirm-ScomSetupEffect})
+    if ($Groups.Count -gt 200) { throw 'SETUP_DISCOVERY_BUDGET_EXCEEDED' }
+    if ($Selection -ceq 'ALL') {
+        if (-not (& $Approve 'WARNING: broader scope. Include ALL supported Windows inventory in this management group, not every SCOM class. This may greatly increase load and exposure. Separately approve this scope; collection remains disabled until its own approval.')) {
+            throw 'SETUP_CANCELLED_NO_ACTION'
+        }
+        $Plan.scopeKind = 'managementGroup'
+        $Plan.groupId = $null
+        $Plan.wholeManagementGroupApproved = $true
+    } else {
+        $index = 0
+        if (-not [int]::TryParse($Selection, [ref]$index) -or $index -lt 1 -or $index -gt $Groups.Count) {
+            throw 'SETUP_GROUP_SELECTION_INVALID'
+        }
+        $id = [guid]::Empty
+        if (-not [guid]::TryParseExact([string]$Groups[$index - 1].Id, 'D', [ref]$id) -or $id -eq [guid]::Empty) {
+            throw 'SETUP_SCOPE_GUID_INVALID'
+        }
+        $Plan.scopeKind = 'group'
+        $Plan.groupId = $id.ToString('D')
+        $Plan.wholeManagementGroupApproved = $false
+    }
+}
+
+function Read-ScomSetupGroupRows {
+    param([Parameter(Mandatory)]$Reader, [Parameter(Mandatory)]$GroupClass)
+    $rows = [Collections.Generic.List[object]]::new()
+    $seen = [Collections.Generic.HashSet[guid]]::new()
+    foreach ($row in $Reader) {
+        if ($rows.Count -ge 200) { throw 'SETUP_DISCOVERY_BUDGET_EXCEEDED_USE_NARROWER_REVIEWED_SCOPE' }
+        $id = [guid]$row.Id
+        if ($id -eq [guid]::Empty -or -not $seen.Add($id) -or -not $row.IsInstanceOf($GroupClass)) {
+            throw 'SETUP_DISCOVERY_ROW_INVALID'
+        }
+        $rows.Add([pscustomobject]@{Id=$id.ToString('D'); DisplayName=[string]$row.DisplayName})
+    }
+    $rows.ToArray() | Sort-Object DisplayName,Id
+}
+
+function Show-ScomSetupPrerequisites {
+    param($Result)
+    Write-Host 'PREFLIGHT ONLY - no prerequisite or application installation, task registration, or inventory collection.'
+    if ($Result.PSObject.Properties['checks']) {
+        foreach ($check in $Result.checks) {
+            $label = if ($check.passed) { 'PASS' } else { 'BLOCKED' }
+            Write-Host "$label`: $($check.name)"
+        }
+    }
+    if ($Result.ready) { Write-Host 'PASS: all required prerequisite checks passed. Installation still requires APPROVE.' }
+    else {
+        foreach ($code in $Result.codes) { Write-Host "BLOCKED: $code" }
+        throw 'SETUP_PREREQUISITES_BLOCKED'
+    }
 }
 
 function Invoke-ScomSetupTransition {
@@ -178,16 +252,17 @@ function Invoke-ScomSetupTransition {
         & $Adapters.Validate $Plan | Out-Null
     }
     $summaries = @{
-        Prepare="Create ONLY new installation $($Plan.installPath), private config $($Plan.privatePath), receiver state $($Plan.receiverStatePath) and worker state $($Plan.workerStatePath). Copy reviewed package; restrict ACLs. No IIS startup/source queries."
+        Prepare="Create ONLY new installation $($Plan.installPath), private config $($Plan.privatePath), receiver state $($Plan.receiverStatePath), worker state $($Plan.workerStatePath), MCP logs $($Plan.mcpLogPath) and collector logs $($Plan.collectorLogPath). Copy reviewed package; restrict ACLs. No IIS startup/source queries."
         Configure='Back up staged configuration privately and import reviewed receiver/worker JSON plus nonsecret identity. No source verification flags will be set by setup.'
         Activate="Create dedicated pool $($Plan.poolName) and HTTPS site/application $($Plan.siteName)$($Plan.applicationPath), using $($Plan.httpsBaseUrl). No existing app/pool is overwritten. Start only this app; enable normal IIS startup after HTTPS health succeeds. Stop and disable ONLY its owned pool on failure."
-        Publish="Record the worker-reported publication/checkpoint receipt for group $($Plan.groupId). No new source run: use the separate explicitly approved worker lane first. Receipt alone is not reader acceptance."
+        Publish="Record the worker-reported publication/checkpoint receipt for $(Get-ScomSetupScopeDescription $Plan). No new source run: use the separate explicitly approved worker lane first. Receipt alone is not reader acceptance."
         Accept='Record operator attestation of intended-user Studio tool discovery, committed inventory, unauthorized-user denial and scoped coverage. This is NOT automated certification.'
     }
     if (-not (& $Approve $summaries[$Action])) { throw 'SETUP_CANCELLED_NO_ACTION' }
     $State.pendingAction = $Action
     Save-ScomSetupJson $StatePath $State
     try {
+        if ($Action -ne 'Prepare' -and $Adapters.ContainsKey('Log')) { & $Adapters.Log $Plan 'setup.started' | Out-Null }
         & $Adapters[$Action] $Plan $InputSettings | Out-Null
         if ($Action -eq 'Activate') {
             & $Adapters.Health $Plan | Out-Null
@@ -197,6 +272,7 @@ function Invoke-ScomSetupTransition {
             $State.receiverHash = Get-ScomSetupHash (Join-Path $Plan.installPath 'server\appsettings.json')
             $State.workerHash = Get-ScomSetupHash (Join-Path $Plan.privatePath 'worker.json')
         }
+        if ($Adapters.ContainsKey('Log')) { & $Adapters.Log $Plan 'setup.completed' | Out-Null }
         $State.stage = @{Prepare='prepared'; Configure='configured'; Activate='activated'; Publish='published'; Accept='accepted'}[$Action]
         $State.pendingAction = $null
         Save-ScomSetupJson $StatePath $State
@@ -205,6 +281,10 @@ function Invoke-ScomSetupTransition {
         # Keep the pending action durable even when stopping the owned app fails.
         # Never claim rollback succeeded or automatically repeat a publication.
         Write-Warning "SETUP_ACTION_FAILED: $Action. Pending journal retained; inspect private state before recovery."
+        if ($Adapters.ContainsKey('Log')) {
+            try { & $Adapters.Log $Plan 'setup.failed' | Out-Null }
+            catch { Write-Warning 'SETUP_OPERATIONAL_LOG_FAILED. Pending journal retained; inspect log permissions and capacity.' }
+        }
         if ($Action -eq 'Activate') {
             try { & $Adapters.Stop $Plan | Out-Null }
             catch { Write-Warning 'SETUP_STOP_FAILED. Application may still be active; operator recovery required. Journal is NOT cleared.' }
@@ -235,7 +315,7 @@ function Assert-ScomSetupIdentity {
 function Merge-ScomSetupConfiguration {
     param($Plan, $Receiver, $Worker, $Identity)
     Assert-ScomSetupIdentity $Identity
-    if ($Receiver.ReadModel.ScopeKind -cne 'group' -or $Worker.profile.configuration.scopeKind -cne 'group' -or
+    if ($Receiver.ReadModel.ScopeKind -cne $Plan.scopeKind -or $Worker.profile.configuration.scopeKind -cne $Plan.scopeKind -or
         $Receiver.ReadModel.ManagementGroupId -ne $Plan.managementGroupId -or
         $Worker.profile.configuration.managementGroupId -ne $Plan.managementGroupId -or
         $Receiver.ReadModel.GroupId -ne $Plan.groupId -or $Worker.profile.configuration.groupId -ne $Plan.groupId -or
@@ -245,7 +325,9 @@ function Merge-ScomSetupConfiguration {
         $Receiver.TargetedLive.Enabled -ne $false -or $Worker.liveChecks.enabled -ne $false -or
         @($Receiver.ReadModel.AllowedMetricsByClass.PSObject.Properties).Count -ne 0 -or
         @($Worker.profile.configuration.metricMappingsByClass.PSObject.Properties).Count -ne 0 -or
-        $Worker.profile.configuration.wholeManagementGroupApproved -ne $false) {
+        $Worker.profile.configuration.wholeManagementGroupApproved -ne $Plan.wholeManagementGroupApproved -or
+        ($Plan.scopeKind -ceq 'managementGroup' -and
+            ($Receiver.ReadModel.WindowsToolsEnabled -ne $true -or $null -eq $Worker.profile.configuration.windowsMapping))) {
         throw 'SETUP_REVIEWED_CONFIGURATION_SCOPE_OR_DISABLED_GUARDS'
     }
     if ($Receiver.Auth.Callers.Count -eq 0 -or @($Receiver.Auth.Callers | Where-Object {
@@ -267,6 +349,14 @@ function Merge-ScomSetupConfiguration {
     $Worker.profile.scriptPath = Join-Path $Plan.installPath 'collector\Invoke-SCOMGenericGroupProfile.ps1'
     $Worker.profile.scriptSha256 = Get-ScomSetupHash $Worker.profile.scriptPath
     $Worker.profile.executablePath = Join-Path $env:WINDIR 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $Receiver | Add-Member -Force NoteProperty OperationalLogging ([pscustomobject]@{
+        directory=$Plan.mcpLogPath; maxFileBytes=1048576; retainedFiles=5
+    })
+    $Worker | Add-Member -Force NoteProperty operationalLogging ([pscustomobject]@{
+        directory=$Plan.collectorLogPath; maxFileBytes=1048576; retainedFiles=5
+    })
+    $Worker.profile.configuration | Add-Member -Force NoteProperty operationalLogging $Worker.operationalLogging
+    $Worker.profile.configuration | Add-Member -Force NoteProperty inventoryKind 'supportedWindows'
     [pscustomobject]@{ receiver=$Receiver; worker=$Worker }
 }
 

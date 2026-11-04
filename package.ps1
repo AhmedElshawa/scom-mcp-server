@@ -15,7 +15,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Server publication failed. The incomplete outp
 $collector = Join-Path $output 'collector'
 $null = New-Item -ItemType Directory -Path $collector
 foreach ($name in @('Collect-SCOMSnapshot.ps1', 'collector.example.json', 'Get-SCOMCompatibilityReport.ps1', 'Test-SCOMPreflight.ps1', 'Get-SCOMMetricCompatibilityReport.ps1',
-    'ScomSdkReader.psm1', 'ScomNormalization.psm1', 'ScomMetricProfile.psm1', 'ScomWindowsProjection.psm1',
+    'ScomSdkReader.psm1', 'ScomNormalization.psm1', 'ScomMetricProfile.psm1', 'ScomWindowsProjection.psm1', 'ScomOperationalLogging.psm1',
     'Invoke-SCOMGenericGroupProfile.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Collector\$name") -Destination $collector
 }
@@ -49,4 +49,14 @@ foreach ($name in @('indexed-deployment-runbook.md', 'deployment-issue-log.md', 
 foreach ($name in @('scom-reference-architecture.png', 'scom-reference-architecture.excalidraw')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\images\$name") -Destination (Join-Path $docs 'images')
 }
+$commit = & git -C $PSScriptRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[a-f0-9]{40}$') { throw 'Package source identity unavailable.' }
+$manifestFiles = @(Get-ChildItem -LiteralPath $output -Recurse -File | Sort-Object FullName | ForEach-Object {
+    [ordered]@{
+        path=$_.FullName.Substring($output.TrimEnd('\').Length + 1)
+        sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+    }
+})
+$manifest = [ordered]@{schemaVersion=1; sourceCommit=$commit; certificationStatus='notCertified'; files=$manifestFiles}
+[IO.File]::WriteAllText((Join-Path $output 'package-manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 Write-Output 'Package created. It includes the legacy collector and opt-in worker host/ingestion foundation, not a certified SCOM normalization profile.'

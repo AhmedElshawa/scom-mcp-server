@@ -289,12 +289,19 @@ make the agent return inventory.
 
 For a new opt-in indexed installation, use the
 [resumable console setup](docs/guided-setup.md). It separates host prerequisites,
-approved existing-group connection/staging, authorized customer Entra provisioning,
+bounded existing-group discovery/selection and staging, authorized customer Entra provisioning,
 configuration/IIS activation, explicit one-shot publication and intended-user
 acceptance. No Azure infrastructure is created when an existing host suffices.
 The evaluation wizard offers separately approved explicit IIS feature and official
 signed local .NET 8 Hosting Bundle installation (no installer downloads). It does not infer source verification,
 overwrite existing applications or enable recurrence/metrics/live checks.
+`Preflight` is the read-only default and blockers stop before deployment journal
+or installation writes. The customer chooses a new dedicated IIS pool and
+site/application placement, separate local NTFS MCP/collector log destinations,
+and either an existing group or separately confirmed whole-management-group
+**supported Windows inventory** (never every SCOM class). Structured operational
+logs have restrictive identity-specific ACLs and bounded rotation. The complete
+package also includes the separately opt-in durable-refresh operations.
 
 ## Azure IIS and Copilot Studio reader setup
 
@@ -506,7 +513,10 @@ PR/push CI uses `Offline Windows validation` (`.github\workflows\offline-validat
 on `windows-2022`, pins SDK `8.0.427` and action commit hashes, and restores locked
 NuGet dependencies. It records the checked-out head SHA, runs the same complete
 offline harness, validates a fresh evaluation package and retains a seven-day
-commit-named artifact. The `Durable indexed refresh synthetic tests` workflow
+commit-named artifact containing `scom-evaluation.zip` and its SHA-256 sidecar.
+The ZIP includes a per-file SHA-256 manifest and exact source commit identity.
+It is a review/evaluation build, not a production-certified installer.
+The `Durable indexed refresh synthetic tests` workflow
 additionally runs task-host contracts on Windows PowerShell 5.1 and PowerShell 7
 and validates checkpoint restart, serialized cycles, process-child cleanup,
 status and bounded logs. Neither workflow registers a task or uses customer

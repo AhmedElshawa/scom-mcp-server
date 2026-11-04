@@ -4,7 +4,7 @@ Import-Module (Join-Path $PSScriptRoot 'ScomSetup.Windows.psm1') -Force
 $module = Get-Module ScomSetup.Windows
 $facts = [pscustomobject]@{
     osBuild=20348; productType=3; dotnet=$true; runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]','Microsoft.AspNetCore.App 8.0.0 [synthetic]')
-    iis=$true; ancm=$true; hostingBundle=$true; sdk=$true; restart=$false; poolExists=$false; siteExists=$false
+    iis=$true; iisServer=$true; ancm=$true; hostingBundle=$true; sdk=$true; restart=$false; poolExists=$false; siteExists=$false
 }
 # Substitute read-only command probes INSIDE the adapter module. No IIS
 # commands, registry writes, runtime execution or source connection can occur.
@@ -20,6 +20,7 @@ $facts = [pscustomobject]@{
         $script:facts.runtimeLines
     }
     function script:Get-Module { if ($script:facts.iis) { [pscustomobject]@{Name='synthetic-IIS'} } }
+    function script:Get-Service { if ($script:facts.iisServer) { [pscustomobject]@{Name='W3SVC'}; [pscustomobject]@{Name='WAS'} } }
     function script:Import-Module {}
     function script:Get-ItemProperty {
         param($Path)
@@ -45,6 +46,8 @@ $facts = [pscustomobject]@{
         if ($Path -like 'Cert:*') { return [pscustomobject]@{HasPrivateKey=$true;NotBefore=(Get-Date).AddDays(-1);NotAfter=(Get-Date).AddDays(1)} }
         throw 'Unexpected synthetic item probe'
     }
+    function script:Set-Acl { param($LiteralPath,$AclObject) $script:capturedAcl=$AclObject }
+    function script:Get-Acl { param($LiteralPath) $script:capturedAcl }
 } $facts
 $plan = [pscustomobject]@{
     operationsManagerModule='C:\synthetic\OperationsManager.psd1';poolName='synthetic-pool';siteName='synthetic-site'
@@ -67,6 +70,7 @@ try {
     $facts.runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]'); Check-Code 'Microsoft.AspNetCore.App_8_REQUIRED'
     $facts.runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]','Microsoft.AspNetCore.App 8.0.0 [synthetic]')
     $facts.iis=$false; Check-Code 'IIS_MANAGEMENT_TOOLS_REQUIRED'; $facts.iis=$true
+    $facts.iisServer=$false; Check-Code 'IIS_WEB_SERVER_REQUIRED'; $facts.iisServer=$true
     $facts.hostingBundle=$false; Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'; $facts.hostingBundle=$true
     $facts.ancm=$false; Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'; $facts.ancm=$true
     $facts.sdk=$false; Check-Code 'APPROVED_SCOM_CONSOLE_SDK_REQUIRED'; $facts.sdk=$true
@@ -79,6 +83,26 @@ try {
     }
     & $module { param($p) Assert-ScomSetupIisTarget $p } $plan
     $count++
+    $syntheticPath=Join-Path (Split-Path $PSScriptRoot -Parent) '.validation-data\synthetic-log-acl'
+    Set-ScomSetupDirectoryAcl $syntheticPath @{'S-1-5-21-1-2-3-1001'='Modify'}
+    & $module {
+        $rules=@($script:capturedAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
+        if ($rules.Count -ne 3 -or -not $script:capturedAcl.AreAccessRulesProtected -or
+            @($rules | Where-Object { $_.IdentityReference.Value -eq 'S-1-5-21-1-2-3-1001' -and $_.FileSystemRights -band [Security.AccessControl.FileSystemRights]::Modify }).Count -ne 1) {
+            throw 'Synthetic restrictive execution identity ACL mismatch'
+        }
+        function script:Get-Acl {
+            param($LiteralPath)
+            $changed=[Security.AccessControl.DirectorySecurity]::new()
+            $changed.SetSecurityDescriptorBinaryForm($script:capturedAcl.GetSecurityDescriptorBinaryForm())
+            $changed.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                [Security.Principal.SecurityIdentifier]::new('S-1-1-0'),'Modify','ContainerInherit,ObjectInherit','None','Allow'))
+            $changed
+        }
+    }
+    $count++
+    try { Set-ScomSetupDirectoryAcl $syntheticPath @{}; throw 'ACL tampering unexpectedly accepted' }
+    catch { if ($_.Exception.Message -notmatch 'SETUP_ACL_VERIFICATION_FAILED') { throw }; $count++ }
     Write-Output "PASS: $count synthetic Windows prerequisite/IIS-conflict checks; every external read probe replaced, no host mutation."
 }
 finally { Remove-Module ScomSetup.Windows }

@@ -9,7 +9,7 @@ and their tools are unchanged.
 This is an evaluation installer, **not source certification or an unattended
 production installer**. No live IIS/SCOM/Graph acceptance is implied by offline
 tests. Every effect requires typing `APPROVE`; any other response cancels before
-that effect. `Status` is read-only. There are no passwords, automatic credential
+that effect. `Preflight` (the default) and `Status` are read-only. There are no passwords, automatic credential
 prompts, script-managed downloads, execution-policy changes, broad group creation or recurrence.
 
 ## Before starting
@@ -39,8 +39,10 @@ SCOM SDK/Operations console installation, firewall/DNS, public HTTPS reachabilit
 certificate enrollment/private-key permissions and source contract/mapping review
 remain customer responsibilities. Do not guess SDK signatures or source flags.
 
-Installation, private configuration, receiver state, worker state and the private
-journal must be separate, nonoverlapping local paths. Targets must be **new**
+Installation, private configuration, receiver state, worker state, MCP logs,
+collector/worker logs and the private journal must be separate, nonoverlapping
+local paths. Both log destinations must be on fixed local **NTFS** volumes.
+Targets must be **new**
 directories with existing parents, not drive roots, Windows directories, network
 drives, reparse points or an existing application. Setup refuses existing
 pool/site/application conflicts rather than overwrite a working deployment.
@@ -55,6 +57,19 @@ the customer's private shell; never paste private configuration into a PR.
 ```powershell
 .\setup\Initialize-ScomSetupState.ps1 -Path 'C:\ApprovedState\ScomSetup'
 ```
+
+Initialization is its own explicitly approved private-directory action, not an
+application install. Run the read-only prerequisite check before staging:
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory 'C:\ApprovedState\ScomSetup' -Step Preflight
+```
+
+The wizard displays PASS or each BLOCKED prerequisite code. Any failure stops
+before saving a deployment plan, taking a mutation lease or creating installation
+directories. Preflight does not connect to SCOM, enumerate inventory, install
+prerequisites, register a task or start the application. An existing complete
+`-PlanPath` can supply fields for this check; passing preflight never installs.
 
 If IIS/Hosting Bundle is missing, the authorized host administrator may explicitly
 opt into installation **before Prepare**, in an approved host maintenance window:
@@ -123,26 +138,78 @@ approval remain manual prerequisites.
 `Initialize` only creates one new private journal directory, owned by
 Administrators and accessible only to SYSTEM/Administrators. The parent must
 already exist. `Prepare` prompts for complete package/install/private/state
-paths, existing worker `DOMAIN\account`, management-server FQDN,
-management-group GUID, **existing approved group GUID**, module path, dedicated
+paths and separate MCP/collector log destinations, existing worker
+`DOMAIN\account`, management-server FQDN, management-group GUID, module path, dedicated
 new pool, site/application path, HTTPS application base URL and existing
 LocalMachine My TLS certificate thumbprint. It saves the private plan with a
-separate approval, then checks prerequisites and stages files with another
+separate approval, only after prerequisite checks pass, and stages files with another
 explicit effect summary. Use `-PlanPath` to supply the same JSON shape instead
 of entering fields; it does not skip approval.
 
-The selected scope is an existing group. The wizard neither lists all groups
-nor creates one, and cannot broaden it to the whole management group. Advanced,
-separately approved management-group deployments remain supported by the manual
-runbook, not this default customer wizard.
+After prerequisites pass, interactive Prepare requests separate approval for
+read-only group discovery using the console identity. It checks the selected
+management-group identity, reads only InstanceGroup IDs/display names, caps the
+SDK reader at 201 results, refuses more than 200 selectable groups, and enforces
+a 60-second job deadline. Unsupported SDK contracts, timeout, ambiguity or missing
+access fail closed; no inventory/members are read. A large catalog needs an
+independently reviewed exact group plan via `-PlanPath`, not an unbounded retry.
+Choose a displayed group number, or type `ALL` and separately approve the broader
+**all supported Windows inventory in this management group** warning. This is
+not every SCOM class and does not create or expand a group.
+
+Plans now require `mcpLogPath`, `collectorLogPath`, `scopeKind` (`group` or
+`managementGroup`) and boolean `wholeManagementGroupApproved`. Group plans require
+a nonempty GUID and false whole-group approval. Management-group plans require
+JSON `groupId: null` (not an empty/fake GUID) and true approval, and always prompt
+again before initial plan persistence. Both reviewed receiver and worker configs
+must already match the selected scope/IDs and whole-group approval; merge refuses
+mismatches rather than silently changing source authorization. Whole-group
+configuration also requires enabled Windows tools and a reviewed Windows mapping.
+Setup stamps `inventoryKind: supportedWindows` on the source profile. Source
+visibility, membership/enumeration and graph contract evidence are still separately
+reviewed; setup never infers those flags from discovery or a successful preflight.
 
 Prepare does **not** create or start IIS. The staged `appsettings.json` is `{}`,
 deliberately unable to start anonymously or with synthetic credentials.
 All installed package files are hash-recorded separately from mutable active
 configuration. Worker config is read-only to the worker; only its checkpoint
-directory is writable. SYSTEM/Administrators retain access. IIS will get only
+and selected collector/worker log directory are writable. SYSTEM/Administrators retain access. IIS will get only
 application Read/Execute and receiver-state Modify, not checkpoint/private-key
-or worker configuration access. Logs/backups/journals remain private.
+or worker configuration access. The selected MCP log directory gets Modify for
+only the new pool identity at activation; collector logs get Modify for only the
+worker identity during staging. Both include SYSTEM/Administrators, disable ACL
+inheritance and verify the resulting owner/rules. No existing pool, application or
+log directory is reused. Logs/backups/journals remain private.
+
+## Structured operational logs
+
+Setup writes `OperationalLogging` in receiver JSON, `operationalLogging` in worker
+JSON and the same worker destination in the PowerShell profile configuration.
+Runtime events are sanitized structured JSON, not serialized framework state or
+exception messages. They include allowlisted lifecycle/failure/outcome/timing
+information only: never bearer tokens, credentials, connection strings, private
+configuration or raw SCOM records. Profile logs use their own file prefix and
+never write diagnostic text to the JSON protocol stdout. Log I/O failures are
+explicit failures, not silently discarded events.
+
+The wizard selects a 1 MiB per-file limit and five retained files per stream.
+The worker and its PowerShell profile share the collector destination but use
+different streams; account for both budgets when sizing the volume. Reparse,
+remote, overlapping or non-NTFS log destinations are rejected. Logging is not an
+audit certification, and ACLs do not isolate logs from machine administrators.
+Normal IIS/Windows event and approved prerequisite-installer logs are separate
+platform diagnostics governed by customer retention policy.
+
+## Durable refresh remains a separate opt-in
+
+The complete package includes
+[DurableIndexedRefresh operations](../Operations/DurableIndexedRefresh/README.md).
+After reviewed one-shot publication and acceptance, use that lane to explicitly
+approve registration and separately starting the durable worker under the exact
+worker identity. Setup/preflight never registers a task, runs a collection or
+enables recurrence. Metrics and targeted-live checks remain disabled. Bounded
+runtime-state evidence from the durable worker is separate from the operational
+logs above; preserve both when investigating interrupted work.
 
 Open a separate approved Windows PowerShell shell **as the exact existing
 read-only worker account**, not as the IIS pool or provisioning administrator:

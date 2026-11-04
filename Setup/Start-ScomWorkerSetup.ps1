@@ -11,7 +11,7 @@ Assert-ScomSetupPlan $plan
 if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5) { throw 'SETUP_WINDOWS_POWERSHELL51_REQUIRED' }
 if ([Security.Principal.WindowsIdentity]::GetCurrent().Name -ne $plan.workerAccount) { throw 'SETUP_EXACT_WORKER_ACCOUNT_REQUIRED_NO_IMPERSONATION' }
 if ($Step -eq 'Connect') {
-    if (-not (Confirm-ScomSetupEffect "Connect to $($plan.managementServer), read ONLY management-group identity and existing group GUID $($plan.groupId). Timeout 60 seconds; no members, alerts or inventory enumerated; no scope flags set.")) {
+    if (-not (Confirm-ScomSetupEffect "Connect to $($plan.managementServer), check ONLY management-group identity and, for group scope, its existing group GUID. Selected scope: $(Get-ScomSetupScopeDescription $plan). Timeout 60 seconds; no members, alerts or inventory enumerated; no scope flags set.")) {
         throw 'SETUP_CANCELLED_NO_ACTION'
     }
     $job = Start-Job -ArgumentList $plan,(Join-Path $PSScriptRoot 'ScomSetup.psm1') -ScriptBlock {
@@ -21,7 +21,8 @@ if ($Step -eq 'Connect') {
         Import-Module $p.operationsManagerModule
         New-SCOMManagementGroupConnection -ComputerName $p.managementServer -ErrorAction Stop | Out-Null
         $groups = @(Get-SCOMManagementGroup -ErrorAction Stop)
-        $group = @(Get-SCOMGroup -Id ([guid]$p.groupId) -ErrorAction Stop)
+        $group = @()
+        if ($p.scopeKind -ceq 'group') { $group = @(Get-SCOMGroup -Id ([guid]$p.groupId) -ErrorAction Stop) }
         Assert-ScomSetupConnectionIdentity $p $groups $group
         'SCOM_SETUP_CONNECTION_GROUP_VISIBLE_NOT_SCOPE_CERTIFIED'
     }

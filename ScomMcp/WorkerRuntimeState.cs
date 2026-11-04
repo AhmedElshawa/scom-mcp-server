@@ -2,7 +2,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
-using System.Globalization;
 
 namespace ScomMcp;
 
@@ -328,82 +327,26 @@ public sealed class WorkerRuntimeState : IDisposable
 
 public sealed class BoundedWorkerFileLoggerProvider : ILoggerProvider
 {
-    private const long MaxFileBytes = 4 * 1024 * 1024;
-    private const int MaxGenerations = 3;
-    private const int MaxMessageCharacters = 4096;
-    private readonly object gate = new();
-    private readonly string path;
-    private bool disposed;
-
-    public BoundedWorkerFileLoggerProvider(string directory)
-    {
-        path = Path.Combine(directory, "worker.log");
-    }
-
-    public ILogger CreateLogger(string categoryName) => new WorkerFileLogger(this, categoryName);
-
-    private void Write(string category, LogLevel level, EventId eventId, string message, Exception? exception)
-    {
-        var safeMessage = message.Length > MaxMessageCharacters
-            ? message[..MaxMessageCharacters] + " [truncated]"
-            : message;
-        var line = string.Concat(DateTimeOffset.UtcNow.ToString("O", CultureInfo.InvariantCulture), " ",
-            level, " ", category, " EventId=", eventId.Id.ToString(CultureInfo.InvariantCulture), " ", safeMessage,
-            exception is null ? "" : " ErrorType=" + exception.GetType().Name);
-        var bytes = Encoding.UTF8.GetByteCount(line) + 1L;
-        if (bytes > MaxFileBytes)
-            throw new InvalidOperationException("Worker log entry exceeds its byte budget.");
-
-        lock (gate)
+    // Compatibility for callers predating OperationalLogging configuration.
+    // Legacy text events become content-free diagnostics, never formatted text.
+    private readonly OperationalFileLoggerProvider provider;
+    public BoundedWorkerFileLoggerProvider(string directory) =>
+        provider = new(new OperationalLoggingSettings
         {
-            ObjectDisposedException.ThrowIf(disposed, this);
-            foreach (var generation in Enumerable.Range(0, MaxGenerations + 1))
-                RejectReparsePoint(generation == 0 ? path : path + "." + generation);
-            if (File.Exists(path) && new FileInfo(path).Length + bytes > MaxFileBytes)
-                Rotate();
-            using var stream = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.Read);
-            using var writer = new StreamWriter(stream, new UTF8Encoding(false));
-            writer.WriteLine(line);
-            writer.Flush();
-            stream.Flush(true);
-        }
-    }
+            Directory = directory, MaxFileBytes = OperationalLoggingSettings.MinimumFileBytes, RetainedFiles = 3
+        }, OperationalComponent.Worker);
+    public ILogger CreateLogger(string categoryName) => new WorkerFileLogger(provider.CreateLogger(categoryName));
+    public void Dispose() => provider.Dispose();
 
-    private void Rotate()
-    {
-        for (var generation = MaxGenerations - 1; generation >= 1; generation--)
-        {
-            var source = path + "." + generation;
-            var destination = path + "." + (generation + 1);
-            if (File.Exists(destination)) File.Delete(destination);
-            if (File.Exists(source)) File.Move(source, destination);
-        }
-        var firstGeneration = path + ".1";
-        if (File.Exists(firstGeneration)) File.Delete(firstGeneration);
-        if (File.Exists(path)) File.Move(path, firstGeneration);
-    }
-
-    private static void RejectReparsePoint(string path)
-    {
-        if (File.Exists(path) && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
-            throw new InvalidOperationException("Worker log files must not be reparse points.");
-    }
-
-    public void Dispose()
-    {
-        lock (gate) disposed = true;
-    }
-
-    private sealed class WorkerFileLogger(BoundedWorkerFileLoggerProvider owner, string category) : ILogger
+    private sealed class WorkerFileLogger(ILogger logger) : ILogger
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information &&
-            (category is "ScomCollectionWorker" || category.EndsWith(".CollectionScheduler", StringComparison.Ordinal) ||
-                category.EndsWith(".TargetedLiveWorker", StringComparison.Ordinal));
+        public bool IsEnabled(LogLevel logLevel) => logger.IsEnabled(logLevel);
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)
         {
-            if (IsEnabled(logLevel)) owner.Write(category, logLevel, eventId, formatter(state, exception), exception);
+            if (IsEnabled(logLevel))
+                OperationalLog.Write(logger, OperationalEvent.Diagnostic, OperationalOutcome.Succeeded);
         }
     }
 }
