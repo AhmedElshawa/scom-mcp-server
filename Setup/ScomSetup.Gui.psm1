@@ -13,6 +13,7 @@ function Get-ScomGuiValue {
 function New-ScomGuiAdapters {
     @{
         Prerequisites = { param($p) Get-ScomSetupPrerequisites $p }
+        LocalCatalog = { Get-ScomSetupLocalCatalog }
         IsAdmin = {
             $principal = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
             $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
@@ -26,7 +27,7 @@ function New-ScomGuiAdapters {
             Set-ScomSetupDirectoryAcl $path @{}
             Assert-ScomSetupPrivateDirectory $path
         }
-        Discover = { param($p,$approve) Get-ScomSetupGroupCatalog $p -Approve $approve }
+        Discover = { param($p,$approve) Get-ScomSetupGroupCatalog $p -Approve $approve -DiscoverManagementGroup }
         Windows = { New-ScomSetupWindowsAdapters }
         PrerequisiteWindows = { param($path) New-ScomPrerequisiteWindowsAdapters $path }
         Worker = {
@@ -37,12 +38,30 @@ function New-ScomGuiAdapters {
     }
 }
 
+function New-ScomGuiDefaultPlan {
+    param([string]$PackageRoot,$Catalog)
+    $data=[Environment]::GetFolderPath('CommonApplicationData')
+    $pool='ScomMcp'
+    $suffix=1
+    while ($pool -in $Catalog.pools) { $pool='ScomMcp-'+$suffix; $suffix++ }
+    [pscustomobject]@{
+        schemaVersion=1;packagePath=$PackageRoot
+        installPath=(Join-Path $data 'ScomMcp-Install');privatePath=(Join-Path $data 'ScomMcp-Private')
+        receiverStatePath=(Join-Path $data 'ScomMcp-Receiver');workerStatePath=(Join-Path $data 'ScomMcp-Worker')
+        mcpLogPath=(Join-Path $data 'ScomMcp-McpLogs');collectorLogPath=(Join-Path $data 'ScomMcp-CollectorLogs')
+        siteName='ScomMcp';applicationPath='/';poolName=$pool;httpsBaseUrl='';tlsThumbprint=''
+        workerAccount='';managementServer='';managementGroupId='';operationsManagerModule=$Catalog.operationsManagerModule
+        scopeKind='group';groupId=$null;wholeManagementGroupApproved=$false
+    }
+}
+
 function Invoke-ScomSetupGuiRequest {
     param([Parameter(Mandatory)]$Request,[Parameter(Mandatory)][string]$PackageRoot,
         [hashtable]$Adapters = (New-ScomGuiAdapters))
     $answer = [ordered]@{
         ok=$false; code='SETUP_GUI_FAILED'; message='No action completed. Review the displayed code and deployment guide.'
         checks=@(); groups=@(); stage=$null; pendingAction=$null; approvalRequired=$false; summary=$null; plan=$null
+        defaults=$null;stateDirectory=$null;sites=@();pools=@();certificates=@();currentAccount=$null;managementGroupId=$null
     }
     $approvalState = @{ supplied=[string](Get-ScomGuiValue $Request 'approval' ''); used=$false; required=$null }
     $approve = {
@@ -58,8 +77,31 @@ function Invoke-ScomSetupGuiRequest {
     $hashFile=Get-Command Get-ScomSetupHash -ErrorAction Stop
     try {
         $action=[string](Get-ScomGuiValue $Request 'action' '')
-        if ($action -cnotin @('Preflight','Discover','Prepare','Configure','Activate','Status','Recover',
+        if ($action -cnotin @('Bootstrap','Preflight','Discover','Prepare','Configure','Activate','Status','Recover',
             'InstallPrerequisites','Connect','PublishWorker','Publish','Accept')) { throw 'SETUP_GUI_ACTION_INVALID' }
+        if ($action -ceq 'Bootstrap') {
+            $catalogBlocked=$false
+            try { $catalog=& $Adapters.LocalCatalog }
+            catch {
+                $catalogBlocked=$true
+                $catalog=[pscustomobject]@{operationsManagerModule='';sites=@();pools=@();certificates=@();currentAccount=(& $Adapters.Caller)}
+            }
+            $defaults=New-ScomGuiDefaultPlan $PackageRoot $catalog
+            $facts=& $Adapters.Prerequisites $defaults
+            $answer.checks=@($facts.checks)
+            if ($catalogBlocked) {
+                $answer.checks+=@([pscustomobject]@{name='Local IIS/certificate discovery';passed=$false
+                    remedy='Local placement discovery could not complete. Use approved administrator elevation, rerun checks, or review Advanced placement. No discovered options or source access are inferred.'})
+            }
+            $answer.defaults=$defaults
+            $answer.stateDirectory=Join-Path ([Environment]::GetFolderPath('CommonApplicationData')) 'ScomMcp-SetupJournal'
+            $answer.sites=@($catalog.sites);$answer.pools=@($catalog.pools);$answer.certificates=@($catalog.certificates)
+            $answer.currentAccount=$catalog.currentAccount
+            $answer.ok=[bool]$facts.ready -and -not $catalogBlocked
+            $answer.code=if ($answer.ok) {'SETUP_GUI_BOOTSTRAP_READY'} else {'SETUP_PREREQUISITES_BLOCKED'}
+            $answer.message='Local read-only prerequisite probes and proposed defaults only. No installation, SCOM connection, source scan, credentials or identity/source attestation. Local SDK metadata is not connectivity or query compatibility.'
+            return [pscustomobject]$answer
+        }
         $plan=Get-ScomGuiValue $Request 'plan'
         $stateDirectory=[string](Get-ScomGuiValue $Request 'stateDirectory' '')
         $planPath=[string](Get-ScomGuiValue $Request 'planPath' '')
@@ -75,7 +117,7 @@ function Invoke-ScomSetupGuiRequest {
             throw 'SETUP_GUI_PACKAGE_LOCATION_MISMATCH'
         }
         if ($action -eq 'Preflight') {
-            Assert-ScomSetupPath $plan.operationsManagerModule
+            if ($plan.operationsManagerModule) { Assert-ScomSetupPath $plan.operationsManagerModule }
             $facts=& $Adapters.Prerequisites $plan
             $answer.checks=$facts.checks
             $answer.ok=[bool]$facts.ready
@@ -106,7 +148,14 @@ function Invoke-ScomSetupGuiRequest {
             $facts=& $Adapters.Prerequisites $plan
             $answer.checks=$facts.checks
             if (-not $facts.ready) { throw 'SETUP_PREREQUISITES_BLOCKED' }
-            $answer.groups=@(& $Adapters.Discover $plan $approve | ForEach-Object {
+            $catalog=& $Adapters.Discover $plan $approve
+            $discoveredId=[guid]::Empty
+            if (-not [guid]::TryParseExact([string]$catalog.managementGroupId,'D',[ref]$discoveredId) -or
+                $discoveredId -eq [guid]::Empty -or ($plan.managementGroupId -and $plan.managementGroupId -ine $catalog.managementGroupId)) {
+                throw 'SETUP_MANAGEMENT_GROUP_MISMATCH'
+            }
+            $answer.managementGroupId=[string]$catalog.managementGroupId
+            $answer.groups=@($catalog.groups | ForEach-Object {
                 $name=([string]$_.DisplayName -replace '[\x00-\x1f\x7f-\x9f]', ' ')
                 if ($name.Length -gt 120) { $name=$name.Substring(0,120) }
                 [pscustomobject]@{id=[string]$_.Id; displayName=$name}

@@ -12,6 +12,15 @@ internal static class SelfTests
         using var form = new WizardForm(AppContext.BaseDirectory, bridge);
         _ = form.Handle;
         Require(form.IsHandleCreated);
+        Require(form.ReadRequest("Status").PlanPath == "");
+        form.UseWorkerPlan(true);
+        Require(form.ReadRequest("Status").PlanPath == Path.Combine(form.ReadPlan().PrivatePath, "setup-plan.json"));
+        form.SetField("privatePath", @"C:\approved-private");
+        Require(form.ReadRequest("Status").PlanPath == @"C:\approved-private\setup-plan.json");
+        form.SetField("planPath", @"C:\explicit-worker\setup-plan.json");
+        form.SetField("privatePath", @"C:\other-private");
+        Require(form.ReadRequest("Status").PlanPath == @"C:\explicit-worker\setup-plan.json");
+        form.UseWorkerPlan(false);
         var defaults = form.ReadPlan();
         Require(defaults.ScopeKind == "group" && defaults.GroupId is null && !defaults.WholeManagementGroupApproved);
         foreach (var property in typeof(SetupPlan).GetProperties().Where(p => p.PropertyType == typeof(string)))
@@ -57,14 +66,15 @@ internal static class SelfTests
         Require(!DisplayText.IsExactSummarySafe("bad\u202evalue") && !DisplayText.IsExactSummarySafe("bad\0value") &&
             DisplayText.IsExactSummarySafe(request.Approval));
         Require(DisplayText.Clean("a\u202eb\0c", 2) == "ab");
-        string[] overrides = ["SCOM_SETUP_TEST_OVERRIDE", "ASPNETCORE_URLS", "DOTNET_ROOT", "PSExecutionPolicyPreference", "PSModulePath"];
+        string[] overrides = ["SCOM_SETUP_TEST_OVERRIDE", "ASPNETCORE_URLS", "DOTNET_ROOT", "PSExecutionPolicyPreference", "PSModulePath", "PATH"];
         var saved = overrides.ToDictionary(name => name, Environment.GetEnvironmentVariable);
         System.Diagnostics.ProcessStartInfo start;
         try
         {
             foreach (var name in overrides) Environment.SetEnvironmentVariable(name, "untrusted-inherited-test-value");
             start = SetupBridge.StartInfo(AppContext.BaseDirectory);
-            Require(overrides.All(name => !start.Environment.ContainsKey(name)));
+            Require(overrides.Where(name => name != "PATH").All(name => !start.Environment.ContainsKey(name)));
+            Require(!start.Environment["PATH"]!.Contains("untrusted-inherited-test-value"));
         }
         finally
         {
@@ -74,10 +84,22 @@ internal static class SelfTests
             Path.Combine(AppContext.BaseDirectory, @"setup\Invoke-ScomSetupGui.ps1") }));
         Require(start.RedirectStandardInput && start.RedirectStandardOutput && start.RedirectStandardError &&
             !start.UseShellExecute && start.CreateNoWindow);
+        Require(start.Environment["PATH"] == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32") +
+            ";" + Environment.GetFolderPath(Environment.SpecialFolder.Windows) + ";" +
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet"));
         Require(!start.Environment.ContainsKey("DOTNET_ROOT") && !start.Environment.ContainsKey("PSModulePath") &&
             !start.Environment.ContainsKey("PSExecutionPolicyPreference") &&
             !start.Environment.Keys.Any(k => k.StartsWith("SCOM", StringComparison.OrdinalIgnoreCase)));
         Require(start.StandardInputEncoding is UTF8Encoding);
+        var handoff = WizardForm.WorkerHandoffStartInfo(@"DOMAIN\sp_service", Path.Combine(AppContext.BaseDirectory, "ScomSetup.exe"));
+        Require(handoff.FileName == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "runas.exe") &&
+            handoff.ArgumentList.SequenceEqual(new[] { @"/user:DOMAIN\sp_service", "\"" + Path.Combine(AppContext.BaseDirectory, "ScomSetup.exe") + "\"" }) &&
+            !handoff.UseShellExecute && !handoff.CreateNoWindow && !handoff.RedirectStandardInput && !handoff.RedirectStandardOutput &&
+            !handoff.ArgumentList.Any(argument => argument.Contains("/savecred") || argument.Contains("/netonly")));
+        bool rejected = false;
+        try { WizardForm.WorkerHandoffStartInfo(@"bad account /savecred", Path.Combine(AppContext.BaseDirectory, "ScomSetup.exe")); }
+        catch (InvalidOperationException) { rejected = true; }
+        Require(rejected);
         form.ApplyPlan(new SetupPlan { ScopeKind = "managementGroup", WholeManagementGroupApproved = true });
         Require(form.ReadPlan().ScopeKind == "managementGroup" && form.ReadPlan().GroupId is null &&
             !form.ReadPlan().WholeManagementGroupApproved);
@@ -91,6 +113,7 @@ internal static class SelfTests
         Require(bridge.Calls == 0);
         // The form's constructor and handle creation use NoCallsBridge, so any startup action fails this test.
         TestWorkflow();
+        TestSequentialBootstrap();
     }
 
     private static void TestWorkflow()
@@ -102,10 +125,11 @@ internal static class SelfTests
         form.EffectDecision = (_, _) => throw new InvalidOperationException("Unexpected effect dialog");
         form.WholeScopeDecision = _ => throw new InvalidOperationException("Unexpected scope dialog");
         form.SetField("operationsManagerModule", @"C:\approved\OperationsManager.psd1");
-        responses.Enqueue(new BridgeResponse { Ok = true, Code = "SETUP_GUI_PREFLIGHT_PASSED" });
+        responses.Enqueue(new BridgeResponse { Ok = true, Code = "SETUP_GUI_PREFLIGHT_PASSED",
+            Checks = [new BridgeCheck { Name = "SDK installed", Passed = true }] });
         Complete(form.RunActionAsync("Preflight"));
         Require(bridge.Requests.Count == 1 && bridge.Requests[0].Plan.GroupId is null &&
-            bridge.Requests[0].StateDirectory == "" && bridge.Requests[0].Approval is null);
+            bridge.Requests[0].Approval is null);
 
         form.SetField("planPath", @"C:\private\setup-plan.json");
         form.UseWorkerPlan(true);
@@ -165,20 +189,20 @@ internal static class SelfTests
         responses.Enqueue(new BridgeResponse { Ok = false, Summary = "Not an approval request" });
         form.EffectDecision = (_, _) => throw new InvalidOperationException("Unexpected effect dialog");
         start = bridge.Requests.Count;
-        Complete(form.RunActionAsync("Configure"));
+        Complete(form.RunActionAsync("Recover"));
         Require(bridge.Requests.Count == start + 1 && !form.IsBusy);
 
         var pending = new TaskCompletionSource<BridgeResponse>();
         bridge.Next = () => pending.Task;
         int notices = 0;
         form.BusyCloseNotice = () => notices++;
-        var work = form.RunActionAsync("Activate");
+        var work = form.RunActionAsync("Recover");
         Require(form.IsBusy);
         var closing = new FormClosingEventArgs(CloseReason.UserClosing, false);
         form.ClosingWhileBusy(form, closing);
         Require(closing.Cancel && notices == 1 && form.IsBusy);
         start = bridge.Requests.Count;
-        Complete(form.RunActionAsync("Activate"));
+        Complete(form.RunActionAsync("Recover"));
         Require(bridge.Requests.Count == start);
         pending.SetException(new InvalidOperationException("sensitive exception must never display"));
         Complete(work);
@@ -187,6 +211,89 @@ internal static class SelfTests
         var idleClosing = new FormClosingEventArgs(CloseReason.UserClosing, false);
         form.ClosingWhileBusy(form, idleClosing);
         Require(!idleClosing.Cancel);
+    }
+
+    private static void TestSequentialBootstrap()
+    {
+        var bridge = new RecordingBridge(() => Task.FromResult(new BridgeResponse
+        {
+            Ok = false, Checks = [
+                new BridgeCheck { Name = "Windows PowerShell", Passed = true },
+                new BridgeCheck { Name = ".NET server runtime", Passed = false, Remedy = "Install the reviewed server runtime." }]
+        }));
+        using var form = new WizardForm(AppContext.BaseDirectory, bridge);
+        _ = form.Handle;
+        Require(bridge.Requests.Count == 0 && form.CurrentPage == 0 && !form.CanInstall && form.CanMoveNext);
+        form.MovePage(1);
+        Require(form.CurrentPage == 1);
+        form.MovePage(-1);
+        Require(form.CurrentPage == 0);
+        form.Show();
+        Application.DoEvents();
+        form.Hide();
+        Complete(form.OnFirstShownAsync());
+        Require(bridge.Requests.Count == 1 && bridge.Requests[0].Action == "Bootstrap" &&
+            bridge.Requests[0].Approval is null);
+        Require(form.CheckColors.SequenceEqual(new[] { Color.DarkGreen, Color.Firebrick }) && !form.CanInstall);
+        Complete(form.RunActionAsync("Prepare"));
+        Require(bridge.Requests.Count == 1);
+        form.SetField("workerAccount", @"DOMAIN\edited");
+        var defaults = new SetupPlan { WorkerAccount = @"DOMAIN\must-not-overwrite", InstallPath = @"C:\suggested\install" };
+        form.RenderResponse(new BridgeResponse { Ok = true, Defaults = defaults, Checks = [] }, "Bootstrap");
+        Require(!form.CanInstall && form.CheckColors.Length == 0 &&
+            form.ReadPlan().WorkerAccount == @"DOMAIN\edited");
+        form.RenderResponse(new BridgeResponse { Ok = true, Checks = [new BridgeCheck { Name = "Actual probe", Passed = true }] }, "Bootstrap");
+        Require(form.CanInstall && form.CanMoveNext);
+        const string discoveredManagementGroup = "44444444-4444-4444-8444-444444444444";
+        form.RenderResponse(new BridgeResponse { Ok = true, ManagementGroupId = discoveredManagementGroup,
+            Groups = [new GroupItem { Id = "55555555-5555-4555-8555-555555555555", DisplayName = "Approved group" }] }, "Discover");
+        Require(form.ReadPlan().ManagementGroupId == discoveredManagementGroup && form.ReadPlan().GroupId is null);
+        form.MovePage(2); Require(form.CurrentPage == 0);
+        form.MovePage(1); Require(form.CurrentPage == 1);
+        form.SetLogRoot(@"C:\approved-logs");
+        Require(form.ReadPlan().McpLogPath == @"C:\approved-logs\ScomMcp-McpLogs" &&
+            form.ReadPlan().CollectorLogPath == @"C:\approved-logs\ScomMcp-CollectorLogs");
+        form.MovePage(1); Require(form.CurrentPage == 2);
+        form.SelectSiteForTest(new SiteOption { Name = "Existing", Applications = ["/other"],
+            HttpsBindings = [new HttpsBinding { Host = "scom.example.invalid", Port = 443 }] }, ["ScomMcp-scom"]);
+        Require(form.ReadPlan().SiteName == "Existing" && form.ReadPlan().ApplicationPath == "/scom" &&
+            form.ReadPlan().PoolName == "ScomMcp-scom-2" &&
+            form.ReadPlan().HttpsBaseUrl == "https://scom.example.invalid/scom");
+        form.SelectSiteForTest(new SiteOption { Name = "Existing", Applications = ["/scom"] }, []);
+        Require(form.ReadPlan().ApplicationPath == "");
+        Require(!form.EvidenceInputsPresent);
+        int calls = bridge.Requests.Count;
+        Complete(form.RunActionAsync("Configure"));
+        Complete(form.RunActionAsync("Activate"));
+        Require(bridge.Requests.Count == calls);
+        form.MovePage(-1); Require(form.CurrentPage == 1);
+        form.ApplyPlan(new SetupPlan { InstallPath = @"C:\resumed\install", WorkerAccount = @"DOMAIN\resumed" });
+        form.RenderResponse(new BridgeResponse { Defaults = defaults, Ok = true,
+            Checks = [new BridgeCheck { Passed = true }] }, "Bootstrap");
+        Require(form.ReadPlan().InstallPath == @"C:\resumed\install" &&
+            form.ReadPlan().WorkerAccount == @"DOMAIN\resumed");
+        bridge.Next = () => throw new InvalidOperationException("Simulated policy failure");
+        Complete(form.RunActionAsync("Bootstrap"));
+        Require(!form.CanInstall);
+
+        using var defaultsForm = new WizardForm(AppContext.BaseDirectory, new NoCallsBridge());
+        defaultsForm.SetField("workerAccount", @"DOMAIN\keep-edited");
+        defaultsForm.RenderResponse(new BridgeResponse { Ok = true,
+            Defaults = new SetupPlan { InstallPath = @"C:\fresh\install", OperationsManagerModule = @"C:\SCOM\OperationsManager.psd1",
+                WorkerAccount = @"DOMAIN\do-not-apply", McpLogPath = @"C:\backend-mcp", CollectorLogPath = @"C:\backend-collector" },
+            StateDirectory = @"C:\fresh\journal",
+            Checks = [new BridgeCheck { Name = "Actual metadata probe", Passed = true }] }, "Bootstrap");
+        Require(defaultsForm.ReadPlan().InstallPath == @"C:\fresh\install" &&
+            defaultsForm.ReadPlan().OperationsManagerModule == @"C:\SCOM\OperationsManager.psd1" &&
+            defaultsForm.ReadRequest("Prepare").StateDirectory == @"C:\fresh\journal" &&
+            defaultsForm.ReadPlan().WorkerAccount == @"DOMAIN\keep-edited");
+        Require(defaultsForm.ReadPlan().McpLogPath == Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ScomMcp-McpLogs") &&
+            defaultsForm.ReadPlan().CollectorLogPath == Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData), "ScomMcp-CollectorLogs"));
+        defaultsForm.RenderResponse(new BridgeResponse { Ok = true, Defaults = new SetupPlan { InstallPath = @"C:\other\install" },
+            Checks = [new BridgeCheck { Passed = true }] }, "Bootstrap");
+        Require(defaultsForm.ReadPlan().InstallPath == @"C:\fresh\install");
     }
 
     private static void Complete(Task task)

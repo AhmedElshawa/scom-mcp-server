@@ -10,6 +10,7 @@ $script:ready=$true
 $script:admin=$true
 $script:worker='SYNTHETIC\worker'
 $script:failPrepare=$false
+$script:catalogBlocked=$false
 $plan=[pscustomobject]@{
     schemaVersion=1;packagePath=(Join-Path $root 'package');installPath=(Join-Path $root 'install')
     privatePath=(Join-Path $root 'private');receiverStatePath=(Join-Path $root 'receiver');workerStatePath=(Join-Path $root 'worker')
@@ -25,13 +26,20 @@ $windows=@{
     Prepare={ param($p) if ($script:failPrepare) { throw 'SETUP_SYNTHETIC_FAILURE: secret-do-not-display' }; $script:effects.Add('prepare') }
 }
 $adapters=@{
+    LocalCatalog={
+        if ($script:catalogBlocked) { throw 'Synthetic local discovery access denied; private-marker' }
+        [pscustomobject]@{operationsManagerModule='C:\synthetic\OperationsManager.psd1'
+            sites=@([pscustomobject]@{name='Existing';applications=@('/existing');httpsBindings=@()})
+            pools=@('ScomMcp','Shared');certificates=@();currentAccount='SYNTHETIC\operator'}
+    }
     Prerequisites=$windows.Prerequisites
     IsAdmin={$script:admin}
     Caller={$script:worker}
     ValidateNew={param($p) $script:effects.Add('validate-readonly')}
     Private={param($path)}
     CreateJournal={param($path) $script:effects.Add('journal');$null=New-Item -ItemType Directory -Path $path}
-    Discover={param($p,$approve) & $approve 'Synthetic read-only group discovery' | Out-Null; $script:effects.Add('discover');[pscustomobject]@{Id=$p.groupId;DisplayName="Synthetic`nname"}}
+    Discover={param($p,$approve) & $approve 'Synthetic read-only group discovery' | Out-Null; $script:effects.Add('discover')
+        [pscustomobject]@{managementGroupId='22222222-2222-4222-8222-222222222222';groups=@([pscustomobject]@{Id=$p.groupId;DisplayName="Synthetic`nname"})}}
     Windows={ $windows }.GetNewClosure()
     Worker={param($p,$step,$approve) & $approve "Synthetic worker $step" | Out-Null;$script:effects.Add("worker-$step")}
 }
@@ -43,6 +51,14 @@ try {
         Check ($errors.Count -eq 0)
     }
     $script:ready=$false
+    $request.action='Bootstrap'
+    $r=Run
+    Check (-not $r.ok -and $r.code -ceq 'SETUP_PREREQUISITES_BLOCKED' -and $r.checks.Count -eq 1)
+    Check ($r.defaults.poolName -ceq 'ScomMcp-1' -and $r.defaults.packagePath -ceq $plan.packagePath)
+    Check ($r.defaults.groupId -eq $null -and -not $r.defaults.wholeManagementGroupApproved -and -not $r.defaults.workerAccount)
+    Check ($r.sites[0].name -ceq 'Existing' -and $r.currentAccount -ceq 'SYNTHETIC\operator')
+    Check ($script:effects.Count -eq 0 -and -not (Test-Path -LiteralPath $request.stateDirectory))
+    $request.action='Preflight'
     $r=Run
     Check (-not $r.ok -and $r.code -ceq 'SETUP_PREREQUISITES_BLOCKED' -and $r.checks.Count -eq 1)
     Check ($script:effects.Count -eq 0 -and -not (Test-Path -LiteralPath $request.stateDirectory))
@@ -50,6 +66,17 @@ try {
     $r=Run
     Check (-not $r.ok -and -not $r.approvalRequired -and $script:effects.Count -eq 0)
     $script:ready=$true
+    $request.action='Bootstrap'
+    $r=Run
+    Check ($r.ok -and $r.code -ceq 'SETUP_GUI_BOOTSTRAP_READY' -and $script:effects.Count -eq 0)
+    $r=Invoke-ScomSetupGuiRequest ([pscustomobject]@{action='Bootstrap'}) $plan.packagePath -Adapters $adapters
+    Check ($r.ok -and $r.defaults.groupId -eq $null -and $r.defaults.managementGroupId -ceq '' -and
+        $r.defaults.tlsThumbprint -ceq '' -and $r.defaults.workerAccount -ceq '')
+    $script:catalogBlocked=$true
+    $r=Run
+    Check (-not $r.ok -and $r.checks.Count -eq 2 -and -not $r.checks[1].passed -and $r.checks[1].remedy)
+    Check ($r.sites.Count -eq 0 -and $r.pools.Count -eq 0 -and ($r | ConvertTo-Json -Depth 20) -notmatch 'private-marker')
+    $script:catalogBlocked=$false
     $request.action='Preflight'
     Check (Run).ok
     Check ($script:effects.Count -eq 0)
@@ -61,8 +88,15 @@ try {
     Check ($script:effects.Count -eq 0)
     $request.approval=$r.summary
     $r=Run
-    Check ($r.ok -and $r.groups.Count -eq 1 -and $r.groups[0].displayName -ceq 'Synthetic name')
+    Check ($r.ok -and $r.groups.Count -eq 1 -and $r.groups[0].displayName -ceq 'Synthetic name' -and
+        $r.managementGroupId -ceq '22222222-2222-4222-8222-222222222222')
     Check ($script:effects.Count -eq 1 -and $script:effects[0] -ceq 'discover')
+    $plan.managementGroupId=''
+    $r=Run
+    Check ($r.ok -and $r.managementGroupId -ceq '22222222-2222-4222-8222-222222222222')
+    $plan.managementGroupId='11111111-1111-4111-8111-111111111111'
+    Check ((Run).code -ceq 'SETUP_MANAGEMENT_GROUP_MISMATCH')
+    $plan.managementGroupId='22222222-2222-4222-8222-222222222222'
     $script:effects.Clear()
     $request.action='Prepare';$request.approval=''
     $script:admin=$false

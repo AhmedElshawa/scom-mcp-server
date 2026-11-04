@@ -52,4 +52,4 @@ if (-not ($runtimeConfig.runtimeOptions.includedFrameworks | Where-Object { $_.n
     -not (Test-Path -LiteralPath (Join-Path $package 'coreclr.dll') -PathType Leaf)) {
     throw 'Package must contain the pinned Windows Desktop runtime and root coreclr.dll'
 }
-Write-Output 'PASS: STA form, plan mapping, protocol encoding, inert startup, isolated bridge environment, packaged no-dotnet bootstrap.'
+Write-Output 'PASS: sequential STA wizard, inert probe, read-only Shown Bootstrap, field mapping, approvals, gating, account handoff arguments, isolated bridge environment and packaged no-dotnet bootstrap.'

@@ -2,6 +2,102 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'ScomSetup.psm1')
 
+function Get-ScomSetupSdkFileIdentity {
+    param([string]$Path)
+    [Reflection.AssemblyName]::GetAssemblyName($Path)
+}
+
+function Get-ScomSetupLocalScom {
+    param([string]$ModulePath)
+    $paths=@()
+    if ($ModulePath) { $paths=@($ModulePath) }
+    else {
+        $paths=@(Get-Module -ListAvailable OperationsManager | Select-Object -First 10 -ExpandProperty Path)
+        $paths+=@(
+            (Join-Path $env:ProgramFiles 'Microsoft System Center\Operations Manager\Powershell\OperationsManager\OperationsManager.psd1'),
+            (Join-Path $env:ProgramFiles 'Microsoft System Center\Operations Manager\Console\WindowsPowerShell\OperationsManager\OperationsManager.psd1'))
+    }
+    $selected='';$manifestValid=$false;$sdkValid=$false;$failureCode=$null
+    foreach ($candidate in $paths | Select-Object -Unique) {
+        if (-not (Test-Path -LiteralPath $candidate -PathType Leaf)) { continue }
+        Assert-ScomSetupPath $candidate
+        $selected=$candidate
+        try {
+            # Parse data only. Do not import SCOM code or establish a connection during preflight.
+            $manifest=Import-PowerShellDataFile -LiteralPath $candidate
+            $manifestValid=($null -ne $manifest['ModuleVersion'] -and [version]$manifest['ModuleVersion'] -ge [version]'1.0' -and
+                ($manifest['RootModule'] -or $manifest['ModuleToProcess'] -or $manifest['NestedModules']))
+            $moduleDirectory=Split-Path $candidate -Parent
+            $rootModule=if ($manifest['RootModule']) { $manifest['RootModule'] } else { $manifest['ModuleToProcess'] }
+            if ($rootModule -and -not (Test-Path -LiteralPath (Join-Path $moduleDirectory $rootModule) -PathType Leaf)) {
+                $manifestValid=$false
+            }
+            $assemblyDirectories=@($moduleDirectory,
+                (Join-Path $env:ProgramFiles 'Microsoft System Center\Operations Manager\Console\SDK Binaries'),
+                (Join-Path $env:ProgramFiles 'Microsoft System Center\Operations Manager\Server\SDK Binaries'))
+            $ancestor=$moduleDirectory
+            for ($depth=0;$depth -lt 3;$depth++) {
+                $ancestor=Split-Path $ancestor -Parent
+                if (-not $ancestor) { break }
+                foreach ($relative in @('SDK Binaries','Console\SDK Binaries','Server\SDK Binaries')) {
+                    $assemblyDirectories+=Join-Path $ancestor $relative
+                }
+            }
+            foreach ($required in @($manifest['RequiredAssemblies'])) {
+                if ($required -is [string] -and $required.EndsWith('.dll',[StringComparison]::OrdinalIgnoreCase)) {
+                    $assemblyDirectories+=Split-Path ([IO.Path]::GetFullPath((Join-Path $moduleDirectory $required))) -Parent
+                }
+            }
+            foreach ($assemblyDirectory in $assemblyDirectories) {
+                $valid=$true
+                foreach ($name in @('Microsoft.EnterpriseManagement.Core','Microsoft.EnterpriseManagement.OperationsManager','Microsoft.EnterpriseManagement.Runtime')) {
+                    $file=Join-Path $assemblyDirectory ($name+'.dll')
+                    if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { $valid=$false; break }
+                    $identity=Get-ScomSetupSdkFileIdentity $file
+                    if ($identity.Name -cne $name -or $identity.Version.Major -lt 7 -or
+                        ([BitConverter]::ToString($identity.GetPublicKeyToken())).Replace('-','').ToLowerInvariant() -cne '31bf3856ad364e35') {
+                        $valid=$false;break
+                    }
+                }
+                if ($valid) { $sdkValid=$true;break }
+            }
+        } catch {
+            $manifestValid=$false;$sdkValid=$false
+            $failureCode='SETUP_LOCAL_SCOM_METADATA_PROBE_FAILED'
+        }
+        break
+    }
+    [pscustomobject]@{modulePath=$selected;moduleValid=$manifestValid;sdkValid=$sdkValid;failureCode=$failureCode}
+}
+
+function Get-ScomSetupLocalCatalog {
+    $scom=Get-ScomSetupLocalScom ''
+    $sites=@();$pools=@();$certificates=@()
+    if (Get-Module -ListAvailable WebAdministration) {
+        Import-Module WebAdministration -ErrorAction Stop | Out-Null
+        $sites=@(Get-Website | Select-Object -First 100 | ForEach-Object {
+            $site=$_
+            [pscustomobject]@{name=[string]$site.Name
+                applications=@(Get-WebApplication -Site $site.Name | Select-Object -First 200 | ForEach-Object { [string]$_.Path })
+                httpsBindings=@(Get-WebBinding -Name $site.Name -Protocol https | Select-Object -First 100 | ForEach-Object {
+                    $parts=([string]$_.bindingInformation) -split ':'
+                    [pscustomobject]@{host=$parts[-1];port=$parts[-2]}
+                })}
+        })
+        $pools=@(Get-ChildItem IIS:\AppPools | Select-Object -First 200 | ForEach-Object { [string]$_.Name })
+    }
+    $now=Get-Date
+    $certificates=@(Get-ChildItem Cert:\LocalMachine\My | Where-Object {
+        $_.HasPrivateKey -and $_.NotBefore -le $now -and $_.NotAfter -gt $now -and
+        @($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' }).Count -gt 0
+    } | Select-Object -First 100 | ForEach-Object {
+        [pscustomobject]@{thumbprint=$_.Thumbprint;displayName=([string]$_.Subject+'; expires '+$_.NotAfter.ToString('yyyy-MM-dd'))
+            dnsNames=@($_.DnsNameList | ForEach-Object { [string]$_.Unicode })}
+    })
+    [pscustomobject]@{sites=$sites;pools=$pools;certificates=$certificates;operationsManagerModule=$scom.modulePath
+        currentAccount=[Security.Principal.WindowsIdentity]::GetCurrent().Name}
+}
+
 function Get-ScomSetupPrerequisites {
     param($Plan)
     $codes = [Collections.Generic.List[string]]::new()
@@ -27,7 +123,10 @@ function Get-ScomSetupPrerequisites {
         $codes.Add('DOTNET8_HOSTING_BUNDLE_REQUIRED')
     }
     if (-not [Environment]::Is64BitProcess) { $codes.Add('X64_POWERSHELL_AND_HOSTING_REQUIRED') }
-    if (-not (Test-Path -LiteralPath $Plan.operationsManagerModule -PathType Leaf)) { $codes.Add('APPROVED_SCOM_CONSOLE_SDK_REQUIRED') }
+    $localScom=Get-ScomSetupLocalScom $Plan.operationsManagerModule
+    if ($localScom.failureCode) { $codes.Add($localScom.failureCode) }
+    if (-not $localScom.moduleValid) { $codes.Add('APPROVED_SCOM_CONSOLE_SDK_REQUIRED') }
+    if (-not $localScom.sdkValid) { $codes.Add('SCOM_SDK_ASSEMBLY_METADATA_REQUIRED') }
     foreach ($key in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
         'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')) {
         if (Test-Path $key) { $codes.Add('RESTART_REQUIRED') }
@@ -44,30 +143,47 @@ function Get-ScomSetupPrerequisites {
         [pscustomobject]@{name='IIS web server and activation services installed'; passed=('IIS_WEB_SERVER_REQUIRED' -notin $codes)}
         [pscustomobject]@{name='.NET 8 Hosting Bundle and ANCM'; passed=('DOTNET8_HOSTING_BUNDLE_REQUIRED' -notin $codes)}
         [pscustomobject]@{name='64-bit execution'; passed=('X64_POWERSHELL_AND_HOSTING_REQUIRED' -notin $codes)}
-        [pscustomobject]@{name='Approved OperationsManager module exists'; passed=('APPROVED_SCOM_CONSOLE_SDK_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='Local OperationsManager module manifest'; passed=('APPROVED_SCOM_CONSOLE_SDK_REQUIRED' -notin $codes)}
+        [pscustomobject]@{name='Local SCOM SDK assembly identity metadata'; passed=('SCOM_SDK_ASSEMBLY_METADATA_REQUIRED' -notin $codes)}
         [pscustomobject]@{name='No detected pending reboot'; passed=('RESTART_REQUIRED' -notin $codes)}
     )
+    $remedies=@{
+        'Windows PowerShell 5.1'='Use the installed x64 Windows PowerShell 5.1; resolve customer script signing policy separately.'
+        'Supported Windows Server family'='Use supported Windows Server 2019, 2022 or 2025; GUI requires Desktop Experience.'
+        '.NET and ASP.NET Core 8 runtimes'='Install the approved .NET 8 Hosting Bundle. The GUI bundled runtime does not install server runtimes.'
+        'IIS management tools'='Install approved IIS management tools through the separately confirmed prerequisite action.'
+        'IIS web server and activation services installed'='Install approved IIS web-server/WAS components through the separately confirmed prerequisite action.'
+        '.NET 8 Hosting Bundle and ANCM'='Provide the Microsoft-signed approved Hosting Bundle installer/version/SHA-256; complete customer IIS maintenance.'
+        '64-bit execution'='Run the x64 setup package and x64 Windows PowerShell.'
+        'Local OperationsManager module manifest'='Install the approved SCOM Operations Console/PowerShell component or select its installed module in Advanced. This checks local data only, not source connectivity.'
+        'Local SCOM SDK assembly identity metadata'='Install matching supported SCOM SDK binaries. Names, declared Microsoft key token and version are checked locally; this is not signature verification or actual SDK/query compatibility, which remains a separate approved source gate.'
+        'No detected pending reboot'='Complete the required customer-approved reboot, then rerun checks. Setup never reboots automatically.'
+    }
+    foreach ($check in $checks) { $check | Add-Member NoteProperty remedy $remedies[$check.name] }
     [pscustomobject]@{ ready=($codes.Count -eq 0); codes=$codes.ToArray(); checks=$checks; certificationStatus='notCertified' }
 }
 
 function Get-ScomSetupGroupCatalog {
-    param($Plan,[scriptblock]$Approve = ${function:Confirm-ScomSetupEffect})
+    param($Plan,[scriptblock]$Approve = ${function:Confirm-ScomSetupEffect},[switch]$DiscoverManagementGroup)
     Assert-ScomSetupPath $Plan.operationsManagerModule
     $managementGroupId = [guid]::Empty
     if ($Plan.managementServer -notmatch '^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$' -or
-        -not [guid]::TryParseExact($Plan.managementGroupId,'D',[ref]$managementGroupId) -or
-        $managementGroupId -eq [guid]::Empty) { throw 'SETUP_DISCOVERY_SOURCE_INVALID' }
+        ((-not $DiscoverManagementGroup -or $Plan.managementGroupId) -and
+        (-not [guid]::TryParseExact($Plan.managementGroupId,'D',[ref]$managementGroupId) -or
+        $managementGroupId -eq [guid]::Empty))) { throw 'SETUP_DISCOVERY_SOURCE_INVALID' }
     if (-not (& $Approve "Read-only group discovery from the selected management group using this console identity. Maximum 200 groups, 60 seconds; reads group IDs/display names only, never inventory/members. No worker evidence flags are set.")) {
         throw 'SETUP_CANCELLED_NO_ACTION'
     }
-    $job = Start-Job -ArgumentList $Plan,(Join-Path $PSScriptRoot 'ScomSetup.psm1') -ScriptBlock {
-        param($p,$setupModule)
+    $job = Start-Job -ArgumentList $Plan,(Join-Path $PSScriptRoot 'ScomSetup.psm1'),([bool]$DiscoverManagementGroup) -ScriptBlock {
+        param($p,$setupModule,$includeIdentity)
         $ErrorActionPreference = 'Stop'
         Import-Module $setupModule -ErrorAction Stop
         Import-Module $p.operationsManagerModule -ErrorAction Stop | Out-Null
         New-SCOMManagementGroupConnection -ComputerName $p.managementServer -ErrorAction Stop | Out-Null
         $managementGroups = @(Get-SCOMManagementGroup -ErrorAction Stop)
-        if ($managementGroups.Count -ne 1 -or [string]$managementGroups[0].Id -ne $p.managementGroupId) {
+        if ($managementGroups.Count -ne 1 -or
+            ($p.managementGroupId -and [string]$managementGroups[0].Id -ne $p.managementGroupId) -or
+            (-not $includeIdentity -and -not $p.managementGroupId)) {
             throw 'SETUP_MANAGEMENT_GROUP_MISMATCH'
         }
         $classes = @(Get-SCOMClass -Name 'Microsoft.SystemCenter.InstanceGroup' -ErrorAction Stop)
@@ -91,7 +207,9 @@ function Get-ScomSetupGroupCatalog {
         if ($options.MaxResultCount -ne 201) { throw 'SETUP_DISCOVERY_SDK_LIMIT_NOT_HONORED' }
         $reader = $methods[0].MakeGenericMethod($objectType).Invoke($manager, @($classes[0].PSObject.BaseObject,$options))
         try {
-            Read-ScomSetupGroupRows $reader $classes[0]
+            $rows=@(Read-ScomSetupGroupRows $reader $classes[0])
+            if ($includeIdentity) { [pscustomobject]@{managementGroupId=[string]$managementGroups[0].Id;groups=$rows} }
+            else { $rows }
         }
         finally { if ($reader -is [IDisposable]) { $reader.Dispose() } }
     }
@@ -361,4 +479,4 @@ function New-ScomSetupWindowsAdapters {
     }
 }
 
-Export-ModuleMember -Function Get-ScomSetupPrerequisites, Get-ScomSetupGroupCatalog, Set-ScomSetupDirectoryAcl, Assert-ScomSetupPrivateDirectory, Assert-ScomSetupNewTargets, New-ScomSetupWindowsAdapters
+Export-ModuleMember -Function Get-ScomSetupPrerequisites, Get-ScomSetupLocalCatalog, Get-ScomSetupGroupCatalog, Set-ScomSetupDirectoryAcl, Assert-ScomSetupPrivateDirectory, Assert-ScomSetupNewTargets, New-ScomSetupWindowsAdapters

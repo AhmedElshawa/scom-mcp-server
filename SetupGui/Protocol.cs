@@ -59,11 +59,38 @@ internal sealed class BridgeResponse
     public bool ApprovalRequired { get; set; }
     public string? Summary { get; set; }
     public SetupPlan? Plan { get; set; }
+    public SetupPlan? Defaults { get; set; }
+    public string? StateDirectory { get; set; }
+    public SiteOption[] Sites { get; set; } = [];
+    public string[] Pools { get; set; } = [];
+    public CertificateOption[] Certificates { get; set; } = [];
+    public string? CurrentAccount { get; set; }
+    public string? ManagementGroupId { get; set; }
 }
 internal sealed class BridgeCheck
 {
     public string? Name { get; set; }
     public bool Passed { get; set; }
+    public string? Remedy { get; set; }
+}
+internal sealed class SiteOption
+{
+    public string Name { get; set; } = "";
+    public string[] Applications { get; set; } = [];
+    public HttpsBinding[] HttpsBindings { get; set; } = [];
+    public override string ToString() => DisplayText.Clean(Name, 120);
+}
+internal sealed class HttpsBinding
+{
+    public string Host { get; set; } = "";
+    public int Port { get; set; }
+}
+internal sealed class CertificateOption
+{
+    public string Thumbprint { get; set; } = "";
+    public string DisplayName { get; set; } = "";
+    public string[] DnsNames { get; set; } = [];
+    public override string ToString() => $"{DisplayText.Clean(DisplayName, 100)} ({DisplayText.Clean(Thumbprint, 40)})";
 }
 internal sealed class GroupItem
 {
@@ -122,7 +149,8 @@ internal sealed class SetupBridge(string packageRoot) : ISetupBridge
         info.Environment.Clear();
         foreach (var name in retained)
             if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
-        info.Environment["PATH"] = Path.Combine(windows, "System32") + ";" + windows;
+        info.Environment["PATH"] = Path.Combine(windows, "System32") + ";" + windows + ";" +
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet");
         return info;
     }
 

@@ -12,17 +12,46 @@ It can open before the application's .NET 8 Hosting Bundle has been installed.
 Windows Server **Desktop Experience** is required for the graphical wizard;
 Server Core uses the separate console lane below.
 
-The wizard opens without making host changes or contacting SCOM. Enter the
-deployment locations and existing identities, then select **Check prerequisites**.
-Review each result and remedy. If required, use the wizard's explicit elevation
-action and approve the real Windows UAC prompt yourself. Enter new install/private/
-state directories, distinct local NTFS MCP/collector log destinations, HTTPS
-certificate, new dedicated pool and new site or new application placement.
+The wizard opens directly to automatic **read-only prerequisite checks**, without
+host changes or SCOM connections. Each completed check is shown in green for PASS
+or red for BLOCKED, with a remedy. Unknown or failed checks are never marked green.
+Use **Back / Next** for the sequential screens. Normal setup asks for a log folder
+(separate MCP/collector subfolders), safe IIS placement, the approved execution
+account and SCOM server/scope. Installation/private/state paths and a new dedicated
+pool are proposed; detailed overrides, certificate/HTTPS evidence, reviewed JSON
+and resume options live in **Advanced**, not a long initial form. Proposed defaults
+do not grant permission, override existing paths or certify external evidence.
+If required, use the explicit elevation action and approve the genuine Windows
+UAC prompt yourself, then rerun the checks.
+
+Existing IIS sites are discovered for a **new** application. Existing applications
+and shared pools are not silently reused or overwritten. A dedicated new pool is
+proposed; conflicts still fail the original ownership checks. Missing HTTPS
+certificate/hostname, Entra/source evidence or approved configuration is summarized
+as a real blocked gate, not made green by hiding its inputs in Advanced.
 Use **Discover groups** only after approving the bounded read-only source
-connection, then choose a group or separately confirm all supported Windows
-inventory. **Prepare** shows the exact staging/journal effect for confirmation
-before doing it. Subsequent configuration/activation/worker/publication/acceptance
-stages remain guided and separately confirmed, not automatically run at startup.
+connection; the management-group GUID is obtained from that connection rather
+than typed in normal setup. Then choose a group or separately confirm all supported
+Windows inventory. Review the final proposal and explicitly confirm **Prepare**.
+Configuration/activation/worker/publication/acceptance remain separate gated
+actions, never automatic consequences of navigation.
+
+The local SCOM checks safely parse the installed OperationsManager manifest and
+inspect SDK assembly identities/version metadata; they do not execute the module,
+verify a connection, prove source authorization or certify the actual SDK query
+contract. The console's presence alone is insufficient. A missing/broken manifest
+or SDK fails locally; actual type/query compatibility and scope identity are
+checked only in the separately approved source lane. Assembly identity metadata
+is not publisher-signature verification.
+
+The selected `DOMAIN\sp_service`-style account is the **collector/worker** identity:
+it determines the plan, private/worker/log ACL grants and exact-account worker
+gate. The IIS MCP application deliberately retains a separate dedicated
+`IIS AppPool\<new-pool>` virtual identity. Entering an account does not change the
+identity of the current wizard, provision a domain account, store a password or
+approve recurring work. Use the explicit Windows account handoff when the
+worker lane is needed; Windows handles credentials outside the wizard. Host
+actions still require a separately elevated administrator.
 
 The prerequisite page can install only explicitly selected IIS features and an
 operator-supplied Microsoft Hosting Bundle whose official signature, version and

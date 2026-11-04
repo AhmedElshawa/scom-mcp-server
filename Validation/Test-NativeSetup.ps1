@@ -54,7 +54,7 @@ try {
     }
     $tests=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
     if (-not $tests.ok -or $tests.bridgeCalls -ne 0) { throw 'Native wizard did not pass its no-effect UI/protocol self-tests.' }
-    Write-Output 'PASS: packaged native wizard field/protocol/approval/cancellation/failure assertions; no bridge calls or host/source effects.'
+    Write-Output 'PASS: packaged native wizard sequential navigation, automatic fake preflight/status colors, defaults/resume, identity handoff arguments and approval/cancellation/failure assertions; no production bridge calls or host/source effects.'
 } finally {
     if (Test-Path -LiteralPath $report) { Remove-Item -LiteralPath $report }
 }

@@ -4,7 +4,7 @@ Import-Module (Join-Path $PSScriptRoot 'ScomSetup.Windows.psm1') -Force
 $module = Get-Module ScomSetup.Windows
 $facts = [pscustomobject]@{
     osBuild=20348; productType=3; dotnet=$true; runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]','Microsoft.AspNetCore.App 8.0.0 [synthetic]')
-    iis=$true; iisServer=$true; ancm=$true; hostingBundle=$true; sdk=$true; restart=$false; poolExists=$false; siteExists=$false
+    iis=$true; iisServer=$true; ancm=$true; hostingBundle=$true; sdk=$true; sdkMetadata=$true; restart=$false; poolExists=$false; siteExists=$false
 }
 # Substitute read-only command probes INSIDE the adapter module. No IIS
 # commands, registry writes, runtime execution or source connection can occur.
@@ -22,6 +22,10 @@ $facts = [pscustomobject]@{
     function script:Get-Module { if ($script:facts.iis) { [pscustomobject]@{Name='synthetic-IIS'} } }
     function script:Get-Service { if ($script:facts.iisServer) { [pscustomobject]@{Name='W3SVC'}; [pscustomobject]@{Name='WAS'} } }
     function script:Import-Module {}
+    function script:Get-ScomSetupLocalScom {
+        param($ModulePath)
+        [pscustomobject]@{modulePath='C:\synthetic\OperationsManager.psd1';moduleValid=$script:facts.sdk;sdkValid=$script:facts.sdkMetadata;failureCode=$null}
+    }
     function script:Get-ItemProperty {
         param($Path)
         if ($Path -match 'Uninstall') {
@@ -74,6 +78,11 @@ try {
     $facts.hostingBundle=$false; Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'; $facts.hostingBundle=$true
     $facts.ancm=$false; Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'; $facts.ancm=$true
     $facts.sdk=$false; Check-Code 'APPROVED_SCOM_CONSOLE_SDK_REQUIRED'; $facts.sdk=$true
+    $facts.sdkMetadata=$false; Check-Code 'SCOM_SDK_ASSEMBLY_METADATA_REQUIRED'; $facts.sdkMetadata=$true
+    $checks=(Get-ScomSetupPrerequisites $plan).checks
+    if (@($checks | Where-Object { -not $_.remedy }).Count -ne 0 -or
+        @($checks | Where-Object { $_.name -match 'Local.*SCOM SDK' }).Count -ne 1) { throw 'Every actual prerequisite requires an actionable remedy and SDK metadata label' }
+    $count++
     $facts.restart=$true; Check-Code 'RESTART_REQUIRED'; $facts.restart=$false
     foreach ($conflict in @('poolExists','siteExists')) {
         $facts.$conflict=$true

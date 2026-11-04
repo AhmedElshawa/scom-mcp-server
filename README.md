@@ -290,8 +290,11 @@ make the agent return inventory.
 For the double-click experience, extract the complete reviewed evaluation ZIP and
 open **`ci-evaluation\ScomSetup.exe`**. The native Windows Forms wizard bundles its
 own x64 runtime, so it opens before the app's .NET Hosting Bundle is present.
-It guides prerequisite checks, placement/log/scope selection and separately
-confirmed installation stages; it does not start collection or recurrence merely
+It starts with automatic read-only prerequisite checks (green PASS / red BLOCKED),
+then uses sequential Back/Next screens for log folder, discovered IIS placement,
+execution account and source/scope selection. Detailed overrides and real
+external evidence gates are kept in Advanced. Separately confirmed installation
+stages do not start collection or recurrence merely
 by opening. Keep all extracted files together. See the
 [double-click quickstart and signing limitations](docs/guided-setup.md#double-click-quickstart).
 The evaluation executable is unsigned, not automatically customer-trusted;
