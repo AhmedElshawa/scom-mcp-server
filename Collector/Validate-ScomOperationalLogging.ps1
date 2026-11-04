@@ -94,11 +94,28 @@ try {
         }
     }
     finally {$process.Dispose()}
-    if ($PSVersionTable.PSEdition -eq 'Desktop') {
-        $events=@(Get-Content -LiteralPath $path | ForEach-Object {($_ | ConvertFrom-Json).event})
-        if ($events[-1] -cne 'profile.failed' -or $events -cnotcontains 'profile.started') {
-            throw 'Desktop profile did not persist sanitized failure lifecycle events.'
+    if ($PSVersionTable.PSEdition -ne 'Desktop') {
+        # Core rejects the Desktop-only profile before logging. Exercise the
+        # identical two-event rotation boundary without an SDK or policy change.
+        Write-SCOMOperationalEvent -Log $log -Event 'profile.started'
+        Write-SCOMOperationalEvent -Log $log -Event 'profile.failed'
+    }
+    # The preceding rotation exercise leaves 854 bytes active: started fits,
+    # but failed rotates it. Lifecycle evidence spans the retained stream.
+    $events=@(
+        for ($i=$log.RetainedFiles-1; $i -ge 0; $i--) {
+            $candidate=$path
+            if ($i -gt 0) { $candidate="$path.$i" }
+            if (Test-Path -LiteralPath $candidate) {
+                Get-Content -LiteralPath $candidate | ForEach-Object {($_ | ConvertFrom-Json).event}
+            }
         }
+    )
+    $lifecycle=@($events | Where-Object {$_ -cin @('profile.started','profile.failed')})
+    $activeEvents=@(Get-Content -LiteralPath $path | ForEach-Object {($_ | ConvertFrom-Json).event})
+    if (($lifecycle -join ',') -cne 'profile.started,profile.failed' -or
+        $activeEvents[-1] -cne 'profile.failed') {
+        throw 'Profile stream did not persist ordered sanitized failure lifecycle events.'
     }
     Write-Output 'Collector logging: schema allowlist, all three Setup events in collector stream, no customer values, silent stdout, bounded rotation, invalid/missing/UNC/ADS/reparse paths, locked-file fail-closed and offline profile stderr/stdout passed.'
 }
