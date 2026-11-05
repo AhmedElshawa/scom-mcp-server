@@ -152,15 +152,22 @@ private worker configuration, databases and checkpoints are never copied over.
     $workers = @(Get-CimInstance Win32_Process -ErrorAction Stop |
         Where-Object { $_.CommandLine -match '(^|\s)--worker(-once)?(\s|$)' })
     if ($workers.Count) { throw 'Stop and inspect existing workers/source children before upgrading; no process was killed.' }
-    foreach ($task in Get-ScheduledTask -ErrorAction Stop) {
-        foreach ($action in $task.Actions) {
-            if ([string]$action.Arguments -match '(^|\s)--worker(\s|$)' -and
-                ([string]$action.Arguments).IndexOf((Join-Path $target 'ScomMcp.dll'), [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
-                ([string]$task.State -eq 'Running' -or $task.Settings.Enabled)) {
-                throw 'An existing task for this worker must be stopped and disabled during upgrade.'
+    function Assert-NoActiveWorkerTask([object[]]$Tasks, [string]$TargetDll) {
+        foreach ($task in $Tasks) {
+            foreach ($action in $task.Actions) {
+                $argumentsProperty = $action.PSObject.Properties['Arguments']
+                if ($null -eq $argumentsProperty) { continue }
+                $actionArguments = [string]$argumentsProperty.Value
+                if ($actionArguments -match '(^|\s)--worker(\s|$)' -and
+                    $actionArguments.IndexOf($TargetDll, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+                    ([string]$task.State -eq 'Running' -or $task.Settings.Enabled)) {
+                    throw 'An existing task for this worker must be stopped and disabled during upgrade.'
+                }
             }
         }
     }
+    Assert-NoActiveWorkerTask -Tasks @(Get-ScheduledTask -ErrorAction Stop) `
+        -TargetDll (Join-Path $target 'ScomMcp.dll')
     $null = Get-Item -LiteralPath ('IIS:\AppPools\' + $pool) -ErrorAction Stop
     $apps = @()
     $virtualRoots = @()

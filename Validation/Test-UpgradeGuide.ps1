@@ -1,8 +1,11 @@
 [CmdletBinding()]
-param()
+param([string]$GuidePath)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version 2
-$guide = Get-Content -LiteralPath (Join-Path $PSScriptRoot '..\docs\easy-indexed-upgrade.md') -Raw
+if ([string]::IsNullOrWhiteSpace($GuidePath)) {
+    $GuidePath = Join-Path $PSScriptRoot '..\docs\easy-indexed-upgrade.md'
+}
+$guide = Get-Content -LiteralPath $GuidePath -Raw
 $blocks = [regex]::Matches($guide, '(?s)```powershell\r?\n(.*?)```')
 $count = 0
 foreach ($block in $blocks) {
@@ -22,6 +25,13 @@ $localDirectory = $ast.Find({
 }, $true)
 if ($null -eq $localDirectory) { throw 'Missing local-path preflight.' }
 . ([scriptblock]::Create($localDirectory.Extent.Text))
+$taskGuard = $ast.Find({
+    param($node)
+    $node -is [Management.Automation.Language.FunctionDefinitionAst] -and
+        $node.Name -eq 'Assert-NoActiveWorkerTask'
+}, $true)
+if ($null -eq $taskGuard) { throw 'Missing existing-worker task guard.' }
+. ([scriptblock]::Create($taskGuard.Extent.Text))
 foreach ($invalid in @('relative', '\\server\share', 'C:\', 'C:\missing-synthetic-path-782a38')) {
     $rejected = $false
     try { $null = LocalDirectory $invalid }
@@ -32,6 +42,47 @@ foreach ($invalid in @('relative', '\\server\share', 'C:\', 'C:\missing-syntheti
 $temp = [IO.Path]::GetTempPath().TrimEnd('\')
 if ((LocalDirectory $temp) -ne $temp) { throw 'Upgrade preflight rejected the existing local temporary directory.' }
 $count++
+function New-SyntheticTask([string]$State, [bool]$Enabled, [object[]]$Actions) {
+    return [pscustomobject]@{
+        State = $State
+        Settings = [pscustomobject]@{ Enabled = $Enabled }
+        Actions = $Actions
+    }
+}
+$targetDll = 'C:\Existing\IIS\ScomMcp.dll'
+$nonExec = [pscustomobject]@{ ClassId = '{synthetic-com-handler}' }
+Assert-NoActiveWorkerTask -TargetDll $targetDll -Tasks @(
+    (New-SyntheticTask 'Running' $true @($nonExec))
+)
+$count++
+$otherExec = [pscustomobject]@{
+    Execute = 'C:\Windows\System32\cmd.exe'
+    Arguments = '/c echo unrelated task'
+}
+Assert-NoActiveWorkerTask -TargetDll $targetDll -Tasks @(
+    (New-SyntheticTask 'Running' $true @($otherExec))
+)
+$count++
+$inactiveWorker = [pscustomobject]@{
+    Execute = 'C:\Program Files\dotnet\dotnet.exe'
+    Arguments = '"C:\Existing\IIS\ScomMcp.dll" --worker "C:\private\worker.json" --runtime-state-dir "C:\state"'
+}
+Assert-NoActiveWorkerTask -TargetDll $targetDll -Tasks @(
+    (New-SyntheticTask 'Ready' $false @($inactiveWorker))
+)
+$count++
+$activeWorkerRejected = $false
+try {
+    Assert-NoActiveWorkerTask -TargetDll $targetDll -Tasks @(
+        (New-SyntheticTask 'Ready' $true @($nonExec, $inactiveWorker))
+    )
+}
+catch {
+    if ($_.Exception.Message -notmatch 'stopped and disabled') { throw }
+    $activeWorkerRejected = $true
+}
+if (-not $activeWorkerRejected) { throw 'Active matching Exec task was not blocked.' }
+$count++
 foreach ($required in @(
     'Stop-WebAppPool -Name $pool',
     "if (`$relative -eq 'web.config' -or `$file.Name -like 'appsettings*.json') { continue }",
@@ -40,6 +91,8 @@ foreach ($required in @(
     'SetAccessRuleProtection($true, $false)',
     "Get-CimInstance Win32_Process -ErrorAction Stop",
     'Get-ScheduledTask -ErrorAction Stop',
+    '$null -eq $argumentsProperty',
+    "Assert-NoActiveWorkerTask -Tasks @(Get-ScheduledTask -ErrorAction Stop)",
     'Get-WebApplication -Site $site.Name',
     'Start-WebAppPool -Name $pool'
 )) {
