@@ -140,6 +140,96 @@ authenticated source freshness, followed by another refresh cycle. If recovery
 is refused, retain evidence and investigate; do not clear checkpoints, delete
 ledger rows, submit manual SQL writes or repeatedly rearm.
 
+## Observed evaluation and reboot boundary
+
+The following is bounded lab evidence, not a guarantee or production acceptance:
+
+- The first public preview's pasted upgrade block failed before stopping IIS or
+  copying files because StrictMode encountered a scheduled-task action without an
+  `Arguments` property. The guard now skips actions that do not expose that
+  property and still checks executable worker actions. The fix is in the
+  repository patch PR; the immutable earlier preview ZIP/tag has not been
+  replaced.
+- After running the corrected full upgrade block, the operator confirmed the
+  existing private configuration, pinned profile and databases were preserved.
+  The worker task was started and the agent reported a new fresh dataset with
+  complete 3/3 expected coverage.
+- A subsequent reboot was performed without first requesting a clean worker
+  stop. The startup task ran and exited nonzero. Its runtime status still showed
+  the preboot `running` state (worker start 07:47:48, last publication 07:48:29
+  on the server clock); boot was at 07:53:33 and the task invocation at 07:53:53.
+  This is consistent with the persisted prior-running fail-closed gate, but the
+  exact exit cause was not independently established. Do not document it as a
+  proven cause or as successful unattended recovery.
+- After verifying the exact task was stopped, its identity/action matched, no
+  worker process remained, and the status was stale from before boot, the
+  operator explicitly rearmed and started the task. The agent then confirmed a
+  fresh postboot dataset collected at 08:03:35Z with complete 3/3 expected
+  coverage. This verifies the guarded, operator-driven recovery path only.
+
+**Reboot procedure:** for a planned reboot, request a cooperative clean stop,
+verify task/runtime status records a clean stop, and leave the startup task
+enabled. After boot, verify a new publication and authenticated source freshness.
+This clean-stop-then-reboot sequence has **not** yet been live-tested. An
+unexpected interruption or reboot without a prior clean stop can leave the
+persisted state gated and require diagnosis plus explicit rearm; startup never
+silently clears that state. Never delete or rewrite status/checkpoints to make
+startup proceed. A clean process stop also cannot guarantee cancellation of
+work already accepted by a remote/backend system.
+
+For a planned stop without invoking the packaged PowerShell scripts, the native
+worker control accepts only the explicitly supplied runtime-state directory.
+Set the values to the exact saved task fields, then verify the task marker,
+identity, action and running state before requesting stop:
+
+```powershell
+$ErrorActionPreference = 'Stop'
+$taskName = 'YOUR EXACT TASK NAME'
+$taskPath = '\'
+$workerAccount = 'DOMAIN\approved-worker'
+$dotnet = 'C:\Program Files\dotnet\dotnet.exe'
+$dll = 'C:\ApprovedApps\ScomMcp\ScomMcp.dll'
+$config = 'C:\ProtectedWorker\worker.json'
+$runtime = 'C:\ProgramData\ScomMcpWorker\runtime'
+
+$task = Get-ScheduledTask -TaskName $taskName -TaskPath $taskPath -ErrorAction Stop
+$expectedArguments = '"{0}" --worker "{1}" --runtime-state-dir "{2}"' -f $dll, $config, $runtime
+if ([string]$task.State -ne 'Running' -or
+    $task.Description -ne "SCOM-MCP-DURABLE-INDEXED-REFRESH-V1; StateDirectory=$runtime" -or
+    [string]$task.Principal.UserId -ine $workerAccount -or
+    [string]$task.Principal.LogonType -ne 'Password' -or
+    -not $task.Settings.Enabled -or
+    @($task.Actions).Count -ne 1 -or
+    $task.Actions[0].Execute.Trim('"') -ine $dotnet -or
+    $task.Actions[0].Arguments -cne $expectedArguments -or
+    $task.Actions[0].WorkingDirectory -ine (Split-Path -Parent $dll) -or
+    [string]$task.Settings.MultipleInstances -ne 'IgnoreNew' -or
+    [int]$task.Settings.RestartCount -ne 0) {
+    throw 'Exact running owned task contract does not match; stop request refused.'
+}
+$workers = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+    $_.CommandLine -and $_.CommandLine.IndexOf($dll, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $_.CommandLine -match '(^|\s)--worker(\s|$)'
+})
+if ($workers.Count -ne 1) { throw 'Expected exactly one matching worker process; inspect before stopping.' }
+$status = Get-Content -LiteralPath (Join-Path $runtime 'worker.status.json') -Raw | ConvertFrom-Json
+if ($status.state -ne 'running' -or $status.rearmRequired -ne $false -or
+    $status.failureCode -or [int]$status.processId -ne [int]$workers[0].ProcessId) {
+    throw 'Runtime status does not identify this healthy running worker; stop request refused.'
+}
+& $dotnet $dll --worker-stop-request $runtime
+if ($LASTEXITCODE -ne 0) { throw 'Stop request refused; preserve state and inspect the task.' }
+```
+
+Wait for the exact task to stop, then inspect its protected `worker.status.json`.
+Proceed with reboot only when `state=stopped`, `failureCode` is null, and
+`rearmRequired=false`. Do not disable the task for a planned reboot. For an
+unexpected prior-running state, use the separately guarded native explicit
+rearm procedure in the [upgrade and recovery guide](../../docs/easy-indexed-upgrade.md)
+only after confirming the task is stopped, the saved identity/action/runtime
+directory match, no worker remains, and the preboot status is understood.
+Malformed or ambiguous status is a stop-and-investigate condition.
+
 Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `LastOutcome`,
 `FailureCode`, `LastFailureCode`, `RearmRequired`, and `LastPublicationUtc`
 together. `deferred` means the last
