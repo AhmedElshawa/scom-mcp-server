@@ -228,6 +228,11 @@ public sealed class ReadModelStore
                     tx.Commit();
                     return sessionId;
                 }
+                if (existing.Publisher == publisher && existing.State == "staging" &&
+                    existing.Expires <= clock.GetUtcNow() &&
+                    Convert.ToInt64(Scalar(db, tx, "SELECT count(*) FROM batches WHERE run=$id",
+                        ("$id", sessionId))) == 0)
+                    throw new QueryFault("INGESTION_REJECTED", "SESSION_EXPIRED_EMPTY_RESERVATION");
                 Require(existing.Publisher == publisher && existing.State == "staging" &&
                     existing.Expires > clock.GetUtcNow(), "SESSION_REPLAY_OR_EXPIRED");
                 tx.Commit();

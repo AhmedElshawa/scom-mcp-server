@@ -106,6 +106,40 @@ or unknown status is not repaired automatically; preserve and inspect it rather
 than editing or deleting state to bypass the gate. Rearm is not proof of backend
 cancellation or successful publication.
 
+### Expired reservation recovery
+
+A worker can stop after reserving/beginning ingestion but before persisting a
+prepared dataset. Previously, an expired receiver session in this state caused
+every subsequent Begin to return HTTP 409 for the same pinned reservation.
+Rearm alone cannot correct that protocol conflict.
+
+The receiver now returns `SESSION_EXPIRED_EMPTY_RESERVATION` only when the exact
+authenticated publisher owns an expired staging session with zero stored
+batches. After that response, the worker can atomically replace its reservation
+only when its durable checkpoint has no pending/prepared payload and the
+reservation is not acknowledged. Prior acknowledgement and reconciliation
+history remain intact. One attempt permits at most one replacement and one new
+Begin; a further conflict stops normally. The receiver's consumed-session
+ledger is retained. No old prepared data is relabeled under the new identity.
+
+Both the receiver and worker must use this updated package. An older receiver's
+generic HTTP 409 does not authorize recovery. Prepared, nonempty, missing-ledger
+or otherwise ambiguous sessions stay pinned and fail closed; committed pending
+sessions retain the existing same-identity replay/acknowledgement path.
+
+For an approved deployment, first stop the exact worker and verify its process
+and source children have exited. Preserve protected backups of runtime status,
+logs, worker checkpoint and receiver state. Deploy the reviewed package to both
+receiver and worker using the existing controlled deployment procedure; keep
+private configuration, publisher identity, source scope, freshness policy and
+databases unchanged. Verify the running receiver and worker binaries match the
+reviewed package. Then diagnose the stopped state, explicitly rearm with
+`Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure`, inspect status, and start once
+with `Start-ScomWorkerTask.ps1`. Require a new committed publication and
+authenticated source freshness, followed by another refresh cycle. If recovery
+is refused, retain evidence and investigate; do not clear checkpoints, delete
+ledger rows, submit manual SQL writes or repeatedly rearm.
+
 Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `LastOutcome`,
 `FailureCode`, `LastFailureCode`, `RearmRequired`, and `LastPublicationUtc`
 together. `deferred` means the last

@@ -80,6 +80,7 @@ static class Checks
             await ReadModelChecks.Run(root);
             await ReadModelFaultChecks.Run(root);
             await IngestionPublisherChecks.Run(root);
+            await ExpiredReservationChecks.Run(root);
             await CollectionSchedulerChecks.Run();
             await IndexedWindowsChecks.Run(root, dataset);
             AlertReconcilerChecks.Run();

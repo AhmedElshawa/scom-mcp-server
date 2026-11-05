@@ -343,6 +343,21 @@ it to bypass the gate. Rearm does not establish that a remote/backend operation
 was cancelled or that publication succeeded; retain evidence and reconcile
 before resuming collection.
 
+An expired ingestion reservation with no local prepared payload can be recovered
+without clearing databases: deploy the reviewed matching receiver and worker
+package while the exact worker is stopped, preserving private configuration,
+protected backups, checkpoint and receiver ledger. The updated receiver must
+explicitly return `SESSION_EXPIRED_EMPTY_RESERVATION` for the same publisher's
+expired staging session with zero batches. Only then may the worker replace an
+unprepared, unacknowledged durable reservation once per attempt. Local pending
+payloads, receiver batches and ambiguous outcomes never authorize rotation;
+committed pending publications retain same-identity reconciliation. An old
+receiver's generic `PUBLISHER_HTTP_409` cannot authorize this recovery. After
+diagnosis, explicitly rearm and start once, then verify committed publication
+and a subsequent refresh with authenticated freshness checks. See the operational
+README's expired reservation procedure; never reset checkpoints or edit
+receiver/session tables to bypass a rejection.
+
 The worker's last publication timestamp and the task's `Running` state are
 separate signals. Use authenticated `get_source_status`, coverage and the
 configured freshness budgets to decide whether data is still available and
