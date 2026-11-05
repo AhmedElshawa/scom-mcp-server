@@ -119,7 +119,7 @@ Review these paired settings before activation:
 | Settings | Required agreement |
 |---|---|
 | Management-group ID, scope kind, group ID | Same on both sides; group ID is null only for explicitly approved `managementGroup` scope |
-| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` approve the intended fields for actual discovered class names; base-class mappings are not automatically inherited |
+| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` approve the intended fields for actual discovered class names; base-class mappings are not automatically inherited. Optional OS captions additionally require matching worker `windowsMapping.osCaptionProperty` and receiver `WindowsOsCaptionProperty`, plus reviewed `WindowsMetricHosting` for typed source provenance; see [README](../README.md). These are pinned policy changes, not an in-place database edit. |
 | Windows mapping | Verified properties, units, typed relationships and monitoring-role mapping; collect the corresponding hosting relationships |
 | Metrics | Start with worker `metricMappingsByClass={}` and receiver `AllowedMetricsByClass={}` until metric acceptance is separately complete |
 | Freshness | `Source` and `ReadModel` fresh/unavailable settings match |

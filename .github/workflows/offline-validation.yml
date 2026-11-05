@@ -7,6 +7,11 @@ on:
       - main
       - aelshawa-microsoft-scom-group-scalability
   workflow_dispatch:
+    inputs:
+      signing_integration:
+        description: 'Opt in to disposable CurrentUser certificate/trust signing tests (may require an interactive Windows trust prompt)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -82,8 +87,8 @@ jobs:
           .\Validation\Test-NativeSetup.ps1 -PackageDirectory .\artifacts\ci-evaluation -RunBridgeDiagnostic
           .\Validation\Test-BootstrapSchema.ps1 -PackageDirectory .\artifacts\ci-evaluation
           .\Validation\Test-BootstrapTransport.ps1 -PackageDirectory .\artifacts\ci-evaluation
-          powershell.exe -NoProfile -File .\Validation\Test-LocalPackageSigning.ps1 -PackageDirectory .\artifacts\ci-evaluation -AllowEphemeralCiTrust
-          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 signing validation failed.' }
+          powershell.exe -NoProfile -File .\Validation\Test-LocalPackageSigning.ps1 -PackageDirectory .\artifacts\ci-evaluation -RejectionOnly
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 signing rejection validation failed.' }
           Compress-Archive -LiteralPath .\artifacts\ci-evaluation -DestinationPath .\artifacts\scom-evaluation.zip
           $hash = (Get-FileHash -LiteralPath .\artifacts\scom-evaluation.zip -Algorithm SHA256).Hash
           "$hash  scom-evaluation.zip" | Set-Content -LiteralPath .\artifacts\scom-evaluation.zip.sha256 -Encoding ascii
@@ -102,3 +107,33 @@ jobs:
             artifacts/scom-evaluation.zip.sha256
           if-no-files-found: error
           retention-days: 7
+
+  signing-integration:
+    name: Explicit disposable signing integration (not package certification)
+    if: github.event_name == 'workflow_dispatch' && inputs.signing_integration
+    needs: offline-windows
+    runs-on: windows-2022
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the exact reviewed head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Download the exact-head unsigned package
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: evaluation-${{ github.sha }}
+          path: artifacts
+      - name: Verify the package and run explicitly opted-in signing integration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expected = ((Get-Content .\artifacts\scom-evaluation.zip.sha256 -Raw).Trim() -split '\s+')[0]
+          if ((Get-FileHash .\artifacts\scom-evaluation.zip -Algorithm SHA256).Hash -cne $expected) {
+            throw 'Evaluation archive hash mismatch.'
+          }
+          Expand-Archive .\artifacts\scom-evaluation.zip .\artifacts\signing-input
+          powershell.exe -NoProfile -File .\Validation\Test-LocalPackageSigning.ps1 `
+            -PackageDirectory .\artifacts\signing-input\ci-evaluation -AllowEphemeralCiTrust
+          if ($LASTEXITCODE -ne 0) { throw 'Explicit signing integration failed. No trust prompt or signing policy may be bypassed.' }

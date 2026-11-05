@@ -270,7 +270,8 @@ function Get-SCOMGenericScan {
         $projection = ConvertTo-SCOMWindowsInventory -Objects $discovery.Objects -ObservedObjects $objects.ToArray() `
             -Relationships @($relationships.Values) -ExpectedComputerIds @($expectedComputers) `
             -ComputerClass $WindowsComputerClass -OperatingSystemClass $WindowsOsClass -VolumeClass $WindowsVolumeClass `
-            -Mapping $WindowsMapping -AgentClass $WindowsAgentClass -ManagementServerClass $WindowsManagementServerClass
+            -Mapping $WindowsMapping -AllowedPropertiesByClass $AllowedPropertiesByClass `
+            -AgentClass $WindowsAgentClass -ManagementServerClass $WindowsManagementServerClass
         $windows=$projection.Inventory
         if (-not $projection.Complete) { $inventoryReason='SCOM_WINDOWS_PROJECTION_INCOMPLETE' }
     }

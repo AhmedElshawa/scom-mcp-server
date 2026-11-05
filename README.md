@@ -1163,6 +1163,53 @@ only after validating MP property applicability and units. By default,
 computer is agent-managed. Do not use that gate for a mixed scope containing
 management servers or agentless computers.
 
+Optional `windowsMapping.osCaptionProperty` adds a separate observed `osCaption`
+to indexed Windows inventory without changing `osVersion` or its exact-match
+filter. Omit it or use null to keep old mappings working. The caption property
+must be explicitly allowlisted in worker `allowedPropertiesByClass` for each
+actual most-derived OS class; base-class allowlists are not inherited. Missing or
+blank values stay null, and non-string/over-256-character values reject the scan.
+Nothing translates a build number into a release or edition.
+
+The original collector at commit `42af4d0` reads `OSVersionDisplayName` and
+`OSVersion` from `Microsoft.Windows.Server.10.0.OperatingSystem`, combining them
+in the legacy `osVersion` value. This is repository evidence for a **candidate**
+caption property, not evidence that a customer's installed MP discovers it.
+After authorized MP/property review, merge the following fields into the
+existing private configurations (preserve other approved properties):
+
+```json
+{
+  "windowsMapping": { "osCaptionProperty": "OSVersionDisplayName" },
+  "allowedPropertiesByClass": {
+    "Microsoft.Windows.Server.10.0.OperatingSystem": ["OSVersionDisplayName"]
+  }
+}
+```
+
+On the receiver, set `ReadModel.WindowsOsCaptionProperty` to the same exact name,
+add it to `ReadModel.AllowedPropertiesByClass` for each actual OS class, and
+configure the existing `ReadModel.WindowsMetricHosting` with the reviewed
+computer/OS classes and computer-to-OS relationship. Caption provenance reuses
+that typed hosting evidence; this does not change metric selection or arithmetic.
+Activation rejects captions that differ from the hosted OS object's approved
+property, or any non-null caption while the receiver's caption mapping is disabled.
+Both caption mapping and allowlists are pinned database policy. Changing either
+requires the existing approved policy-change/reinitialization procedure with
+protected backups and a fresh collection; do not delete or silently repurpose
+the current database. No SQL schema migration is needed: the additive field is
+stored in the existing indexed Windows snapshot JSON payload.
+
+`list_devices` and `get_device_details` expose nullable `osCaption`;
+`get_inventory_summary` adds an `osCaption` breakdown with an explicit unknown
+bucket. Existing `osVersion` values/filters remain unchanged. The existing
+`list_os_support_assessments` uses the observed caption first, retaining exact
+legacy `osVersion` caption matching when the new field is null. It never strips
+build suffixes or guesses editions. Product support lifecycle is **not** license
+usage, entitlement, contract expiry or ESU enrollment. Those require an
+authoritative licensing/SAM/CMDB source; no product keys or license records are
+collected by this feature.
+
 For mixed scopes, optional `windowsMapping.monitoringRoleMapping` replaces the
 agent-only assertion with SDK class identity and exact typed application hosting:
 

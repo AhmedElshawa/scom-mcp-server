@@ -72,7 +72,42 @@ as the **exact selected worker account**, choose its installed private
 capture credentials, impersonate the worker or require that account to read the
 administrator-only host journal. Return as the host administrator to record the
 receipt and reader acceptance. Durable task registration and recurrence remain
-separate opt-in operations, not a consequence of double-clicking.
+separate opt-in operations on the final **Acceptance and recovery** screen, not
+a consequence of double-clicking.
+
+## One package for a fresh customer installation
+
+The fresh-install path uses the same complete package for the GUI, server,
+collector and durable worker. Examples are not installed customer configuration:
+do not copy a developer's `C:\ProgramData\ScomAiWorker\...` paths into production.
+The wizard proposes local paths, accepts customer-selected alternatives and derives
+the installed worker JSON, checkpoint, collector script/hash and runtime directory.
+
+| Customer gate | What happens only after approval |
+|---|---|
+| Local prerequisites | Inspect actual results; explicitly approve a supported prerequisite install if needed, then recheck. |
+| Environment inputs | Supply the existing worker identity, approved SCOM management group/group or supported-Windows scope, IIS/HTTPS hostname and certificate, Entra identity/reader configuration and reviewed source/property mappings. Unknown evidence remains blocked. |
+| Prepare / Configure / Activate | Confirm each stage. Configure derives private paths and script pins from the installed bytes; Activate starts only the owned HTTPS app. |
+| Worker publication / host acceptance | Connect and publish once as the exact worker account. Return as administrator to record the receipt and attest external reader/scope acceptance. |
+| Optional ongoing cadence | Keep manual cadence, or use **Register optional startup worker** after acceptance. No hand-built scheduled task or hand-entered runtime paths are needed. |
+
+This is guided setup, not a no-input or unattended installation. Customer SCOM MP
+properties/visibility, identities/permissions, certificates/HTTPS, approved package
+trust and external reader acceptance cannot be inferred or supplied by the package.
+
+**OS version and product name:** `osVersion` retains the exact observed version;
+the same package also supports a separate optional `osCaption` product/edition.
+For a customer-approved `OSVersionDisplayName` property, configure worker
+`windowsMapping.osCaptionProperty` and receiver
+`ReadModel.WindowsOsCaptionProperty` with that exact name, matching explicit
+property allowlists for each actual most-derived OS class and the existing
+reviewed `WindowsMetricHosting` relationship. Configure rejects mismatched paired
+caption mappings/allowlists/hosting. It never silently enables or invents them.
+See the [source contract and candidate MP evidence](../README.md).
+Missing, blank or unconfigured captions remain **unknown/null**; the package does
+not infer a Windows marketing name from a version/build. The presence of
+`OSVersionDisplayName` in legacy repository code does not establish that the
+customer's installed MP populates it.
 
 **Trust/signing limitation:** this evaluation EXE and repository scripts do not
 carry a customer-trusted publisher signature. A self-contained EXE does not
@@ -84,6 +119,14 @@ before checks/actions can run. Have the customer's authorized signing/review
 process approve the EXE and scripts. If Windows blocks it, stop and use that
 process; do not bypass the warning. No embedded credentials or fake signing
 certificate are supplied.
+
+The normal PR artifact is an **unsigned evaluation package**. CI runs manifest,
+tamper and missing-signer rejection tests without creating a certificate or
+changing trust. Actual local signed-derivative integration remains a separate
+explicit workflow-dispatch opt-in: Windows protected-root trust can require an
+interactive prompt, which unattended CI must not auto-approve or bypass.
+Passing the package workflow does not claim that signing integration passed,
+establish customer publisher trust or certify a customer installation.
 
 Offline CI starts the packaged EXE with shared .NET lookup paths disabled and
 checks that its loaded runtime is the packaged runtime and the native form can
@@ -389,14 +432,40 @@ audit certification, and ACLs do not isolate logs from machine administrators.
 Normal IIS/Windows event and approved prerequisite-installer logs are separate
 platform diagnostics governed by customer retention policy.
 
-## Durable refresh remains a separate opt-in
+## Guided durable refresh remains a separate opt-in
 
 The complete package includes
 [DurableIndexedRefresh operations](../Operations/DurableIndexedRefresh/README.md).
-After reviewed one-shot publication and acceptance, use that lane to explicitly
-approve registration and separately starting the durable worker under the exact
-worker identity. Setup/preflight never registers a task, runs a collection or
-enables recurrence. Metrics and targeted-live checks remain disabled. Bounded
+After reviewed one-shot publication and acceptance, the host administrator can use
+the final native page's **Register optional startup worker**. Its visible normal
+Windows PowerShell window reads the protected accepted journal, checks installed
+and configuration hashes, derives all paths and requests the exact selected worker
+credential through Windows. It does not add trust, change execution policy or
+save credentials in JSON, logs or GUI arguments. Package scripts must be allowed
+by the customer's approved trust policy for that account.
+
+Confirming registration creates an **enabled AtStartup task**: it does **not**
+start it immediately, but the task **can start after a reboot** without another
+prompt. Explicitly approve that recurrence before confirming registration. To run
+now, separately choose **Start registered worker** and confirm in its window.
+**Worker task status** is read-only; **Stop registered worker** requires its own
+confirmation. The existing exact ownership/action/worker checks still apply; an
+unrelated existing task or changed deployment is not reused or overwritten.
+Closing/cancelling the window is not proof of success; inspect its result and task
+status. An unresolved terminal failure still requires the separate reviewed rearm
+procedure in the operations runbook; Start never silently rearms.
+
+The handoff derives `<installPath>\server\ScomMcp.dll`,
+`<privatePath>\worker.json` and `<workerStatePath>\runtime`; runtime state is
+separate from `<workerStatePath>\worker.db`. The new runtime directory must be
+empty for new registration. Status/start/stop preserve existing runtime state and
+require an exactly matching owned task. Do not edit the private installed-file
+manifest, configuration hashes or journal to force a handoff through.
+
+Keeping manual cadence is supported: do not register the startup task and use the
+separately approved one-shot worker lane when needed. Preflight, navigation and
+ordinary setup stages never register/start tasks or collect automatically.
+Metrics and targeted-live checks remain disabled. Bounded
 runtime-state evidence from the durable worker is separate from the operational
 logs above; preserve both when investigating interrupted work.
 
@@ -563,7 +632,8 @@ denial, pagination and stale/partial behavior. Then explicitly attest that evide
 ```
 
 `Accept` records operator attestation only. Recurrence is a **separate opt-in**
-manual decision after acceptance. Metrics and targeted-live remain disabled;
+decision after acceptance through the guided task handoff (or advanced operations
+scripts), not a required hand-built Task Scheduler step. Metrics and targeted-live remain disabled;
 no certified live SCOM provider ships in this package.
 
 ## Interruption and recovery

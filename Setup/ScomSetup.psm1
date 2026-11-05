@@ -91,6 +91,27 @@ function Get-ScomSetupScopeDescription {
     "existing approved group $($Plan.groupId)"
 }
 
+function Get-ScomSetupWorkerTaskArguments {
+    param([Parameter(Mandatory)]$Plan,[Parameter(Mandatory)]$State)
+    Assert-ScomSetupPlan $Plan
+    if ($State.schemaVersion -ne 1 -or $State.stage -cne 'accepted' -or $State.pendingAction) {
+        throw 'SETUP_ACCEPTANCE_REQUIRED_BEFORE_RECURRENCE'
+    }
+    @{
+        WorkerDllPath=(Join-Path $Plan.installPath 'server\ScomMcp.dll')
+        WorkerConfigPath=(Join-Path $Plan.privatePath 'worker.json')
+        StateDirectory=(Join-Path $Plan.workerStatePath 'runtime')
+    }
+}
+
+function Assert-ScomSetupWorkerTaskMatch {
+    param($Arguments,$Task,$Action,[string]$WorkerAccount)
+    if ($Action.DllPath -ine $Arguments.WorkerDllPath -or
+        $Action.ConfigurationPath -ine $Arguments.WorkerConfigPath -or
+        $Action.StateDirectory -ine $Arguments.StateDirectory -or
+        $Task.Principal.UserId -ine $WorkerAccount) { throw 'SETUP_TASK_DEPLOYMENT_MISMATCH' }
+}
+
 function Save-ScomSetupJson {
     param([string]$Path, $Value)
     Assert-ScomSetupPath $Path
@@ -329,6 +350,35 @@ function Merge-ScomSetupConfiguration {
         ($Plan.scopeKind -ceq 'managementGroup' -and
             ($Receiver.ReadModel.WindowsToolsEnabled -ne $true -or $null -eq $Worker.profile.configuration.windowsMapping))) {
         throw 'SETUP_REVIEWED_CONFIGURATION_SCOPE_OR_DISABLED_GUARDS'
+    }
+    $configuration=$Worker.profile.configuration
+    $workerCaption=$null;$receiverCaption=$null
+    if ($configuration.PSObject.Properties['windowsMapping'] -and $null -ne $configuration.windowsMapping -and
+        $configuration.windowsMapping.PSObject.Properties['osCaptionProperty']) {
+        $workerCaption=$configuration.windowsMapping.osCaptionProperty
+    }
+    if ($Receiver.ReadModel.PSObject.Properties['WindowsOsCaptionProperty']) {
+        $receiverCaption=$Receiver.ReadModel.WindowsOsCaptionProperty
+    }
+    if ($null -ne $workerCaption -or $null -ne $receiverCaption) {
+        if ($workerCaption -isnot [string] -or [string]::IsNullOrWhiteSpace($workerCaption) -or
+            $workerCaption.Length -gt 128 -or $workerCaption -match '[*?\[\]]' -or
+            $workerCaption -cne $receiverCaption -or $Receiver.ReadModel.WindowsToolsEnabled -ne $true -or
+            $null -eq $Receiver.ReadModel.WindowsMetricHosting) { throw 'SETUP_REVIEWED_OS_CAPTION_MAPPING_MISMATCH' }
+        $mapping=$configuration.windowsMapping;$hosting=$Receiver.ReadModel.WindowsMetricHosting
+        if ($hosting.ComputerClass -cne $mapping.computerClassName -or
+            $hosting.OperatingSystemClass -cne $mapping.operatingSystemClassName -or
+            $hosting.RelationshipClass -cne $mapping.computerHostsOsRelationship) {
+            throw 'SETUP_REVIEWED_OS_CAPTION_MAPPING_MISMATCH'
+        }
+        $workerClasses=@($configuration.allowedPropertiesByClass.PSObject.Properties |
+            Where-Object { $workerCaption -cin @($_.Value) } | ForEach-Object Name)
+        $receiverClasses=@($Receiver.ReadModel.AllowedPropertiesByClass.PSObject.Properties |
+            Where-Object { $workerCaption -cin @($_.Value) } | ForEach-Object Name)
+        if ($workerClasses.Count -eq 0 -or $workerClasses.Count -ne $receiverClasses.Count -or
+            @($workerClasses | Where-Object { $_ -cnotin $receiverClasses }).Count -ne 0) {
+            throw 'SETUP_REVIEWED_OS_CAPTION_ALLOWLIST_MISMATCH'
+        }
     }
     if ($Receiver.Auth.Callers.Count -eq 0 -or @($Receiver.Auth.Callers | Where-Object {
         -not $_.ObjectId -or $_.Scopes.Count -ne 1 -or $_.Scopes[0] -cne 'scom-lab'

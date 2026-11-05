@@ -12,6 +12,8 @@ internal sealed class WizardForm : Form
     internal Func<string, bool, bool>? EffectDecision { get; set; }
     internal Action? BusyCloseNotice { get; set; }
     internal bool IsBusy => busy;
+    internal bool CanManageWorkerTask => !busy && !workerPlanMode.Checked && acceptedTaskJournal is not null &&
+        acceptedTaskJournal == fields["stateDirectory"].Text.Trim();
     internal string StatusText => status.Text;
     internal Func<string, bool> DiagnosticWriter { get; set; }
     private readonly Panel pages = new() { Dock = DockStyle.Fill };
@@ -34,6 +36,7 @@ internal sealed class WizardForm : Form
     private bool prerequisitesPassed;
     private bool actualChecksReceived;
     private string? deploymentStage;
+    private string? acceptedTaskJournal;
     private bool sourceConnected;
     private bool updating;
     private bool defaultsApplied;
@@ -55,6 +58,7 @@ internal sealed class WizardForm : Form
     private readonly Button back = new() { Text = "Back", AutoSize = true };
     private readonly Button next = new() { Text = "Next", AutoSize = true };
     private readonly Button elevate = new() { Text = "Restart as administrator", AutoSize = true };
+    private readonly List<Button> taskButtons = [];
     private bool busy;
     private string? loadedGroupId;
     private static readonly string[] Actions = ["Bootstrap", "Preflight", "Discover", "Prepare", "Configure", "Activate", "Status",
@@ -93,6 +97,7 @@ internal sealed class WizardForm : Form
             "Existing deployments must be explicitly resumed. Host and exact-worker sessions are separate.");
         Field(details, "packagePath", "Reviewed package (fixed)", packageRoot, readOnly: true);
         Field(details, "stateDirectory", "Private journal directory (new or existing)", browse: "folder");
+        fields["stateDirectory"].TextChanged += (_, _) => UpdateNavigation();
         Field(details, "planPath", "Installed private setup-plan.json (worker resume)", browse: "json");
         details.Controls.Add(workerPlanMode);
         ActionButton(details, "Load status / resume", "Status");
@@ -187,6 +192,8 @@ internal sealed class WizardForm : Form
         ActionButton(scope, "Discover existing groups…", "Discover");
         scope.Controls.Add(groups); scope.Controls.Add(wholeWindows);
         wholeWindows.CheckedChanged += (_, _) => groups.Enabled = !wholeWindows.Checked;
+        Note(scope, "Windows inventory retains the observed OS version. Optional product/edition (osCaption) requires matching reviewed " +
+            "property mappings (candidate: OSVersionDisplayName) and typed OS hosting; missing or unpopulated values stay unknown. No build-to-product inference.");
         groups.SelectedIndexChanged += (_, _) => { if (groups.SelectedItem is GroupItem item) loadedGroupId = item.Id; };
         Note(scope, "Whole-management-group includes all supported Windows inventory, not every SCOM class. It requires its own separate confirmation.");
 
@@ -237,6 +244,17 @@ internal sealed class WizardForm : Form
         ActionButton(acceptance, "Record operator acceptance…", "Accept");
         ActionButton(acceptance, "Refresh status (read-only)", "Status");
         ActionButton(acceptance, "Recover: stop owned application…", "Recover");
+        Note(acceptance, "Optional durable refresh: manual cadence is safe to keep. After acceptance, use the guided administrator window " +
+            "to register the selected worker with derived paths. Registration enables an AtStartup trigger, but does not start it now. " +
+            "Starting collection is a separate confirmation; Windows requests the task credential only in that window.");
+        foreach (var (title, step) in new[] {
+            ("Register optional startup worker…", "Register"), ("Start registered worker…", "Start"),
+            ("Worker task status…", "Status"), ("Stop registered worker…", "Stop") })
+        {
+            var button = new Button { Text = title, AutoSize = true };
+            button.Click += async (_, _) => await OpenTaskSetupAsync(step);
+            taskButtons.Add(button); acceptance.Controls.Add(button);
+        }
         Docs(acceptance);
 
         back.Click += (_, _) => MovePage(-1);
@@ -385,6 +403,43 @@ internal sealed class WizardForm : Form
             fields["planPath"].Text = proposedWorkerPlanPath;
         }
         catch { /* Preserve the current path until the private directory is valid. */ }
+    }
+
+    internal static ProcessStartInfo TaskSetupStartInfo(string root, string journal, string step)
+    {
+        if (step is not ("Register" or "Start" or "Status" or "Stop") || string.IsNullOrWhiteSpace(journal))
+            throw new InvalidOperationException("Explicit task action and journal required");
+        var start = SetupBridge.StartInfo(root);
+        start.ArgumentList.Clear();
+        start.StandardInputEncoding = null; start.StandardOutputEncoding = null; start.StandardErrorEncoding = null;
+        start.RedirectStandardInput = false; start.RedirectStandardOutput = false; start.RedirectStandardError = false;
+        start.CreateNoWindow = false;
+        foreach (var argument in new[] { "-NoProfile", "-File", Path.Combine(root, @"setup\Start-ScomWorkerTaskSetup.ps1"),
+            "-StateDirectory", journal, "-Step", step }) start.ArgumentList.Add(argument);
+        return start;
+    }
+
+    private async Task OpenTaskSetupAsync(string step)
+    {
+        if (!CanManageWorkerTask) return;
+        if (MessageBox.Show(this, $"Open the administrator task {step.ToLowerInvariant()} window for this accepted deployment? " +
+            "The protected journal supplies paths. Registration enables an AtStartup trigger, not an immediate run. " +
+            "Registration and start each require their own confirmation in that window. No credentials enter the GUI.",
+            "Optional worker cadence", MessageBoxButtons.YesNo, MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2) != DialogResult.Yes) return;
+        SetBusy(true);
+        try
+        {
+            using var child = Process.Start(TaskSetupStartInfo(packageRoot, fields["stateDirectory"].Text.Trim(), step));
+            if (child is null) throw new InvalidOperationException("Task process unavailable");
+            status.Text = "Task window open. Complete or cancel there; no task success is inferred.";
+            await child.WaitForExitAsync();
+            status.Text = child.ExitCode == 0
+                ? "Task window closed; review its result and explicit task status. Closing or cancelling does not prove a task action succeeded."
+                : "SETUP_TASK_HANDOFF_FAILED: task window failed. Preserve task/state; no rollback is inferred.";
+        }
+        catch { status.Text = "SETUP_TASK_HANDOFF_FAILED: task window could not open. No task success is inferred."; }
+        finally { SetBusy(false); }
     }
 
     internal static ProcessStartInfo WorkerHandoffStartInfo(string account, string executable)
@@ -676,6 +731,8 @@ internal sealed class WizardForm : Form
         string current = stages.Contains(response.Stage) ? response.Stage! : "not reported";
         string pending = Actions.Contains(response.PendingAction) ? response.PendingAction! : "none / not reported";
         if (response.Stage is not null || action == "Status" && response.Ok) deploymentStage = response.Stage;
+        acceptedTaskJournal = response.Ok && !response.ApprovalRequired && response.Stage == "accepted" &&
+            response.PendingAction is null ? fields["stateDirectory"].Text.Trim() : null;
         stage.Text = $"Stage: {current} | Pending: {pending}";
         status.Text = response.ApprovalRequired ? "An exact effect approval is required; earlier effects may already have completed." :
             response.Ok ? response.Code == "SETUP_GUI_JOURNAL_READY" ?
@@ -804,6 +861,8 @@ internal sealed class WizardForm : Form
         heading.Text = $"Step {pageIndex + 1} of {pagePanels.Count} · {pageTitles[pageIndex]}";
         back.Enabled = !busy && pageIndex > 0;
         next.Enabled = CanMoveNext;
+        foreach (var button in taskButtons)
+            button.Enabled = CanManageWorkerTask;
         foreach (var entry in actionButtons)
             foreach (var button in entry.Value)
                 button.Enabled = !busy && (entry.Key switch
@@ -820,7 +879,7 @@ internal sealed class WizardForm : Form
                 $"Prerequisites: {(CanInstall ? "passed actual checks" : "blocked / not checked")}\n" +
                 $"External identity / receiver / worker JSON: {(EvidenceInputsPresent ? "files selected; backend review still required" : "MISSING — select reviewed files in Advanced")}\n" +
                 $"Source connection: {(sourceConnected ? "explicit worker check completed; not source certification" : "not verified in this session")}\n" +
-                $"Host stage: {deploymentStage ?? "unknown"} · No recurrence or live checks are enabled by this wizard.";
+                $"Host stage: {deploymentStage ?? "unknown"} · Live checks remain disabled; recurrence requires the separate optional task window.";
     }
     private void SetBusy(bool value)
     {

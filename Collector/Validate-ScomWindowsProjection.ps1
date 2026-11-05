@@ -1,4 +1,4 @@
-param([ValidateSet('','complete','direct','partial','managementServer','unknownRole')] [string]$BridgeMode='')
+param([ValidateSet('','complete','direct','partial','managementServer','unknownRole','legacy','missingCaption','blankCaption','unmappedCaption','buildOnly')] [string]$BridgeMode='')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'ScomWindowsProjection.psm1') -Force
@@ -65,6 +65,35 @@ $result=ConvertTo-SCOMWindowsInventory @projectionArgs
 if (-not $result.Complete -or $result.Inventory.devices.Count -ne 1 -or $result.Inventory.volumes.Count -ne 1 -or
     $result.Inventory.devices[0].memoryTotalMiB -ne 8192 -or $result.Inventory.volumes[0].sizeMiB -ne 10240 -or
     $result.Inventory.volumes[0].parentEntityId -ne $computer.Id.ToString('D')) { throw 'Typed projection or unit conversion failed.' }
+if ($null -ne $result.Inventory.devices[0].osCaption) { throw 'Unconfigured caption must remain null.' }
+$os.Values['Caption']='Microsoft Windows Server 2022 Datacenter'
+$os.Values['Version']='10.0.20348'
+$mapping | Add-Member -NotePropertyName osCaptionProperty -NotePropertyValue 'Caption'
+Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs } 'SCOM_WINDOWS_CAPTION_PROPERTY_NOT_APPROVED'
+$projectionArgs.AllowedPropertiesByClass=@{'Synthetic.Os'=@('caption')}
+Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs } 'SCOM_WINDOWS_CAPTION_PROPERTY_NOT_APPROVED'
+$projectionArgs.AllowedPropertiesByClass=@{'Synthetic.Os'=@('Caption')}
+$result=ConvertTo-SCOMWindowsInventory @projectionArgs
+if ($result.Inventory.devices[0].osCaption -cne $os.Values['Caption'] -or
+    $result.Inventory.devices[0].osVersion -cne '10.0.20348') { throw 'Caption must not replace the observed version.' }
+foreach ($value in @($null,'','  ')) {
+    $os.Values['Caption']=$value
+    $result=ConvertTo-SCOMWindowsInventory @projectionArgs
+    if ($null -ne $result.Inventory.devices[0].osCaption) { throw 'Missing or blank caption must stay null.' }
+}
+$os.Values.Remove('Caption') | Out-Null
+$result=ConvertTo-SCOMWindowsInventory @projectionArgs
+if ($null -ne $result.Inventory.devices[0].osCaption) { throw 'Missing property must not infer caption from build.' }
+foreach ($value in @(123,('x'*257))) {
+    $os.Values['Caption']=$value
+    Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs } 'SCOM_WINDOWS_OS_CAPTION_INVALID'
+}
+foreach ($value in @('', '  ', 'Cap*', ('x'*129), 123)) {
+    $mapping.osCaptionProperty=$value
+    Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs } 'SCOM_WINDOWS_CAPTION_MAPPING_INVALID'
+}
+$mapping.osCaptionProperty='Caption'
+$os.Values['Caption']='Microsoft Windows Server 2022 Datacenter'
 $os.Values['Memory']=$null
 $result=ConvertTo-SCOMWindowsInventory @projectionArgs
 if ($null -ne $result.Inventory.devices[0].memoryTotalMiB) { throw 'Missing memory became zero.' }
@@ -82,7 +111,8 @@ Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs } 'SCOM_
 $mapping.memoryToMiB=1.0/1024
 $projectionArgs.Relationships=@()
 $result=ConvertTo-SCOMWindowsInventory @projectionArgs
-if ($result.Complete -or $result.Inventory.volumes.Count -ne 0 -or $null -ne $result.Inventory.devices[0].osVersion) {
+if ($result.Complete -or $result.Inventory.volumes.Count -ne 0 -or $null -ne $result.Inventory.devices[0].osVersion -or
+    $null -ne $result.Inventory.devices[0].osCaption) {
     throw 'Absent typed hosting must not infer volume parent or OS from names.'
 }
 $projectionArgs.Relationships=@($edges[0],$edges[0],$edges[1])
@@ -219,10 +249,19 @@ $scanArgs=@{
     Request=@{requestedAtUtc=$instant.ToString('o');metricHistoryStartUtc=$instant.AddDays(-14).ToString('o');priorUnresolvedAlerts=@()}
     ReadActiveAlerts={param($object) @()};ReadAlertById={param($id) @()}
     WindowsMapping=$mapping;WindowsComputerClass=$projectionArgs.ComputerClass;WindowsOsClass=$projectionArgs.OperatingSystemClass
+    AllowedPropertiesByClass=$projectionArgs.AllowedPropertiesByClass
     WindowsVolumeClass=$projectionArgs.VolumeClass;AdditionalRelationshipContractVerified=$true
     AdditionalRelationshipClasses=@([pscustomobject]@{Name=$mapping.computerHostsOsRelationship},
         [pscustomobject]@{Name=$mapping.osHostsVolumeRelationship})
 }
+if ($BridgeMode -eq 'legacy') {
+    $mapping.PSObject.Properties.Remove('osCaptionProperty')
+    $scanArgs.AllowedPropertiesByClass=@{}
+}
+if ($BridgeMode -eq 'missingCaption') { $os.Values.Remove('Caption') | Out-Null }
+if ($BridgeMode -eq 'blankCaption') { $os.Values['Caption']='  ' }
+if ($BridgeMode -eq 'unmappedCaption') { $os.Values['Caption']='Windows Server 2022 Datacenter: Azure Edition' }
+if ($BridgeMode -eq 'buildOnly') { $os.Values['Caption']='10.0.26100'; $os.Values['Version']='10.0.26100' }
 if ($BridgeMode -eq 'direct') {
     $mapping.PSObject.Properties.Remove('osHostsVolumeRelationship')
     $mapping | Add-Member -NotePropertyName computerHostsVolumeRelationship -NotePropertyValue 'Synthetic.ComputerHostsDevice'
@@ -258,7 +297,7 @@ if ($BridgeMode -eq '') {
         $wizardGroup.windowsInventory.devices.Count -ne 1) {throw 'Wizard group supportedWindows regression.'}
     $scanArgs.Remove('InventoryKind')
 }
-if ($BridgeMode -in @('complete','direct','managementServer','unknownRole')) {
+if ($BridgeMode -in @('complete','direct','managementServer','unknownRole','legacy','missingCaption','blankCaption','unmappedCaption','buildOnly')) {
     [Console]::Out.Write((@{protocolVersion=1;scan=$scan} | ConvertTo-Json -Depth 24 -Compress))
     return
 }
@@ -288,4 +327,4 @@ if ($BridgeMode -eq 'partial') {
     [Console]::Out.Write((@{protocolVersion=1;scan=$scan} | ConvertTo-Json -Depth 24 -Compress))
     return
 }
-Write-Host 'Windows source projection: 25 synthetic cases passed; typed monitoring roles, missing-role partial coverage and hosting ambiguity rejection.'
+Write-Host 'Windows source projection: synthetic caption opt-in/allowlist/validation, monitoring roles and typed hosting cases passed.'

@@ -25,8 +25,15 @@ public sealed class ReadModelSettings
     public int RequestBodyTimeoutSeconds { get; set; } = 30;
     public bool WindowsToolsEnabled { get; set; }
     public WindowsMetricHostingSettings? WindowsMetricHosting { get; set; }
+    public string? WindowsOsCaptionProperty { get; set; }
     public void Validate()
     {
+        // JSON null can bind to an empty string on supported configuration providers.
+        if (WindowsOsCaptionProperty == "") WindowsOsCaptionProperty = null;
+        if (WindowsOsCaptionProperty is { } captionProperty &&
+            (WindowsMetricHosting is null || string.IsNullOrWhiteSpace(captionProperty) ||
+                captionProperty.Length > 128 || captionProperty.IndexOfAny(['*', '?', '[', ']']) >= 0))
+            throw new InvalidOperationException("WindowsOsCaptionProperty requires an exact property name and reviewed WindowsMetricHosting.");
         if (WindowsMetricHosting is { } hosting)
         {
             if (!WindowsToolsEnabled || new[] { hosting.ComputerClass, hosting.OperatingSystemClass, hosting.RelationshipClass }

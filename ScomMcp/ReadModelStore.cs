@@ -70,6 +70,8 @@ public sealed class ReadModelStore
         if (settings.WindowsToolsEnabled) scope = Wire.Encode(new { schema = 2, policy = scope, windowsTools = true });
         if (settings.WindowsMetricHosting is { } hostingPolicy)
             scope = Wire.Encode(new { schema = 3, policy = scope, windowsMetricHosting = hostingPolicy });
+        if (settings.WindowsOsCaptionProperty is { } captionPolicy)
+            scope = Wire.Encode(new { schema = 4, policy = scope, windowsOsCaptionProperty = captionPolicy });
         var exists = File.Exists(settings.DatabasePath);
         if (exists)
         {
@@ -542,18 +544,35 @@ public sealed class ReadModelStore
         var volumeIds = volumes.Select(v => v.EntityId).ToHashSet(StringComparer.Ordinal);
         Require(!manifest.Inventory.Complete || deviceIds.SetEquals(expected), "WINDOWS_COMPLETE_INVENTORY_MISMATCH");
         var osParents = new Dictionary<string, string>(StringComparer.Ordinal);
+        var computerOperatingSystems = new Dictionary<string, string>(StringComparer.Ordinal);
         if (settings.WindowsMetricHosting is { } hosting)
         {
-            var computerChildren = new HashSet<string>(StringComparer.Ordinal);
             foreach (var edge in relationships.Where(e => e.ClassName == hosting.RelationshipClass))
             {
                 Require(deviceIds.Contains(edge.SourceId) && served.TryGetValue(edge.SourceId, out var computer) &&
                     IsClass(computer, hosting.ComputerClass) && served.TryGetValue(edge.TargetId, out var os) &&
                     IsClass(os, hosting.OperatingSystemClass) && !deviceIds.Contains(edge.TargetId) &&
                     !volumeIds.Contains(edge.TargetId), "WINDOWS_METRIC_HOSTING_INVALID");
-                Require(computerChildren.Add(edge.SourceId) && osParents.TryAdd(edge.TargetId, edge.SourceId),
+                Require(computerOperatingSystems.TryAdd(edge.SourceId, edge.TargetId) && osParents.TryAdd(edge.TargetId, edge.SourceId),
                     "WINDOWS_METRIC_HOSTING_AMBIGUOUS");
             }
+        }
+        foreach (var device in devices)
+        {
+            string? observedCaption = null;
+            if (settings.WindowsOsCaptionProperty is { } property)
+            {
+                if (computerOperatingSystems.TryGetValue(device.EntityId, out var osId))
+                {
+                    var os = served[osId];
+                    Require(settings.AllowedPropertiesByClass.TryGetValue(os.ClassName, out var allowed) &&
+                        allowed.Contains(property, StringComparer.Ordinal) && os.Properties.ContainsKey(property),
+                        "WINDOWS_OS_CAPTION_PROPERTY_NOT_APPROVED");
+                    var raw = os.Properties[property];
+                    observedCaption = string.IsNullOrWhiteSpace(raw) ? null : raw;
+                }
+            }
+            Require(device.OsCaption == observedCaption, "WINDOWS_OS_CAPTION_SOURCE_MISMATCH");
         }
         var samples = new List<Sample>();
         foreach (var metric in metrics)

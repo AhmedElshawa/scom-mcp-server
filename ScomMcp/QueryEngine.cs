@@ -84,6 +84,7 @@ public sealed partial class QueryEngine(SourceSettings settings, TimeProvider cl
             countsAreCompleteForFilteredDataset = true,
             health = Breakdown(rows, d => d.Health), osFamily = Breakdown(rows, d => d.OsFamily),
             osVersion = Breakdown(rows, d => d.OsVersion), virtualization = Breakdown(rows, d => d.Virtualization),
+            osCaption = Breakdown(rows, d => d.OsCaption),
             unknownMemoryCount = rows.Count(d => d.MemoryTotalMiB is null),
             unknownProcessorCount = rows.Count(d => d.ProcessorCount is null),
             duplicatesResolved = ds.DuplicateDevices, volumesExcludedFromComputerCounts = true

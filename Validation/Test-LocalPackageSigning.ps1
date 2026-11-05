@@ -1,7 +1,7 @@
 [CmdletBinding()]
-param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$AllowEphemeralCiTrust)
+param([Parameter(Mandatory)][string]$PackageDirectory,[switch]$AllowEphemeralCiTrust,[switch]$RejectionOnly)
 $ErrorActionPreference='Stop'
-if (-not $AllowEphemeralCiTrust -or $env:GITHUB_ACTIONS -cne 'true') {
+if (($AllowEphemeralCiTrust.IsPresent -eq $RejectionOnly.IsPresent) -or $env:GITHUB_ACTIONS -cne 'true') {
     throw 'Signing integration test is restricted to an explicitly approved disposable GitHub Actions runner.'
 }
 $helper=Join-Path $PSScriptRoot '..\Setup\Sign-ScomEvaluationPackage.ps1'
@@ -36,6 +36,10 @@ try {
     [IO.File]::AppendAllText((Join-Path $changed 'README.md'),'synthetic tamper')
     Reject $bad
     if (Test-Path -LiteralPath $arguments.DestinationDirectory) { throw 'Rejected signing mutated destination.' }
+    if ($RejectionOnly) {
+        Write-Output 'PASS: original manifest pins, overlap/existing outputs, missing signer, file-set and digest rejection. No certificate, trust, signing or policy changes; successful signed-derivative validation was NOT performed.'
+        return
+    }
     Write-Output 'Signing CI: creating nonexportable disposable software Code Signing key.'
     $cert=New-SelfSignedCertificate -Type CodeSigningCert -Subject ('CN=SCOM disposable CI '+[guid]::NewGuid().ToString('N')) `
         -CertStoreLocation Cert:\CurrentUser\My -KeyExportPolicy NonExportable -NotAfter (Get-Date).AddDays(1) `

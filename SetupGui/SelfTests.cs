@@ -91,6 +91,24 @@ internal static class SelfTests
             !start.Environment.ContainsKey("PSExecutionPolicyPreference") &&
             !start.Environment.Keys.Any(k => k.StartsWith("SCOM", StringComparison.OrdinalIgnoreCase)));
         Require(start.StandardInputEncoding is UTF8Encoding);
+        var taskSetup = WizardForm.TaskSetupStartInfo(AppContext.BaseDirectory, @"C:\approved-journal", "Register");
+        Require(taskSetup.ArgumentList.SequenceEqual(new[] { "-NoProfile", "-File",
+            Path.Combine(AppContext.BaseDirectory, @"setup\Start-ScomWorkerTaskSetup.ps1"),
+            "-StateDirectory", @"C:\approved-journal", "-Step", "Register" }) &&
+            !taskSetup.RedirectStandardInput && !taskSetup.RedirectStandardOutput && !taskSetup.RedirectStandardError &&
+            !taskSetup.CreateNoWindow && !taskSetup.UseShellExecute &&
+            !taskSetup.Environment.ContainsKey("PSExecutionPolicyPreference") &&
+            !taskSetup.ArgumentList.Contains("-StartNow") && !form.CanManageWorkerTask);
+        form.RenderResponse(new BridgeResponse { Ok = true, Stage = "published" }, "Status");
+        Require(!form.CanManageWorkerTask);
+        form.RenderResponse(new BridgeResponse { Ok = true, Stage = "accepted", PendingAction = "Recover" }, "Status");
+        Require(!form.CanManageWorkerTask);
+        form.RenderResponse(new BridgeResponse { Ok = false, Stage = "accepted" }, "Status");
+        Require(!form.CanManageWorkerTask);
+        form.RenderResponse(new BridgeResponse { Ok = true, Stage = "accepted" }, "Status");
+        Require(form.CanManageWorkerTask);
+        form.SetField("stateDirectory", @"C:\different-journal");
+        Require(!form.CanManageWorkerTask);
         var handoff = WizardForm.WorkerHandoffStartInfo(@"DOMAIN\sp_service", Path.Combine(AppContext.BaseDirectory, "ScomSetup.exe"));
         Require(handoff.FileName == Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), "System32", "runas.exe") &&
             handoff.ArgumentList.SequenceEqual(new[] { @"/user:DOMAIN\sp_service", "\"" + Path.Combine(AppContext.BaseDirectory, "ScomSetup.exe") + "\"" }) &&

@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using ScomMcp;
 
 static class WindowsSourceProjectionChecks
@@ -10,7 +11,8 @@ static class WindowsSourceProjectionChecks
     public static async Task Run(string root)
     {
         var count = 0;
-        foreach (var mode in new[] { "complete", "direct", "partial", "managementServer", "unknownRole" })
+        foreach (var mode in new[] { "complete", "direct", "partial", "managementServer", "unknownRole",
+            "legacy", "missingCaption", "blankCaption", "unmappedCaption", "buildOnly" })
         {
             var start = new ProcessStartInfo("pwsh")
             {
@@ -44,6 +46,8 @@ static class WindowsSourceProjectionChecks
                     ComputerClass = "Synthetic.Computer", OperatingSystemClass = "Synthetic.Os",
                     RelationshipClass = "Synthetic.ComputerHostsOs"
                 },
+                WindowsOsCaptionProperty = mode == "legacy" ? null : "Caption",
+                AllowedPropertiesByClass = mode == "legacy" ? new() : new() { ["Synthetic.Os"] = ["Caption"] },
                 AllowedMetricsByClass = new() { ["Synthetic.Os"] = new() { ["cpuPercent"] = "percent" } }
             };
             var sourceSettings = new SourceSettings { SnapshotEnabled = false };
@@ -62,6 +66,23 @@ static class WindowsSourceProjectionChecks
             if (mode != "partial")
             {
                 var device = dataset.Snapshot.Devices.Single();
+                var expectedCaption = mode switch
+                {
+                    "legacy" or "missingCaption" or "blankCaption" => null,
+                    "unmappedCaption" => "Windows Server 2022 Datacenter: Azure Edition",
+                    "buildOnly" => "10.0.26100",
+                    _ => "Microsoft Windows Server 2022 Datacenter"
+                };
+                Check(device.OsCaption == expectedCaption &&
+                    device.OsVersion == (mode == "buildOnly" ? "10.0.26100" : "10.0.20348"),
+                    "caption stays independently observed; missing caption never derives from build", ref count);
+                var reopened = new ReadModelStore(settings, sourceSettings, TimeProvider.System).ReadWindowsDataset();
+                Check(reopened.Snapshot.Devices.Single().OsCaption == expectedCaption &&
+                    reopened.Fingerprint == dataset.Fingerprint, "caption persists through database reopen", ref count);
+                var assessment = OsLifecycleCatalog.Assess(device, new(2026, 11, 5), true, 365);
+                Check(assessment.Assessment == (mode is "legacy" or "missingCaption" or "blankCaption" or
+                    "unmappedCaption" or "buildOnly" ? "unknown" : "extended"),
+                    "only exact observed captions enable existing lifecycle classification", ref count);
                 var expectedMode = mode == "unknownRole" ? "unknown" :
                     mode == "managementServer" ? "managementServer" : "agent";
                 Check(device.MonitoringMode == expectedMode &&
@@ -73,11 +94,24 @@ static class WindowsSourceProjectionChecks
                     dataset.Snapshot.Samples.Single().Value == 12,
                     "OS observations project to typed computer without changing raw arithmetic", ref count);
                 var caller = new Caller("synthetic", ImmutableHashSet.Create(Wire.ScopeId));
+                var engine = new QueryEngine(sourceSettings, TimeProvider.System, new CursorCodec(TimeProvider.System, sourceSettings));
+                var details = JsonSerializer.SerializeToElement(engine.Details(dataset, device.EntityId).Data, Wire.Json);
+                var page = JsonSerializer.SerializeToElement(engine.ListDevices(dataset, caller, Wire.ScopeId, new(), 20, null).Data, Wire.Json);
+                Check(details.GetProperty("device").GetProperty("osCaption").GetString() == expectedCaption &&
+                    page.GetProperty("rows")[0].GetProperty("osCaption").GetString() == expectedCaption,
+                    "read tools expose the persisted nullable caption", ref count);
                 Check(store.Page(caller, "metrics", null, 50, null).TotalCount == 1,
                     "generic metric retains original OS observation", ref count);
                 Check(store.Page(caller, "metrics", os.Id, 50, null).TotalCount == 1 &&
                     store.Page(caller, "metrics", device.EntityId, 50, null).TotalCount == 0,
                     "compatibility projection does not rewrite generic observation parent", ref count);
+                if (mode == "complete")
+                {
+                    var httpRoot = Directory.CreateDirectory(Path.Combine(root, "caption-http")).FullName;
+                    await ReadModelChecks.Http(httpRoot, new(scan.Objects, scan.Relationships, [],
+                        scan.MetricSeries.SelectMany(s => s.Observations).ToImmutableArray(), scan.WindowsInventory),
+                        prepared.Manifest, windowsTools: true, settingsOverride: settings);
+                }
                 var changed = new ReadModelSettings
                 {
                     Enabled = true, WindowsToolsEnabled = true, DatabasePath = settings.DatabasePath,
@@ -85,6 +119,11 @@ static class WindowsSourceProjectionChecks
                     PublisherObjectIds = [Publisher], AllowedMetricsByClass = settings.AllowedMetricsByClass
                 };
                 try { _ = new ReadModelStore(changed, sourceSettings, TimeProvider.System); throw new Exception("Hosting policy change reused database."); }
+                catch (InvalidOperationException) { count++; }
+                changed.WindowsMetricHosting = settings.WindowsMetricHosting;
+                changed.AllowedPropertiesByClass = settings.AllowedPropertiesByClass;
+                changed.WindowsOsCaptionProperty = mode == "legacy" ? "Caption" : null;
+                try { _ = new ReadModelStore(changed, sourceSettings, TimeProvider.System); throw new Exception("Caption policy change reused database."); }
                 catch (InvalidOperationException) { count++; }
                 var invalidSession = Guid.NewGuid().ToString("D");
                 store.Begin(Publisher, invalidSession);
@@ -110,6 +149,27 @@ static class WindowsSourceProjectionChecks
                 catch (QueryFault error) when (error.Message == "WINDOWS_METRIC_HOSTING_AMBIGUOUS") { count++; }
                 try { _ = store.ReadWindowsDataset(); throw new InvalidOperationException("Invalid hosting served previous dataset."); }
                 catch (QueryFault error) when (error.Code == "SOURCE_UNAVAILABLE") { count++; }
+                store.Fail(Publisher, invalidSession);
+                var forgedSession = Guid.NewGuid().ToString("D");
+                store.Begin(Publisher, forgedSession);
+                var forgedSequence = 0;
+                await foreach (var batch in prepared.Batches)
+                {
+                    var forged = batch.WindowsInventory is { } windows
+                        ? batch with { WindowsInventory = windows with
+                        {
+                            Devices = windows.Devices.Select(d => d with
+                            { OsCaption = "Microsoft Windows Server 2025 Datacenter" }).ToImmutableArray()
+                        } } : batch;
+                    store.Append(Publisher, forgedSession, forgedSequence++, Encoding.UTF8.GetBytes(Wire.Encode(forged)));
+                }
+                try
+                {
+                    store.Commit(Publisher, forgedSession, Encoding.UTF8.GetBytes(Wire.Encode(prepared.Manifest)));
+                    throw new InvalidOperationException("Unobserved or unconfigured caption activated.");
+                }
+                catch (QueryFault error) when (error.Message == "WINDOWS_OS_CAPTION_SOURCE_MISMATCH") { count++; }
+                store.Fail(Publisher, forgedSession);
             }
             else
             {
@@ -118,7 +178,7 @@ static class WindowsSourceProjectionChecks
                     "missing expected computer never manufactures a parent or metric", ref count);
             }
         }
-        Console.WriteLine($"PASS: {count} Windows source bridge/ingestion assertions; typed hosting and independent coverage.");
+        Console.WriteLine($"PASS: {count} Windows source bridge/ingestion assertions; observed captions, persistence, lifecycle and typed hosting.");
     }
 
     private static void Check(bool value, string message, ref int count)

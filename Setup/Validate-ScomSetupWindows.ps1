@@ -114,6 +114,16 @@ try {
     $count++
     $syntheticPath=Join-Path (Split-Path $PSScriptRoot -Parent) '.validation-data\synthetic-log-acl'
     Set-ScomSetupDirectoryAcl $syntheticPath @{'S-1-5-21-1-2-3-1001'='Modify'}
+    try { Assert-ScomSetupPrivateDirectory $syntheticPath -ReadSid 'S-1-5-21-1-2-3-1001'; throw 'Writable worker private directory accepted' }
+    catch { if ($_.Exception.Message -notmatch 'SETUP_JOURNAL_MUST_ONLY_ALLOW_SYSTEM_AND_ADMINISTRATORS') { throw }; $count++ }
+    Set-ScomSetupDirectoryAcl $syntheticPath @{'S-1-5-21-1-2-3-1001'='ReadAndExecute'}
+    Assert-ScomSetupPrivateDirectory $syntheticPath -ReadSid 'S-1-5-21-1-2-3-1001'
+    $count++
+    try { Assert-ScomSetupPrivateDirectory $syntheticPath; throw 'Worker-readable host journal accepted' }
+    catch { if ($_.Exception.Message -notmatch 'SETUP_JOURNAL_MUST_ONLY_ALLOW_SYSTEM_AND_ADMINISTRATORS') { throw }; $count++ }
+    try { Assert-ScomSetupPrivateDirectory $syntheticPath -ReadSid 'S-1-5-21-1-2-3-1002'; throw 'Different worker private directory accepted' }
+    catch { if ($_.Exception.Message -notmatch 'SETUP_JOURNAL_MUST_ONLY_ALLOW_SYSTEM_AND_ADMINISTRATORS') { throw }; $count++ }
+    Set-ScomSetupDirectoryAcl $syntheticPath @{'S-1-5-21-1-2-3-1001'='Modify'}
     & $module {
         $rules=@($script:capturedAcl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier]))
         if ($rules.Count -ne 3 -or -not $script:capturedAcl.AreAccessRulesProtected -or
@@ -132,6 +142,86 @@ try {
     $count++
     try { Set-ScomSetupDirectoryAcl $syntheticPath @{}; throw 'ACL tampering unexpectedly accepted' }
     catch { if ($_.Exception.Message -notmatch 'SETUP_ACL_VERIFICATION_FAILED') { throw }; $count++ }
+    $fixtureRoot=Join-Path (Split-Path $PSScriptRoot -Parent) ('.validation-data\task-handoff-'+[guid]::NewGuid().ToString('N'))
+    try {
+        Import-Module (Join-Path $PSScriptRoot 'ScomSetup.psm1')
+        $p=[pscustomobject]@{
+            schemaVersion=1;packagePath=(Join-Path $fixtureRoot 'package');installPath=(Join-Path $fixtureRoot 'install')
+            privatePath=(Join-Path $fixtureRoot 'private');receiverStatePath=(Join-Path $fixtureRoot 'receiver')
+            workerStatePath=(Join-Path $fixtureRoot 'worker');mcpLogPath=(Join-Path $fixtureRoot 'mcp-logs')
+            collectorLogPath=(Join-Path $fixtureRoot 'collector-logs');siteName='synthetic';applicationPath='/';poolName='synthetic'
+            httpsBaseUrl='https://synthetic.invalid';tlsThumbprint=('A'*40);workerAccount=[Security.Principal.WindowsIdentity]::GetCurrent().Name
+            managementServer='synthetic.invalid';managementGroupId='22222222-2222-4222-8222-222222222222'
+            groupId='33333333-3333-4333-8333-333333333333';scopeKind='group';wholeManagementGroupApproved=$false
+            operationsManagerModule=(Join-Path $fixtureRoot 'OperationsManager.psd1')
+        }
+        foreach ($path in @($p.privatePath,(Join-Path $p.installPath 'server'),(Join-Path $p.installPath 'collector'))) {
+            $null=New-Item -ItemType Directory -Path $path -Force
+        }
+        & $module {
+            param($workerSid,$privatePath)
+            $script:workerSid=$workerSid;$script:privatePath=$privatePath
+            function script:Get-Acl {
+                param($LiteralPath)
+                $acl=[Security.AccessControl.DirectorySecurity]::new()
+                $acl.SetOwner([Security.Principal.SecurityIdentifier]::new('S-1-5-32-544'))
+                $acl.SetAccessRuleProtection($true,$false)
+                foreach ($sid in @('S-1-5-18','S-1-5-32-544')) {
+                    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                        [Security.Principal.SecurityIdentifier]::new($sid),'FullControl','ContainerInherit,ObjectInherit','None','Allow'))
+                }
+                if ($LiteralPath -eq $script:privatePath) {
+                    $acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+                        $script:workerSid,'ReadAndExecute','ContainerInherit,ObjectInherit','None','Allow'))
+                }
+                $acl
+            }
+        } ([Security.Principal.WindowsIdentity]::GetCurrent().User) $p.privatePath
+        $planFile=Join-Path $fixtureRoot 'setup-plan.json';Save-ScomSetupJson $planFile $p
+        $scriptFile=Join-Path $p.installPath 'collector\Invoke-SCOMGenericGroupProfile.ps1'
+        [IO.File]::WriteAllText($scriptFile,'Synthetic nonexecuted fixture')
+        $workerFile=Join-Path $p.privatePath 'worker.json';$receiverFile=Join-Path $p.installPath 'server\appsettings.json'
+        $worker=[pscustomobject]@{checkpointPath=(Join-Path $p.workerStatePath 'worker.db')
+            profile=@{scriptPath=$scriptFile;scriptSha256=(Get-ScomSetupHash $scriptFile)}
+            operationalLogging=@{directory=$p.collectorLogPath};liveChecks=@{enabled=$false}}
+        Save-ScomSetupJson $workerFile $worker;Save-ScomSetupJson $receiverFile @{synthetic=$true}
+        Save-ScomSetupJson (Join-Path $p.privatePath 'installed-files.json') @{
+            schemaVersion=1;files=@(@{path='collector\Invoke-SCOMGenericGroupProfile.ps1';sha256=(Get-ScomSetupHash $scriptFile)})
+        }
+        $state=[pscustomobject]@{schemaVersion=1;stage='accepted';pendingAction=$null;planHash=(Get-ScomSetupHash $planFile)
+            workerHash=(Get-ScomSetupHash $workerFile);receiverHash=(Get-ScomSetupHash $receiverFile)}
+        $stateFile=Join-Path $fixtureRoot 'setup-state.json';Save-ScomSetupJson $stateFile $state
+        $handoff=Join-Path $PSScriptRoot 'Get-ScomWorkerDeployment.ps1'
+        $argsMap=& $handoff -StateDirectory $fixtureRoot
+        if ($argsMap.WorkerConfigPath -cne $workerFile -or (Test-Path -LiteralPath $argsMap.StateDirectory)) { throw 'Incorrect derived task paths or unexpected runtime creation' }
+        $count++
+        foreach ($case in @('pending','plan','worker','receiver','script','runtime')) {
+            $state.pendingAction=$null;$state.planHash=Get-ScomSetupHash $planFile
+            $state.workerHash=Get-ScomSetupHash $workerFile;$state.receiverHash=Get-ScomSetupHash $receiverFile
+            $expected=switch ($case) {
+                'pending' {$state.pendingAction='Recover';'SETUP_ACCEPTANCE_REQUIRED_BEFORE_RECURRENCE'}
+                'plan' {$state.planHash=('0'*64);'SETUP_SAVED_PLAN_CHANGED'}
+                'worker' {$state.workerHash=('0'*64);'SETUP_ACCEPTED_CONFIGURATION_CHANGED'}
+                'receiver' {$state.receiverHash=('0'*64);'SETUP_ACCEPTED_CONFIGURATION_CHANGED'}
+                'script' {[IO.File]::AppendAllText($scriptFile,'changed');'SETUP_INSTALLED_PACKAGE_CHANGED'}
+                'runtime' {
+                    $null=New-Item -ItemType Directory -Path $argsMap.StateDirectory -Force
+                    [IO.File]::WriteAllText((Join-Path $argsMap.StateDirectory 'synthetic-state'),'preserve')
+                    'SETUP_EXISTING_RUNTIME_REQUIRES_TASK_STATUS_NOT_NEW_REGISTRATION'
+                }
+            }
+            Save-ScomSetupJson $stateFile $state
+            try { & $handoff -StateDirectory $fixtureRoot;throw 'Unsafe task handoff accepted' }
+            catch {if ($_.Exception.Message -notmatch $expected) {throw};$count++}
+            if ($case -eq 'script') {[IO.File]::WriteAllText($scriptFile,'Synthetic nonexecuted fixture')}
+        }
+        $existing=& $handoff -StateDirectory $fixtureRoot -ExistingTask
+        if ($existing.StateDirectory -cne $argsMap.StateDirectory -or
+            (Get-Content -LiteralPath (Join-Path $argsMap.StateDirectory 'synthetic-state')) -cne 'preserve') {
+            throw 'Existing task handoff must preserve runtime state'
+        }
+        $count++
+    } finally { if (Test-Path -LiteralPath $fixtureRoot) {Remove-Item -LiteralPath $fixtureRoot -Recurse -Force} }
     Write-Output "PASS: $count synthetic Windows prerequisite/IIS-conflict checks; every external read probe replaced, no host mutation."
 }
 finally { Remove-Module ScomSetup.Windows }

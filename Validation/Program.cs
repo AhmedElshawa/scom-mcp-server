@@ -41,6 +41,14 @@ if (args is ["--lifecycle-checks"])
     OsLifecycleChecks.Run();
     return 0;
 }
+if (args is ["--windows-source-checks"])
+{
+    var root = Path.Combine(Path.GetTempPath(), "scom-windows-source-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try { await WindowsSourceProjectionChecks.Run(root); }
+    finally { Directory.Delete(root, recursive: true); }
+    return 0;
+}
 if (args is ["--read-model-fault", var mode, var path, var session])
     return ReadModelFaultChecks.Child(mode, path, session);
 if (args is ["--normalization-child", var normalizationMode])

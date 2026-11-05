@@ -1,5 +1,22 @@
 # Durable indexed refresh on Windows
 
+For a **fresh guided installation**, use the packaged `ScomSetup.exe` through
+one-shot publication and host acceptance, then the final page's optional
+**Register optional startup worker**. The protected accepted deployment supplies
+the installed DLL, private worker JSON and separate runtime-state paths; customers
+do not need to recreate the task or copy the example paths below. The visible
+administrator PowerShell window requests the exact selected worker credential
+and a separate registration confirmation.
+
+Registration creates an **enabled AtStartup task**, so a later reboot can run it;
+it does not start it immediately. Starting now requires the separate **Start
+registered worker** action and confirmation. Status and confirmed Stop are also
+available there. Keep manual cadence by not registering. All accepted-journal,
+installed/configuration hash, exact task ownership and failure/rearm guards still
+apply. See [guided setup](../../docs/guided-setup.md#guided-durable-refresh-remains-a-separate-opt-in).
+The command examples below are the advanced operations lane, not mandatory
+fresh-install steps.
+
 This is an opt-in Windows Task Scheduler host for the existing serialized
 `--worker` process. It is not a service installer, deployment pack, source
 profile, SCOM connection test, or production certification. It never schedules

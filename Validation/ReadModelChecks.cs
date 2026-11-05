@@ -64,6 +64,35 @@ static class ReadModelChecks
             }
         }
         var invalidSettings = Settings(Path.Combine(root, "invalid-settings.db"));
+        foreach (var property in new[] { "Caption", " ", "Cap*", new string('x', 129) })
+        {
+            var candidate = Settings(Path.Combine(root, "caption-settings.db"));
+            candidate.WindowsOsCaptionProperty = property;
+            try { candidate.Validate(); throw new Exception("Caption policy without typed hosting was accepted."); }
+            catch (InvalidOperationException) { assertions++; }
+        }
+        var captionSettings = Settings(Path.Combine(root, "caption-settings.db"));
+        captionSettings.WindowsToolsEnabled = true;
+        captionSettings.WindowsMetricHosting = new()
+        {
+            ComputerClass = "Synthetic.Computer", OperatingSystemClass = "Synthetic.Os",
+            RelationshipClass = "Synthetic.Hosts"
+        };
+        foreach (var property in new[] { " ", "Cap*", new string('x', 129) })
+        {
+            captionSettings.WindowsOsCaptionProperty = property;
+            try { captionSettings.Validate(); throw new Exception("Invalid caption property was accepted."); }
+            catch (InvalidOperationException) { assertions++; }
+        }
+        using (var json = new MemoryStream(Encoding.UTF8.GetBytes("""{"ReadModel":{"WindowsOsCaptionProperty":null}}""")))
+        {
+            new ConfigurationBuilder().AddJsonStream(json).Build().GetSection("ReadModel").Bind(captionSettings);
+            captionSettings.Validate();
+            Check(captionSettings.WindowsOsCaptionProperty is null, "JSON-null caption policy is disabled");
+        }
+        captionSettings.WindowsOsCaptionProperty = "Caption";
+        captionSettings.Validate();
+        assertions++;
         invalidSettings.AllowedPropertiesByClass = new() { [""] = ["private-sensitive-marker"] };
         invalidSettings.AllowedMetricsByClass = new() { [""] = new() };
         invalidSettings.MaxDatabaseBytes = 1;
@@ -390,10 +419,17 @@ static class ReadModelChecks
         }
     }
 
-    internal static async Task Http(string root, IngestionBatch batch, ReadModelManifest manifest, bool windowsTools = false)
+    internal static async Task Http(string root, IngestionBatch batch, ReadModelManifest manifest, bool windowsTools = false,
+        ReadModelSettings? settingsOverride = null)
     {
         var startedAssertions = assertions;
         var settings = Settings(Path.Combine(root, windowsTools ? "http-indexed-windows.db" : "http-read-model.db"));
+        if (settingsOverride is not null)
+        {
+            settings.WindowsMetricHosting = settingsOverride.WindowsMetricHosting;
+            settings.WindowsOsCaptionProperty = settingsOverride.WindowsOsCaptionProperty;
+            settings.AllowedPropertiesByClass = settingsOverride.AllowedPropertiesByClass;
+        }
         settings.WindowsToolsEnabled = windowsTools;
         if (windowsTools)
         {
@@ -418,7 +454,8 @@ static class ReadModelChecks
         var liveSettings = new TargetedLiveSettings { Enabled = true, PublisherObjectId = Publisher,
             ProviderPolicySha256 = new('a', 64), ExecutionSeconds = 1 };
         Hosting.AddScomServices(builder.Services, auth, new() { SnapshotEnabled = false }, settings, targetedLive: liveSettings);
-        var httpClock = new Clock { Now = manifest.Metrics.AsOfUtc };
+        var observedAt = new[] { manifest.Inventory.AsOfUtc, manifest.Alerts.AsOfUtc, manifest.Metrics.AsOfUtc }.Max();
+        var httpClock = new Clock { Now = observedAt };
         builder.Services.AddSingleton<TimeProvider>(httpClock);
         builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, options =>
         {
@@ -625,12 +662,27 @@ static class ReadModelChecks
                     using var data = JsonDocument.Parse(toolResult.GetProperty("content")[0].GetProperty("text").GetString()!);
                     Check(data.RootElement.GetProperty("datasetId").GetString() == publishedSession,
                         "indexed tool uses same activated dataset as generic tools: " + name);
+                    if (name is "list_devices" or "get_device_details")
+                    {
+                        var payload = data.RootElement.GetProperty("data");
+                        var row = name == "list_devices" ? payload.GetProperty("rows")[0] : payload.GetProperty("device");
+                        var expected = batch.WindowsInventory!.Devices.Single(d =>
+                            d.EntityId == row.GetProperty("entityId").GetString());
+                        Check(row.GetProperty("osCaption").GetString() == expected.OsCaption &&
+                            row.GetProperty("osVersion").GetString() == expected.OsVersion,
+                            "authenticated read preserves separate observed caption and version");
+                    }
                     if (name == "list_os_support_assessments")
                     {
                         Check(data.RootElement.GetProperty("data").GetProperty("scopeComputerCount").GetInt32() ==
                             batch.WindowsInventory!.Devices.Length, "indexed lifecycle counts actual computers not generic objects");
                         Check(data.RootElement.GetProperty("data").GetProperty("rows").GetArrayLength() <= 1,
                             "indexed lifecycle bounded page");
+                        var lifecycleRow = data.RootElement.GetProperty("data").GetProperty("rows")[0];
+                        var expected = batch.WindowsInventory!.Devices.Single(d =>
+                            d.EntityId == lifecycleRow.GetProperty("entityId").GetString());
+                        Check(lifecycleRow.GetProperty("observedOsCaption").GetString() == (expected.OsCaption ?? expected.OsVersion),
+                            "authenticated lifecycle uses observed caption with legacy fallback");
                     }
                 }
             }
@@ -643,7 +695,7 @@ static class ReadModelChecks
                         g.Min(m => m.ObservedAtUtc), manifest.Metrics.AsOfUtc, true, null, g.ToImmutableArray())).ToImmutableArray(),
                 manifest.Metrics.AsOfUtc, batch.WindowsInventory, manifest.ExpectedComputerIds));
             var checkpointPath = Path.Combine(root, windowsTools ? "http-windows-worker-state.db" : "http-worker-state.db");
-            var workerClock = new Clock { Now = manifest.Metrics.AsOfUtc };
+            var workerClock = new Clock { Now = observedAt };
             string checkpointSession;
             using (var checkpoint = new SourceCheckpointStore(checkpointPath, new string('a', 64)))
             {

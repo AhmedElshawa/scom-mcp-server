@@ -268,17 +268,21 @@ function Set-ScomSetupDirectoryAcl {
 }
 
 function Assert-ScomSetupPrivateDirectory {
-    param([string]$Path)
+    param([string]$Path,[Security.Principal.SecurityIdentifier]$ReadSid)
     Assert-ScomSetupPath $Path
     $acl = Get-Acl -LiteralPath $Path
-    $ownerSid = ([Security.Principal.NTAccount]::new($acl.Owner)).Translate([Security.Principal.SecurityIdentifier]).Value
+    $ownerSid = $acl.GetOwner([Security.Principal.SecurityIdentifier]).Value
     if (-not $acl.AreAccessRulesProtected -or $ownerSid -notin @('S-1-5-32-544','S-1-5-18')) {
         throw 'SETUP_JOURNAL_REQUIRES_ADMIN_OWNED_PRIVATE_DIRECTORY'
     }
-    foreach ($rule in $acl.Access) {
+    foreach ($rule in $acl.GetAccessRules($true,$true,[Security.Principal.SecurityIdentifier])) {
         $sid = $rule.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value
         if ($rule.AccessControlType -eq 'Allow' -and $sid -notin @('S-1-5-18','S-1-5-32-544')) {
-            throw 'SETUP_JOURNAL_MUST_ONLY_ALLOW_SYSTEM_AND_ADMINISTRATORS'
+            $readRights=[Security.AccessControl.FileSystemRights]::ReadAndExecute -bor [Security.AccessControl.FileSystemRights]::Synchronize
+            if ($null -eq $ReadSid -or $sid -ne $ReadSid.Value -or
+                ($rule.FileSystemRights -band (-bnot $readRights)) -ne 0) {
+                throw 'SETUP_JOURNAL_MUST_ONLY_ALLOW_SYSTEM_AND_ADMINISTRATORS'
+            }
         }
     }
 }

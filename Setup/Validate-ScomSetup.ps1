@@ -49,6 +49,31 @@ try {
     $f = New-Fixture
     Assert-ScomSetupPlan $f.plan
     Check $true
+    $accepted=[pscustomobject]@{schemaVersion=1;stage='accepted';pendingAction=$null}
+    $taskArguments=Get-ScomSetupWorkerTaskArguments $f.plan $accepted
+    Check ($taskArguments.Count -eq 3 -and
+        $taskArguments.WorkerDllPath -ceq (Join-Path $f.plan.installPath 'server\ScomMcp.dll') -and
+        $taskArguments.WorkerConfigPath -ceq (Join-Path $f.plan.privatePath 'worker.json') -and
+        $taskArguments.StateDirectory -ceq (Join-Path $f.plan.workerStatePath 'runtime') -and
+        -not $taskArguments.ContainsKey('StartNow'))
+    foreach ($stage in @('new','prepared','configured','activated','published')) {
+        $accepted.stage=$stage
+        Reject { Get-ScomSetupWorkerTaskArguments $f.plan $accepted } 'SETUP_ACCEPTANCE_REQUIRED_BEFORE_RECURRENCE'
+    }
+    $accepted.stage='accepted';$accepted.pendingAction='Publish'
+    Reject { Get-ScomSetupWorkerTaskArguments $f.plan $accepted } 'SETUP_ACCEPTANCE_REQUIRED_BEFORE_RECURRENCE'
+    Check (-not (Test-Path -LiteralPath $taskArguments.StateDirectory))
+    $task=[pscustomobject]@{Principal=[pscustomobject]@{UserId=$f.plan.workerAccount}}
+    $action=[pscustomobject]@{DllPath=$taskArguments.WorkerDllPath;ConfigurationPath=$taskArguments.WorkerConfigPath;StateDirectory=$taskArguments.StateDirectory}
+    Assert-ScomSetupWorkerTaskMatch $taskArguments $task $action $f.plan.workerAccount
+    Check $true
+    foreach ($key in @('DllPath','ConfigurationPath','StateDirectory')) {
+        $saved=$action.$key;$action.$key='C:\different-deployment'
+        Reject { Assert-ScomSetupWorkerTaskMatch $taskArguments $task $action $f.plan.workerAccount } 'SETUP_TASK_DEPLOYMENT_MISMATCH'
+        $action.$key=$saved
+    }
+    $task.Principal.UserId='SYNTHETIC\other-worker'
+    Reject { Assert-ScomSetupWorkerTaskMatch $taskArguments $task $action $f.plan.workerAccount } 'SETUP_TASK_DEPLOYMENT_MISMATCH'
     foreach ($bad in @('C:\','\\synthetic\share','C:\temp\..\Windows','C:\temp\wild*','relative','C:\temp:stream')) {
         Reject { Assert-ScomSetupPath $bad } 'SETUP_PATH'
     }
@@ -203,6 +228,26 @@ try {
     $whole = Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity
     Check ($null -eq $whole.receiver.ReadModel.GroupId -and $null -eq $whole.worker.profile.configuration.groupId -and
         -not $whole.worker.profile.configuration.enumerationQueryContractVerified)
+    $mapping=[pscustomobject]@{computerClassName='Synthetic.Computer';operatingSystemClassName='Synthetic.Os'
+        computerHostsOsRelationship='Synthetic.Hosts';osCaptionProperty='OSVersionDisplayName'}
+    $worker.profile.configuration.windowsMapping=$mapping
+    Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_OS_CAPTION_MAPPING_MISMATCH'
+    $receiver.ReadModel.WindowsOsCaptionProperty='OSVersionDisplayName'
+    $receiver.ReadModel.WindowsMetricHosting=[pscustomobject]@{ComputerClass='Synthetic.Computer';OperatingSystemClass='Synthetic.Os';RelationshipClass='Synthetic.Hosts'}
+    Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_OS_CAPTION_ALLOWLIST_MISMATCH'
+    $worker.profile.configuration.allowedPropertiesByClass=[pscustomobject]@{'Synthetic.Os'=@('OSVersionDisplayName')}
+    $receiver.ReadModel.AllowedPropertiesByClass=[pscustomobject]@{'Synthetic.Os'=@('osversiondisplayname')}
+    Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_OS_CAPTION_ALLOWLIST_MISMATCH'
+    $receiver.ReadModel.AllowedPropertiesByClass=[pscustomobject]@{'Synthetic.Os'=@('OSVersionDisplayName')}
+    $caption=Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity
+    Check ($caption.worker.profile.configuration.windowsMapping.osCaptionProperty -ceq 'OSVersionDisplayName' -and
+        $caption.receiver.ReadModel.WindowsOsCaptionProperty -ceq 'OSVersionDisplayName' -and
+        $caption.worker.checkpointPath -ceq (Join-Path $f.plan.workerStatePath 'worker.db') -and
+        $caption.worker.profile.scriptSha256 -ceq (Get-ScomSetupHash $caption.worker.profile.scriptPath) -and
+        -not $caption.worker.liveChecks.enabled -and -not $caption.receiver.TargetedLive.Enabled)
+    $receiver.ReadModel.WindowsMetricHosting.RelationshipClass='Synthetic.Different'
+    Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_OS_CAPTION_MAPPING_MISMATCH'
+    $receiver.ReadModel.WindowsMetricHosting.RelationshipClass='Synthetic.Hosts'
     $worker.liveChecks.enabled=$true
     Reject { Merge-ScomSetupConfiguration $f.plan $receiver $worker $identity } 'SETUP_REVIEWED_CONFIGURATION_SCOPE_OR_DISABLED_GUARDS'
     $identity.publisherClientId=$identity.apiClientId
