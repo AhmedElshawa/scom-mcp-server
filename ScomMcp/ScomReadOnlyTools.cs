@@ -7,10 +7,10 @@ namespace ScomMcp;
 
 [McpServerToolType]
 public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine,
-    IHttpContextAccessor http, AuthSettings auth)
+    IHttpContextAccessor http, AuthSettings auth, ILogger<ScomReadOnlyTools> logger)
 {
     [McpServerTool(Name = "get_source_status", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Read SCOM snapshot capabilities, timestamps and coverage for authorized scom-lab only. Healthz does not prove metrics exist. Failed/latest missing collection returns SOURCE_UNAVAILABLE; no fixture fallback.")]
+    [Description("Read retained SCOM capabilities, timestamps and coverage for authorized scom-lab only, from the configured legacy snapshot or indexed Windows view. Neither is a live query. Healthz does not prove metrics exist. Failed/latest missing collection returns SOURCE_UNAVAILABLE; no fixture fallback.")]
     public Task<CallToolResult> SourceStatus(
         [Description("Optional authorized scope; omitted means scom-lab. No other scopes are supported.")] string? scopeId = null,
         CancellationToken cancellationToken = default) =>
@@ -58,6 +58,13 @@ public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine
             minFreePercent, maxFreePercent, pageSize, cursor), cancellationToken,
             () => QueryEngine.ValidateCapacity(entityId, resource, groupId, minFreePercent, maxFreePercent, pageSize));
 
+    [McpServerTool(Name = "list_os_support_assessments", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
+    [Description("Assess retained scoped computers against the curated Microsoft Windows Server lifecycle profile, not a live query or patch/entitlement audit. Exact product+edition captions only; missing/ambiguous/unsupported inventory and stale catalog remain unknown. Mainstream/extended end dates are inclusive Pacific dates; approaching means extended end within configured days, never ESU entitlement. Complete retained-computer counts precede bounded page (1..50). assessment filter: mainstream|extended|ended|unknown|unsupported|approaching. Cursor binds caller,scope,dataset,filter,date,catalog and policy; restart paging after any change. Read evidence URLs, verification date, inventory freshness and coverage.")]
+    public Task<CallToolResult> OsSupport(string? scopeId = null, string? assessment = null,
+        int pageSize = 20, string? cursor = null, CancellationToken cancellationToken = default) =>
+        Execute(scopeId, (ds, caller, scope) => engine.OsSupport(ds, caller, scope, assessment, pageSize, cursor),
+            cancellationToken, () => QueryEngine.ValidateLifecycleQuery(assessment, pageSize));
+
     private async Task<CallToolResult> Execute(string? scopeId, Func<Dataset, Caller, string, Envelope> run,
         CancellationToken ct, Action? validate = null)
     {
@@ -77,8 +84,10 @@ public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine
             return Result(engine.Error(ex, ds), true);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception)
+        catch (Exception ex)
         {
+            logger.LogError("SCOM tool request failed. ErrorType={ErrorType} TraceId={TraceId}",
+                ex.GetType().Name, http.HttpContext?.TraceIdentifier);
             return Result(engine.Error(new QueryFault("SOURCE_UNAVAILABLE", "REQUEST_COULD_NOT_BE_COMPLETED")), true);
         }
     }

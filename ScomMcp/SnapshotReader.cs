@@ -6,6 +6,7 @@ namespace ScomMcp;
 
 public sealed class SourceSettings
 {
+    public bool SnapshotEnabled { get; set; } = true;
     public string Directory { get; set; } = "";
     public string[] AllowedHostnames { get; set; } = [];
     public int MaxSnapshotBytes { get; set; } = 8 * 1024 * 1024;
@@ -14,10 +15,10 @@ public sealed class SourceSettings
     public int CursorLifetimeSeconds { get; set; } = 300;
     public void Validate()
     {
-        if (!Path.IsPathFullyQualified(Directory) ||
+        if (SnapshotEnabled && (!Path.IsPathFullyQualified(Directory) ||
             AllowedHostnames.Length != 2 ||
             AllowedHostnames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != 2 ||
-            AllowedHostnames.Any(h => string.IsNullOrWhiteSpace(h) || h.Contains('*') || h.Any(char.IsWhiteSpace)) ||
+            AllowedHostnames.Any(h => string.IsNullOrWhiteSpace(h) || h.Contains('*') || h.Any(char.IsWhiteSpace))) ||
             MaxSnapshotBytes < 1024 || MaxSnapshotBytes > 64 * 1024 * 1024 ||
             FreshMinutes < 1 || UnavailableMinutes <= FreshMinutes || UnavailableMinutes > 1440 ||
             CursorLifetimeSeconds < 30 || CursorLifetimeSeconds > 900)
@@ -34,6 +35,7 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
 {
     public async Task<Dataset> ReadAsync(CancellationToken ct = default)
     {
+        Guard.Source(settings.SnapshotEnabled, "LEGACY_SNAPSHOT_DISABLED");
         try
         {
             var statusPath = Path.Combine(settings.Directory, "collector-status.json");
@@ -71,6 +73,14 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
     }
 
     public static Dataset Validate(byte[] bytes, CollectorStatus status, SourceSettings settings, DateTimeOffset now)
+        => ValidateCore(bytes, status, settings, now, null);
+
+    internal static Dataset ValidateIndexed(byte[] bytes, CollectorStatus status, SourceSettings settings,
+        DateTimeOffset now, IReadOnlySet<string> expectedComputerIds)
+        => ValidateCore(bytes, status, settings, now, expectedComputerIds) with { StorageMode = "indexed" };
+
+    private static Dataset ValidateCore(byte[] bytes, CollectorStatus status, SourceSettings settings, DateTimeOffset now,
+        IReadOnlySet<string>? expectedComputerIds)
     {
         Guard.Source(bytes.Length <= settings.MaxSnapshotBytes, "SOURCE_SIZE_LIMIT");
         Snapshot s;
@@ -83,7 +93,8 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
         catch (JsonException) { throw new QueryFault("SOURCE_UNAVAILABLE", "INVALID_SNAPSHOT_JSON"); }
         Guard.Source(s is not null && s.SchemaVersion == "1.0" && s.SourceMode == "scom" &&
             s.Status is "ok" or "partial" && s.Scope is { Id: Wire.ScopeId, Label: not null } &&
-            s.ExpectedDeviceCount == 2 && !string.IsNullOrWhiteSpace(s.DatasetId) && s.DatasetId.Length <= 200,
+            s.ExpectedDeviceCount == (expectedComputerIds?.Count ?? 2) &&
+            !string.IsNullOrWhiteSpace(s.DatasetId) && s.DatasetId.Length <= 200,
             "SNAPSHOT_SCHEMA_SCOPE_OR_STATUS_INVALID");
         Guard.Source(status.Status == "ok" && status.ErrorCode is null && status.DatasetId == s!.DatasetId &&
             IsUtc(status.AttemptedAtUtc) && status.AttemptedAtUtc >= s.CollectionStartedAtUtc &&
@@ -96,7 +107,8 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
             !s.Devices.IsDefault && !s.Volumes.IsDefault && !s.Samples.IsDefault &&
             !s.Limitations.IsDefault && !s.SourceRefs.IsDefault && !s.Capabilities.Classes.IsDefault &&
             !s.Capabilities.Metrics.IsDefault && ValidRefs(s.SourceRefs) &&
-            s.Devices.Length <= 64 && s.Volumes.Length <= 256 && s.Samples.Length <= 100000 &&
+            s.Devices.Length <= (expectedComputerIds?.Count ?? 64) &&
+            s.Volumes.Length <= (expectedComputerIds is null ? 256 : 100000) && s.Samples.Length <= 100000 &&
             s.Capabilities.Classes.All(c => c is "WindowsComputer" or "OperatingSystem" or "LogicalDisk") &&
             s.Capabilities.Metrics.All(m => m is "cpuPercent" or "memoryUsedPercent" or "memoryAvailableMiB" or "diskFreePercent") &&
             s.Limitations.All(l => l is not null && l.Length <= 2000), "SOURCE_COLLECTIONS_INVALID");
@@ -105,12 +117,16 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
         {
             Guard.Source(d is not null && Guid.TryParse(d.EntityId, out _) &&
                 string.Equals(d.EntityId, d.SourceObjectId, StringComparison.OrdinalIgnoreCase) &&
-                settings.AllowedHostnames.Contains(d.Hostname, StringComparer.OrdinalIgnoreCase) &&
+                (expectedComputerIds is null
+                    ? settings.AllowedHostnames.Contains(d.Hostname, StringComparer.OrdinalIgnoreCase)
+                    : expectedComputerIds.Contains(Canonical(d.EntityId)) && !string.IsNullOrWhiteSpace(d.Hostname) &&
+                        d.Hostname.Length <= 256 && !d.Hostname.Any(char.IsWhiteSpace) && !d.Hostname.Contains('*')) &&
                 d.EntityKind == "computer" && d.OsFamily == "windows" && d.RawHealth is not null &&
                 (d.OsVersion is null || d.OsVersion.Length <= 256) &&
                 d.Health is "healthy" or "warning" or "critical" or "unknown" &&
                 d.Virtualization is "physical" or "virtual" or "unknown" &&
-                d.MonitoringMode == "agent" && PositiveOrNull(d.MemoryTotalMiB) &&
+                (d.MonitoringMode == "agent" || expectedComputerIds is not null &&
+                    d.MonitoringMode is "managementServer" or "unknown") && PositiveOrNull(d.MemoryTotalMiB) &&
                 (d.ProcessorCount is null or > 0) &&
                 (d.DiscoveredAtUtc is null || IsUtc(d.DiscoveredAtUtc.Value)) &&
                 !d.GroupIds.IsDefaultOrEmpty && d.GroupIds.All(g => g == Wire.ScopeId) && ValidRefs(d.SourceRefs),
@@ -128,7 +144,7 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
                 .ThenBy(Wire.Encode, StringComparer.Ordinal).First();
             })
             .OrderBy(d => d.EntityId, StringComparer.Ordinal).ToImmutableArray();
-        Guard.Source(devices.Length <= 2 &&
+        Guard.Source(devices.Length <= (expectedComputerIds?.Count ?? 2) &&
             devices.Select(d => d.Hostname).Distinct(StringComparer.OrdinalIgnoreCase).Count() == devices.Length,
             "AMBIGUOUS_OR_UNEXPECTED_DEVICE_COVERAGE");
         var computerIds = devices.Select(d => d.EntityId).ToHashSet(StringComparer.Ordinal);
@@ -169,7 +185,7 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
             }).OrderBy(m => m.EntityId, StringComparer.Ordinal).ThenBy(m => m.Metric, StringComparer.Ordinal)
             .ThenBy(m => m.ObservedAtUtc).ThenBy(m => m.CollectionRuleId, StringComparer.Ordinal).ToImmutableArray();
         var limitations = ImmutableArray.CreateBuilder<string>();
-        if (devices.Length < 2) limitations.Add("EXPECTED_DEVICE_COVERAGE_INCOMPLETE");
+        if (devices.Length < s.ExpectedDeviceCount) limitations.Add("EXPECTED_DEVICE_COVERAGE_INCOMPLETE");
         if (s.Samples.IsEmpty) limitations.Add("NO_METRIC_OBSERVATIONS_AVAILABLE");
         if (s.Devices.Length != devices.Length || s.Volumes.Length != volumes.Length)
             limitations.Add("DUPLICATES_RESOLVED_BY_KNOWN_FIELD_COUNT_THEN_ORDINAL_CANONICAL_JSON");
@@ -179,7 +195,7 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
     }
 
     private static bool IsUtc(DateTimeOffset value) => value != default && value.Offset == TimeSpan.Zero;
-    private static void RejectDuplicateProperties(JsonElement node)
+    internal static void RejectDuplicateProperties(JsonElement node)
     {
         if (node.ValueKind == JsonValueKind.Object)
         {

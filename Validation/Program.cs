@@ -13,10 +13,25 @@ using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Configuration;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
 
+if (args is ["--targeted-live-checks"])
+{
+    await TargetedLiveValidation.Run();
+    return 0;
+}
+if (args is ["--lifecycle-checks"])
+{
+    OsLifecycleChecks.Run();
+    return 0;
+}
+if (args is ["--read-model-fault", var mode, var path, var session])
+    return ReadModelFaultChecks.Child(mode, path, session);
+if (args is ["--normalization-child", var normalizationMode])
+    return NormalizationProcessChecks.Child(normalizationMode);
 if (args.Length != 0)
     return await CapturedSnapshot.Run(args, TimeProvider.System, Console.Out, Console.Error);
 await Checks.Run();
@@ -53,12 +68,30 @@ static class Checks
             var codec = new CursorCodec(Clock, source);
             var engine = new QueryEngine(source, Clock, codec);
             TestQueries(dataset, source, codec, engine);
+            ObservationLookupChecks.Run(dataset, source, Clock);
+            OsLifecycleChecks.Run();
+            await TargetedLiveValidation.Run();
             TestNativeMemory(snapshot, source, engine);
             TestOptimizationMetadata(snapshot, source, engine);
             TestValidation(snapshot, source, engine);
             await TestReader(root, snapshot, source);
             await TestCapturedSnapshot(root, snapshot, source);
             await TestHttp(auth, source, dataset);
+            await ReadModelChecks.Run(root);
+            await ReadModelFaultChecks.Run(root);
+            await IngestionPublisherChecks.Run(root);
+            await CollectionSchedulerChecks.Run();
+            await IndexedWindowsChecks.Run(root, dataset);
+            AlertReconcilerChecks.Run();
+            await CollectionWorkerChecks.Run();
+            MetricReconcilerChecks.Run();
+            await ReconciledSourceChecks.Run(root);
+            await SourceCheckpointChecks.Run(root);
+            await NormalizationProcessChecks.Run();
+            await CertificatePublisherChecks.Run();
+            await CollectionWorkerHostChecks.Run(root);
+            await WindowsSourceProjectionChecks.Run(root);
+            await ManagementGroupSourceChecks.Run(root);
             Console.WriteLine($"PASS: {passed} assertions; pure auth, snapshots, counts, cursors, math, and authenticated MCP HTTP verified.");
         }
         finally
@@ -95,12 +128,41 @@ static class Checks
         Equal(null, CallerAuthorization.Resolve(Principal(oid: Guid.Empty.ToString()), auth), "unmapped oid denied");
         Equal(null, CallerAuthorization.Resolve(Principal(tid: Guid.Empty.ToString()), auth), "wrong tenant denied");
         Check(CallerAuthorization.Resolve(Principal(), auth) is not null, "oid grant accepted");
+        var alternateCaller = Auth();
+        alternateCaller.Callers[0].ObjectId = Guid.Parse(alternateCaller.Callers[0].ObjectId!).ToString("B");
+        alternateCaller.Validate();
+        Check(CallerAuthorization.Resolve(Principal(), alternateCaller) is not null, "noncanonical configured caller GUID normalized");
+        var emptyCaller = Auth();
+        emptyCaller.Callers[0].ObjectId = Guid.Empty.ToString("D");
+        Throws<InvalidOperationException>(emptyCaller.Validate, "empty caller GUID refused");
         Fault("FORBIDDEN", () => CallerAuthorization.AuthorizeScope(Caller, "unknown-scope"), "unknown scope denied");
         Fault("FORBIDDEN", () => CallerAuthorization.AuthorizeScope(new("other", ImmutableHashSet<string>.Empty), null), "scope grant required");
         var upnAuth = Auth();
         upnAuth.Callers = [new() { UserPrincipalName = "synthetic@example.invalid", Scopes = [Wire.ScopeId] }];
         var upn = Principal(oid: Guid.Empty.ToString(), extras: [new("upn", "SYNTHETIC@example.invalid")]);
         Check(CallerAuthorization.Resolve(upn, upnAuth) is not null, "UPN fallback explicit grant");
+        foreach (var field in new[] { "", "\"ObjectId\":null,", "\"ObjectId\":\"\",", "\"ObjectId\":\" \"," })
+        {
+            using var json = new MemoryStream(Encoding.UTF8.GetBytes(
+                "{\"Auth\":{\"Callers\":[{" + field +
+                "\"UserPrincipalName\":\"synthetic@example.invalid\",\"Scopes\":[\"scom-lab\"]}]}}"));
+            var configuration = new ConfigurationBuilder().AddJsonStream(json).Build();
+            var legacyGrant = Auth();
+            legacyGrant.Callers = [];
+            configuration.GetSection("Auth").Bind(legacyGrant);
+            legacyGrant.Validate();
+            Equal(null, legacyGrant.Callers[0].ObjectId, "blank optional object ID normalizes to null");
+            Check(CallerAuthorization.Resolve(upn, legacyGrant) is not null, "provider-bound legacy UPN grant accepted");
+            Equal(null, CallerAuthorization.Resolve(Principal(extras: [new("upn", "denied@example.invalid")]), legacyGrant),
+                "provider-bound legacy grant denies another UPN");
+            Throws<InvalidOperationException>(() => Hosting.AddScomServices(new ServiceCollection(), legacyGrant,
+                new SourceSettings { SnapshotEnabled = false }, new ReadModelSettings
+                {
+                    Enabled = true, DatabasePath = Path.GetFullPath("synthetic-unused.db"),
+                    ManagementGroupId = "22222222-2222-4222-8222-222222222222",
+                    ScopeKind = "managementGroup", PublisherObjectIds = ["aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"]
+                }), "indexed mode still rejects provider-bound UPN grants");
+        }
         var ambiguous = Principal(extras: [new("upn", "synthetic@example.invalid"), new("preferred_username", "other@example.invalid")]);
         Equal(null, CallerAuthorization.Resolve(ambiguous, upnAuth), "ambiguous identity denied");
         Check(Hosting.TokenValidation(auth).ValidateIssuer && Hosting.TokenValidation(auth).ValidateAudience &&
@@ -226,6 +288,12 @@ static class Checks
         Fault("SOURCE_UNAVAILABLE", () => SnapshotReader.Validate(new byte[source.MaxSnapshotBytes + 1], Status(snapshot), source, Now), "oversize refused");
         var malformed = Wire.Encode(snapshot).Replace("\"value\":40", "\"value\":1e999");
         Fault("SOURCE_UNAVAILABLE", () => SnapshotReader.Validate(Encoding.UTF8.GetBytes(malformed), Status(snapshot), source, Now), "nonfinite sample refused");
+        var missingValue = Wire.Encode(snapshot).Replace("\"value\":40,", "");
+        Fault("SOURCE_UNAVAILABLE", () => SnapshotReader.Validate(Encoding.UTF8.GetBytes(missingValue), Status(snapshot), source, Now),
+            "missing sample value refused, never zero");
+        var zeroSample = snapshot.Samples[0] with { Value = 0, ObservedAtUtc = snapshot.Samples[0].ObservedAtUtc.AddSeconds(-1) };
+        Check(Validate(snapshot with { Samples = snapshot.Samples.Add(zeroSample) }, source).Snapshot.Samples.Contains(zeroSample),
+            "explicit zero snapshot sample retained");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { Scope = new("other", "hidden") }, source), "wrong snapshot scope refused");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { SchemaVersion = "2.0" }, source), "unknown schema refused");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { Status = "unavailable" }, source), "unavailable snapshot refused");
@@ -235,6 +303,13 @@ static class Checks
         var partialDs = Validate(partial, source);
         Equal("partial", engine.SourceStatus(partialDs).Status, "missing expected computer surfaced partial");
         Check(!engine.SourceStatus(partialDs).Coverage!.Complete, "coverage false for missing device");
+        var largerExpected = partialDs with { Snapshot = partialDs.Snapshot with { ExpectedDeviceCount = 3 } };
+        Equal(3, Data(engine.SourceStatus(largerExpected)).GetProperty("expectedDeviceCount").GetInt32(),
+            "query engine reports dataset expected count rather than pilot constant");
+        Equal(3, engine.SourceStatus(largerExpected).Coverage!.ExpectedDeviceCount,
+            "query coverage uses authoritative expected count");
+        Check(!engine.SourceStatus(largerExpected).Coverage!.Complete,
+            "discovered rows do not imply complete expected membership");
         Fault("SOURCE_UNAVAILABLE", () => Validate(snapshot with { Devices = snapshot.Devices.SetItem(0, snapshot.Devices[0] with { Hostname = "outside.invalid" }) }, source), "host allowlist enforced");
         var noSamples = Validate(snapshot with { Samples = [] }, source);
         Equal("partial", engine.SourceStatus(noSamples).Status, "empty metrics explicit partial capability");
@@ -577,6 +652,8 @@ static class Checks
         var wrongSigning = new RsaSecurityKey(wrongRsa) { KeyId = "synthetic-wrong-key" };
         var builder = WebApplication.CreateBuilder(new WebApplicationOptions { EnvironmentName = "Production", Args = [] });
         builder.Logging.ClearProviders();
+        using var requestErrors = new RequestErrorLogger();
+        builder.Logging.AddProvider(requestErrors);
         builder.WebHost.UseUrls("http://127.0.0.1:0");
         Hosting.AddScomServices(builder.Services, auth, source);
         var memory = new MemoryReader(ds);
@@ -594,11 +671,22 @@ static class Checks
         });
         await using var app = builder.Build();
         Hosting.MapScom(app);
+        app.MapGet("/synthetic-storage-failure", (Func<string>)(() =>
+            throw new Microsoft.Data.Sqlite.SqliteException("private-sensitive-marker", 14, 14)));
         await app.StartAsync();
         try
         {
             var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
             using var client = new HttpClient { BaseAddress = new Uri(address), Timeout = TimeSpan.FromSeconds(20) };
+            using var storageFailure = await client.GetAsync("/synthetic-storage-failure");
+            Equal(HttpStatusCode.InternalServerError, storageFailure.StatusCode, "storage failure remains HTTP 500");
+            Equal("{\"error\":\"REQUEST_FAILED\"}", await storageFailure.Content.ReadAsStringAsync(),
+                "storage failure response remains sanitized");
+            Equal(true, requestErrors.Messages.Any(message => message.Contains("ErrorType=SqliteException") &&
+                message.Contains("SqliteErrorCode=14") && message.Contains("SqliteExtendedErrorCode=14")),
+                "storage diagnostic records safe exception and SQLite codes");
+            Equal(true, requestErrors.Messages.All(message => !message.Contains("private-sensitive-marker")),
+                "storage diagnostic excludes exception message");
             var health = await client.GetStringAsync("/healthz");
             using var healthJson = JsonDocument.Parse(health);
             Equal(2, healthJson.RootElement.EnumerateObject().Count(), "public health exposes service/version only");
@@ -624,16 +712,17 @@ static class Checks
             Equal(HttpStatusCode.OK, init.StatusCode, "valid JWT initializes MCP");
             var listing = await Send(client, new { jsonrpc = "2.0", id = 2, method = "tools/list", @params = new { } });
             var tools = Rpc(await listing.Content.ReadAsStringAsync()).GetProperty("result").GetProperty("tools");
-            Equal(6, tools.GetArrayLength(), "six and only six MCP tools");
+            Equal(8, tools.GetArrayLength(), "six existing tools plus additive lifecycle and opt-in live verification");
             var names = tools.EnumerateArray().Select(t => t.GetProperty("name").GetString()).Order().ToArray();
             Check(names.SequenceEqual(new[] { "get_capacity_summary", "get_device_details", "get_inventory_summary",
-                "get_source_status", "get_utilization", "list_devices" }), "exact tool names");
+                "get_source_status", "get_utilization", "list_devices", "list_os_support_assessments", "verify_object_current_state" }), "exact tool names");
             foreach (var tool in tools.EnumerateArray())
             {
                 var annotations = tool.GetProperty("annotations");
                 Check(annotations.GetProperty("readOnlyHint").GetBoolean(), "readOnlyHint on " + tool.GetProperty("name"));
                 Check(!annotations.GetProperty("destructiveHint").GetBoolean(), "non-destructive metadata");
-                Check(annotations.GetProperty("idempotentHint").GetBoolean(), "idempotent metadata");
+                Equal(tool.GetProperty("name").GetString() != "verify_object_current_state",
+                    annotations.GetProperty("idempotentHint").GetBoolean(), "idempotent metadata");
                 foreach (var parameter in tool.GetProperty("inputSchema").GetProperty("properties").EnumerateObject())
                     Check(!parameter.Value.ToString().Contains("\"type\": \"object\"", StringComparison.Ordinal), "flat schema parameter " + parameter.Name);
             }
@@ -645,6 +734,22 @@ static class Checks
             var envelope = TextEnvelope(result);
             Equal(2, envelope.GetProperty("data").GetProperty("uniqueComputerCount").GetInt32(), "MCP tool returns actual filtered count");
             Equal("1.0", envelope.GetProperty("schemaVersion").GetString(), "MCP envelope preserved");
+            var liveDisabled = await Call("verify_object_current_state", new { objectId = A });
+            Equal("LIVE_NOT_ENABLED", TextEnvelope(Rpc(await liveDisabled.Content.ReadAsStringAsync()).GetProperty("result"))
+                .GetProperty("error").GetString(), "targeted live is disabled without source fallback");
+            var lifecycleDenied = await Call("list_os_support_assessments", new { scopeId = "unknown" });
+            Equal(HttpStatusCode.Forbidden, lifecycleDenied.StatusCode, "lifecycle scope denied over HTTP");
+            var lifecycleResponse = await Call("list_os_support_assessments", new { pageSize = 1 });
+            var lifecycleData = TextEnvelope(Rpc(await lifecycleResponse.Content.ReadAsStringAsync()).GetProperty("result")).GetProperty("data");
+            Equal(2, lifecycleData.GetProperty("totalCount").GetInt32(), "legacy HTTP lifecycle full retained count");
+            Equal(1, lifecycleData.GetProperty("rows").GetArrayLength(), "legacy HTTP lifecycle bounded page");
+            var lifecycleNext = await Call("list_os_support_assessments",
+                new { pageSize = 1, cursor = lifecycleData.GetProperty("nextCursor").GetString() });
+            Equal(1, TextEnvelope(Rpc(await lifecycleNext.Content.ReadAsStringAsync()).GetProperty("result"))
+                .GetProperty("data").GetProperty("rows").GetArrayLength(), "legacy HTTP lifecycle continuation");
+            var lifecycleInvalid = await Call("list_os_support_assessments", new { assessment = "invalid" });
+            Equal(-32602, Rpc(await lifecycleInvalid.Content.ReadAsStringAsync()).GetProperty("error").GetProperty("code").GetInt32(),
+                "lifecycle invalid arguments JSON-RPC");
             var missing = await Call("get_device_details", new { entityId = Guid.Empty.ToString() });
             var missingResult = Rpc(await missing.Content.ReadAsStringAsync()).GetProperty("result");
             Check(missingResult.GetProperty("isError").GetBoolean(), "missing entity isError");
@@ -672,6 +777,12 @@ static class Checks
             Equal(Now.AddMinutes(-2), nativeCapacityRow.GetProperty("observedAtUtc").GetDateTimeOffset(), "MCP native capacity timestamp");
             Equal(false, nativeCapacityRow.GetProperty("optimized").GetBoolean(), "MCP native capacity optimized=false preserved");
             memory.Fail = true;
+            var lifecycleInvalidWhileUnavailable = await Call("list_os_support_assessments", new { pageSize = 0 });
+            Equal(-32602, Rpc(await lifecycleInvalidWhileUnavailable.Content.ReadAsStringAsync()).GetProperty("error").GetProperty("code").GetInt32(),
+                "lifecycle argument validation precedes unavailable source read");
+            var lifecycleFailed = await Call("list_os_support_assessments", new { });
+            Equal("SOURCE_UNAVAILABLE", TextEnvelope(Rpc(await lifecycleFailed.Content.ReadAsStringAsync()).GetProperty("result"))
+                .GetProperty("data").GetProperty("errorCode").GetString(), "lifecycle never bypasses unavailable inventory");
             var invalidWhileUnavailable = await Call("get_utilization", new { metric = "invalid" });
             Equal(-32602, Rpc(await invalidWhileUnavailable.Content.ReadAsStringAsync()).GetProperty("error").GetProperty("code").GetInt32(),
                 "argument validation precedes source availability");
@@ -690,6 +801,18 @@ static class Checks
                 Send(client, new { jsonrpc = "2.0", id = 3, method = "tools/call", @params = new { name, arguments } });
         }
         finally { await app.StopAsync(); }
+    }
+
+    private sealed class RequestErrorLogger : ILoggerProvider, ILogger
+    {
+        public System.Collections.Concurrent.ConcurrentQueue<string> Messages { get; } = new();
+        public ILogger CreateLogger(string categoryName) =>
+            categoryName == "ScomRequest" ? this : Microsoft.Extensions.Logging.Abstractions.NullLogger.Instance;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter) => Messages.Enqueue(formatter(state, exception));
+        public void Dispose() { }
     }
 
     private static Task<HttpResponseMessage> Send(HttpClient client, object payload)

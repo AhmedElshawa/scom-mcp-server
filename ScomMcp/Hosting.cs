@@ -2,19 +2,51 @@ using System.Text.Json;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using ModelContextProtocol.Server;
+using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.AspNetCore.Diagnostics;
+using Microsoft.Data.Sqlite;
 
 namespace ScomMcp;
 
 public static class Hosting
 {
-    public static void AddScomServices(IServiceCollection services, AuthSettings auth, SourceSettings source)
+    public static void AddScomServices(IServiceCollection services, AuthSettings auth, SourceSettings source,
+        ReadModelSettings? readModel = null, LifecycleSettings? lifecycle = null, TargetedLiveSettings? targetedLive = null)
     {
         auth.Validate();
         source.Validate();
+        lifecycle ??= new();
+        lifecycle.Validate();
+        readModel ??= new();
+        readModel.Validate();
+        targetedLive ??= new();
+        targetedLive.Validate(readModel);
+        if (!source.SnapshotEnabled && !readModel.Enabled)
+            throw new InvalidOperationException("At least one source must be enabled.");
+        if (readModel.Enabled && auth.Callers.Any(c => c.ObjectId is null))
+            throw new InvalidOperationException("Read model callers require immutable object-ID grants.");
+        if (readModel.WindowsToolsEnabled && (!readModel.Enabled || source.SnapshotEnabled ||
+            source.FreshMinutes != readModel.FreshMinutes || source.UnavailableMinutes != readModel.UnavailableMinutes))
+            throw new InvalidOperationException("Indexed Windows tools require read model enabled, legacy snapshots disabled and matching freshness settings.");
         services.AddSingleton(auth);
         services.AddSingleton(source);
+        services.AddSingleton(lifecycle);
+        services.AddSingleton(targetedLive);
+        services.AddSingleton<TargetedLiveChecks>();
+        services.AddSingleton(readModel);
+        services.AddSingleton<ReadModelStore>();
+        services.AddRateLimiter(options =>
+        {
+            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
+            options.AddConcurrencyLimiter("ScomIngestion", limiter =>
+            {
+                limiter.PermitLimit = 1;
+                limiter.QueueLimit = 0;
+            });
+        });
         services.AddSingleton(TimeProvider.System);
-        services.AddSingleton<ISnapshotReader, SnapshotReader>();
+        if (readModel.WindowsToolsEnabled) services.AddSingleton<ISnapshotReader, IndexedWindowsReader>();
+        else services.AddSingleton<ISnapshotReader, SnapshotReader>();
         services.AddSingleton<CursorCodec>();
         services.AddSingleton<QueryEngine>();
         services.AddHttpContextAccessor();
@@ -33,10 +65,16 @@ public static class Hosting
                 .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
                 .RequireAuthenticatedUser()
                 .RequireAssertion(context => CallerAuthorization.Resolve(context.User, auth) is not null));
+            options.AddPolicy("ScomIngest", policy => policy
+                .AddAuthenticationSchemes(JwtBearerDefaults.AuthenticationScheme)
+                .RequireAuthenticatedUser()
+                .RequireAssertion(context => ReadModelHosting.IsPublisher(context.User, auth, readModel)));
         });
-        services.AddMcpServer(options => options.ServerInfo = new() { Name = "ScomReadOnlyMcp", Version = "1.0.0" })
+        var mcp = services.AddMcpServer(options => options.ServerInfo = new() { Name = "ScomReadOnlyMcp", Version = "1.0.0" })
             .WithHttpTransport(options => options.Stateless = true)
-            .WithTools<ScomReadOnlyTools>();
+            .WithTools<ScomReadOnlyTools>()
+            .WithTools<TargetedLiveTools>();
+        if (readModel.Enabled) mcp.WithTools<ReadModelTools>();
     }
 
     public static TokenValidationParameters TokenValidation(AuthSettings auth) => new()
@@ -62,12 +100,18 @@ public static class Hosting
     {
         app.UseExceptionHandler(error => error.Run(async context =>
         {
+            var failure = context.Features.Get<IExceptionHandlerFeature>()?.Error;
+            var sqlite = failure as SqliteException;
+            context.RequestServices.GetRequiredService<ILoggerFactory>().CreateLogger("ScomRequest").LogError(
+                "Request failed. TraceId={TraceId} ErrorType={ErrorType} SqliteErrorCode={SqliteErrorCode} SqliteExtendedErrorCode={SqliteExtendedErrorCode}",
+                context.TraceIdentifier, failure?.GetType().Name, sqlite?.SqliteErrorCode, sqlite?.SqliteExtendedErrorCode);
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             await context.Response.WriteAsJsonAsync(new { error = "REQUEST_FAILED" });
         }));
         app.UseRouting();
         app.UseAuthentication();
         app.UseAuthorization();
+        app.UseRateLimiter();
         app.Use(async (context, next) =>
         {
             if (context.Request.Path.StartsWithSegments("/mcp") && HttpMethods.IsPost(context.Request.Method))
@@ -123,5 +167,7 @@ public static class Hosting
         });
         app.MapGet("/healthz", () => Results.Json(new { service = "ScomReadOnlyMcp", version = "1.0.0" })).AllowAnonymous();
         app.MapMcp("/mcp").RequireAuthorization("ScomRead");
+        ReadModelHosting.Map(app);
+        TargetedLiveHosting.Map(app);
     }
 }
