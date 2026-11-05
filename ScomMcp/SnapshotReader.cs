@@ -123,6 +123,7 @@ public sealed class SnapshotReader(SourceSettings settings, TimeProvider clock) 
                         d.Hostname.Length <= 256 && !d.Hostname.Any(char.IsWhiteSpace) && !d.Hostname.Contains('*')) &&
                 d.EntityKind == "computer" && d.OsFamily == "windows" && d.RawHealth is not null &&
                 (d.OsVersion is null || d.OsVersion.Length <= 256) &&
+                (d.OsCaption is null || !string.IsNullOrWhiteSpace(d.OsCaption) && d.OsCaption.Length <= 256) &&
                 d.Health is "healthy" or "warning" or "critical" or "unknown" &&
                 d.Virtualization is "physical" or "virtual" or "unknown" &&
                 (d.MonitoringMode == "agent" || expectedComputerIds is not null &&

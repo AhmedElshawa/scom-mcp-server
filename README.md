@@ -233,7 +233,9 @@ worker JSON file outside the repository. Configure:
 Run the worker under the approved Windows account with the read-only SCOM role.
 Its PowerShell child inherits that identity and connects to the configured SCOM
 server. Configure the execution account through the organization's approved
-Windows service/task mechanism; do not put its password in JSON, command-line
+Windows service/task mechanism; the opt-in [durable Task Scheduler host](Operations/DurableIndexedRefresh/README.md)
+provides an explicitly identified worker task, startup recovery, bounded
+deferrals and protected logs. Do not put its password in JSON, command-line
 arguments, Copilot Studio or this repository. Grant only the required local
 file, checkpoint and publisher-certificate access. The SCOM Windows identity
 and Entra ingestion publisher identity serve different purposes.
@@ -282,6 +284,37 @@ or unreadable files or invalid JSON; do not install the SDK on the MCP server to
 resolve it. In indexed mode, missing, failed, uncommitted or expired source data
 also remains unavailable. Do not fabricate fixtures or disable validation to
 make the agent return inventory.
+
+## Guided installation
+
+For the double-click experience, extract the complete reviewed evaluation ZIP and
+open **`ci-evaluation\ScomSetup.exe`**. The native Windows Forms wizard bundles its
+own x64 runtime, so it opens before the app's .NET Hosting Bundle is present.
+It starts with automatic read-only prerequisite checks (green PASS / red BLOCKED),
+then uses sequential Back/Next screens for log folder, discovered IIS placement,
+execution account and source/scope selection. Detailed overrides and real
+external evidence gates are kept in Advanced. Separately confirmed installation
+stages do not start collection or recurrence merely
+by opening. Keep all extracted files together. See the
+[double-click quickstart and signing limitations](docs/guided-setup.md#double-click-quickstart).
+The evaluation executable is unsigned, not automatically customer-trusted;
+normal Windows/UAC and PowerShell signing policies still apply.
+
+For a new opt-in indexed installation, use the
+[resumable console setup](docs/guided-setup.md). It separates host prerequisites,
+bounded existing-group discovery/selection and staging, authorized customer Entra provisioning,
+configuration/IIS activation, explicit one-shot publication and intended-user
+acceptance. No Azure infrastructure is created when an existing host suffices.
+The evaluation wizard offers separately approved explicit IIS feature and official
+signed local .NET 8 Hosting Bundle installation (no installer downloads). It does not infer source verification,
+overwrite existing applications or enable recurrence/metrics/live checks.
+`Preflight` is the read-only default and blockers stop before deployment journal
+or installation writes. The customer chooses a new dedicated IIS pool and
+site/application placement, separate local NTFS MCP/collector log destinations,
+and either an existing group or separately confirmed whole-management-group
+**supported Windows inventory** (never every SCOM class). Structured operational
+logs have restrictive identity-specific ACLs and bounded rotation. The complete
+package also includes the separately opt-in durable-refresh operations.
 
 ## Azure IIS and Copilot Studio reader setup
 
@@ -493,11 +526,18 @@ PR/push CI uses `Offline Windows validation` (`.github\workflows\offline-validat
 on `windows-2022`, pins SDK `8.0.427` and action commit hashes, and restores locked
 NuGet dependencies. It records the checked-out head SHA, runs the same complete
 offline harness, validates a fresh evaluation package and retains a seven-day
-commit-named artifact. No customer secrets, SCOM connection or production
-provider is used. Inspect the actual run conclusion and tested SHA, not merely
-the workflow's presence. Branch protection/required-check settings are separate
-administrator policy and are not changed here. Local build commands below may
-use another compatible installed SDK; CI pins its own SDK selection.
+commit-named artifact containing `scom-evaluation.zip` and its SHA-256 sidecar.
+The ZIP includes a per-file SHA-256 manifest and exact source commit identity.
+It is a review/evaluation build, not a production-certified installer.
+The `Durable indexed refresh synthetic tests` workflow
+additionally runs task-host contracts on Windows PowerShell 5.1 and PowerShell 7
+and validates checkpoint restart, serialized cycles, process-child cleanup,
+status and bounded logs. Neither workflow registers a task or uses customer
+secrets, live SCOM, or a production provider. Inspect the actual run conclusion
+and tested SHA, not merely the workflow's presence. Branch protection/required-check
+settings are separate administrator policy and are not changed here. Local build
+commands below may use another compatible installed SDK; CI pins its own SDK
+selection.
 
 From the repository root in PowerShell:
 
@@ -912,10 +952,15 @@ dotnet .\ScomMcp.dll --worker C:\ProtectedWorker\worker.json
 ```
 
 `--worker-once` publishes one attempt; `--worker` uses the serialized fixed-delay
-scheduler. Ctrl+C cancels it. Failures stop with a nonzero exit code and safe
-event/type/code diagnostics, never source payloads or arbitrary error messages.
-Service installation, restart policy, credentials and deployment are operator
-tasks; this CLI does not install a Windows service or scheduled task.
+scheduler. The scheduler retries only safely deferred attempts, with bounded
+exponential backoff and a configurable consecutive-attempt limit (default 5);
+unexpected failures and exhausted deferrals stop with a nonzero exit code.
+Ctrl+C cancels it. Optional `--runtime-state-dir` enables a protected
+single-instance lease, bounded rotating logs and a durable status record for the
+Task Scheduler host. Diagnostics never contain source payloads or arbitrary
+exception messages. The CLI itself does not install a task or choose operator
+cadence, freshness limits, credentials or deployment policy; see the
+[durable Task Scheduler host](Operations/DurableIndexedRefresh/README.md).
 Use `appsettings.Worker.example.json` as a synthetic, deliberately non-runnable
 structure, not deployment settings. Keep all actual configuration outside source.
 
@@ -1117,6 +1162,53 @@ only after validating MP property applicability and units. By default,
 `agentMonitoringVerified` must also be true after verifying every approved
 computer is agent-managed. Do not use that gate for a mixed scope containing
 management servers or agentless computers.
+
+Optional `windowsMapping.osCaptionProperty` adds a separate observed `osCaption`
+to indexed Windows inventory without changing `osVersion` or its exact-match
+filter. Omit it or use null to keep old mappings working. The caption property
+must be explicitly allowlisted in worker `allowedPropertiesByClass` for each
+actual most-derived OS class; base-class allowlists are not inherited. Missing or
+blank values stay null, and non-string/over-256-character values reject the scan.
+Nothing translates a build number into a release or edition.
+
+The original collector at commit `42af4d0` reads `OSVersionDisplayName` and
+`OSVersion` from `Microsoft.Windows.Server.10.0.OperatingSystem`, combining them
+in the legacy `osVersion` value. This is repository evidence for a **candidate**
+caption property, not evidence that a customer's installed MP discovers it.
+After authorized MP/property review, merge the following fields into the
+existing private configurations (preserve other approved properties):
+
+```json
+{
+  "windowsMapping": { "osCaptionProperty": "OSVersionDisplayName" },
+  "allowedPropertiesByClass": {
+    "Microsoft.Windows.Server.10.0.OperatingSystem": ["OSVersionDisplayName"]
+  }
+}
+```
+
+On the receiver, set `ReadModel.WindowsOsCaptionProperty` to the same exact name,
+add it to `ReadModel.AllowedPropertiesByClass` for each actual OS class, and
+configure the existing `ReadModel.WindowsMetricHosting` with the reviewed
+computer/OS classes and computer-to-OS relationship. Caption provenance reuses
+that typed hosting evidence; this does not change metric selection or arithmetic.
+Activation rejects captions that differ from the hosted OS object's approved
+property, or any non-null caption while the receiver's caption mapping is disabled.
+Both caption mapping and allowlists are pinned database policy. Changing either
+requires the existing approved policy-change/reinitialization procedure with
+protected backups and a fresh collection; do not delete or silently repurpose
+the current database. No SQL schema migration is needed: the additive field is
+stored in the existing indexed Windows snapshot JSON payload.
+
+`list_devices` and `get_device_details` expose nullable `osCaption`;
+`get_inventory_summary` adds an `osCaption` breakdown with an explicit unknown
+bucket. Existing `osVersion` values/filters remain unchanged. The existing
+`list_os_support_assessments` uses the observed caption first, retaining exact
+legacy `osVersion` caption matching when the new field is null. It never strips
+build suffixes or guesses editions. Product support lifecycle is **not** license
+usage, entitlement, contract expiry or ESU enrollment. Those require an
+authoritative licensing/SAM/CMDB source; no product keys or license records are
+collected by this feature.
 
 For mixed scopes, optional `windowsMapping.monitoringRoleMapping` replaces the
 agent-only assertion with SDK class identity and exact typed application hosting:

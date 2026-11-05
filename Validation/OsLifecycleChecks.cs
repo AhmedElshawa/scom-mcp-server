@@ -73,6 +73,20 @@ static class OsLifecycleChecks
             "Microsoft Windows Server 2016 MultiPoint Premium", "Windows 11 Pro", "", "  " })
             Equal("unknown", Assess(device with { OsVersion = caption }, today).Assessment, "ambiguous/outside-profile caption remains unknown");
         Equal("unknown", Assess(device with { OsVersion = null }, today).Assessment, "missing OS not assumed");
+        var oldDeviceJson = Wire.Encode(device).Replace(",\"osCaption\":null", "", StringComparison.Ordinal);
+        Equal(null, JsonSerializer.Deserialize<Device>(oldDeviceJson, Wire.Json)!.OsCaption,
+            "pre-caption device payload remains readable");
+        foreach (var build in new[] { "10.0.20348", "10.0.26100" })
+        {
+            var observed = device with { OsVersion = build, OsCaption = "Microsoft Windows Server 2022 Datacenter" };
+            Equal("Windows Server 2022", Assess(observed, today).Product, "explicit caption takes precedence, never inferred build");
+            Equal(observed.OsCaption, Assess(observed, today).ObservedOsCaption, "lifecycle returns actual caption evidence");
+            Equal("unknown", Assess(observed with { OsCaption = null }, today).Assessment, "build alone remains unknown");
+            Equal("unknown", Assess(observed with { OsCaption = "Windows Server 2022 Enterprise" }, today).Assessment,
+                "unsupported caption does not fall back to version");
+        }
+        Equal("unknown", Assess(device with { OsCaption = "Windows Server 2022 Enterprise" }, today).Assessment,
+            "unmapped caption takes precedence even over a mapped legacy version");
         Equal("unsupported", Assess(device with { OsFamily = "unknown" }, today).Assessment, "unknown family outside profile");
         Equal("unsupported", Assess(devices[5], today).Assessment, "Linux inventory preserved but not assessed");
         Equal("extended", Assess(device with { OsVersion = " microsoft windows server 2022 standard " }, today).Assessment,

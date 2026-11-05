@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace ScomMcp;
 
 public sealed class CollectionWorkerHostSettings
 {
+    public OperationalLoggingSettings OperationalLogging { get; set; } = new();
     public string CheckpointPath { get; set; } = "";
     public int MaxCheckpointBytes { get; set; } = 32 * 1024 * 1024;
     public PowerShellProfileSettings Profile { get; set; } = new();
@@ -18,13 +20,29 @@ public sealed class CollectionWorkerHostSettings
 
 public static class CollectionWorkerHost
 {
-    public static async Task<int> RunAsync(string configurationPath, bool once, CancellationToken cancellationToken)
+    public static async Task<int> RunAsync(string configurationPath, bool once, CancellationToken cancellationToken,
+        string? runtimeStateDirectory = null)
     {
-        using var logging = LoggerFactory.Create(builder => builder.AddSimpleConsole(options => options.SingleLine = true));
+        using var logging = LoggerFactory.Create(builder =>
+            builder.ClearProviders().AddProvider(new SafeWorkerConsoleLoggerProvider()));
         var logger = logging.CreateLogger("ScomCollectionWorker");
+        WorkerRuntimeState? runtimeState = null;
+        CancellationTokenSource? runtimeShutdown = null;
+        Task? stopRequestWatcher = null;
+        var workerCancellationToken = cancellationToken;
         var loadingConfiguration = true;
         try
         {
+            if (runtimeStateDirectory is not null)
+            {
+                if (once)
+                    throw new InvalidOperationException("Runtime state hosting is available only in long-running worker mode.");
+                runtimeState = new WorkerRuntimeState(runtimeStateDirectory);
+                runtimeShutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                workerCancellationToken = runtimeShutdown.Token;
+                stopRequestWatcher = runtimeState.WatchStopRequestsAsync(runtimeShutdown, workerCancellationToken);
+                logger.LogInformation("Worker runtime logging initialized. Event={Event}", "SCOM_WORKER_STARTED");
+            }
             if (!Path.IsPathFullyQualified(configurationPath))
                 throw new InvalidOperationException("Worker configuration path must be absolute.");
             var info = new FileInfo(configurationPath);
@@ -34,7 +52,7 @@ public static class CollectionWorkerHost
             using var bytes = new MemoryStream();
             var buffer = new byte[8192];
             int read;
-            while ((read = await stream.ReadAsync(buffer, cancellationToken)) != 0)
+            while ((read = await stream.ReadAsync(buffer, workerCancellationToken)) != 0)
             {
                 if (bytes.Length + read > 1024 * 1024)
                     throw new InvalidOperationException("Worker configuration exceeds its byte budget.");
@@ -48,6 +66,9 @@ public static class CollectionWorkerHost
             var settings = document.RootElement.Deserialize<CollectionWorkerHostSettings>(Wire.Json) ??
                 throw new InvalidOperationException("Worker configuration is empty.");
             loadingConfiguration = false;
+            logging.AddProvider(new OperationalFileLoggerProvider(settings.OperationalLogging,
+                OperationalComponent.Worker));
+            OperationalLog.Write(logger, OperationalEvent.Started, OperationalOutcome.Succeeded);
             settings.Reconciliation.Validate();
             settings.Schedule.Validate();
             settings.Publisher.Validate();
@@ -71,28 +92,46 @@ public static class CollectionWorkerHost
             var worker = new CollectionWorker(source, publisher);
             if (once)
             {
-                await worker.RunOnceAsync(cancellationToken);
-                logger.LogInformation("Worker attempt published. Event={Event}", "SCOM_WORKER_PUBLISHED");
+                var start = Stopwatch.GetTimestamp();
+                var outcome = await worker.RunOnceAsync(workerCancellationToken);
+                OperationalLog.Write(logger, OperationalEvent.CollectionCompleted,
+                    outcome == CollectionAttemptOutcome.Published ? OperationalOutcome.Succeeded : OperationalOutcome.Deferred,
+                    OperationalLog.ElapsedMilliseconds(start));
+                if (outcome == CollectionAttemptOutcome.Published)
+                    logger.LogInformation("Worker attempt published. Event={Event}", "SCOM_WORKER_PUBLISHED");
             }
             else
             {
                 using var sourceGate = new SemaphoreSlim(1);
+                var consecutiveDeferredAttempts = 0;
                 async Task<CollectionAttemptOutcome> Collect(CancellationToken ct)
                 {
+                    var start = Stopwatch.GetTimestamp();
                     await sourceGate.WaitAsync(ct);
-                    try { return await worker.RunOnceAsync(ct); }
+                    try
+                    {
+                        var outcome = await worker.RunOnceAsync(ct);
+                        consecutiveDeferredAttempts = outcome == CollectionAttemptOutcome.Deferred
+                            ? consecutiveDeferredAttempts + 1
+                            : 0;
+                        runtimeState?.RecordAttempt(outcome, consecutiveDeferredAttempts);
+                        OperationalLog.Write(logger, OperationalEvent.CollectionCompleted,
+                            outcome == CollectionAttemptOutcome.Published ? OperationalOutcome.Succeeded : OperationalOutcome.Deferred,
+                            OperationalLog.ElapsedMilliseconds(start));
+                        return outcome;
+                    }
                     finally { sourceGate.Release(); }
                 }
                 var scheduler = new CollectionScheduler(settings.Schedule, Collect,
                     logging.CreateLogger<CollectionScheduler>());
-                if (!settings.LiveChecks.Enabled) await scheduler.RunAsync(cancellationToken);
+                if (!settings.LiveChecks.Enabled) await scheduler.RunAsync(workerCancellationToken);
                 else
                 {
                     var liveProfile = new PowerShellNormalizationProfile(settings.LiveChecks.Profile);
                     using var liveWorker = new TargetedLiveWorker(settings.Publisher, identity.AcquireAsync,
                         new(LiveWorkerSettings.Policy(settings.LiveChecks.Profile), settings.LiveChecks.Source, true),
                         new PowerShellTargetedLiveSource(liveProfile), TimeProvider.System, logging.CreateLogger<TargetedLiveWorker>());
-                    using var combined = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    using var combined = CancellationTokenSource.CreateLinkedTokenSource(workerCancellationToken);
                     async Task Poll()
                     {
                         var backoff = settings.LiveChecks.PollSeconds;
@@ -128,28 +167,57 @@ public static class CollectionWorkerHost
                     }
                 }
             }
+            OperationalLog.Write(logger, OperationalEvent.Stopped, OperationalOutcome.Succeeded);
             return 0;
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (runtimeState?.StopRequestInvalid == true)
         {
+            runtimeState.Stop("WORKER_STOP_REQUEST_INVALID");
+            logger.LogError("Worker stopped. Event={Event} ErrorType={ErrorType} Code={Code}",
+                "SCOM_WORKER_FAILED", runtimeState.StopRequestErrorType, "WORKER_STOP_REQUEST_INVALID");
+            return 1;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested ||
+            runtimeState?.StopRequested == true)
+        {
+            runtimeState?.Stop("WORKER_CANCELLED");
             logger.LogInformation("Worker stopped. Event={Event}", "SCOM_WORKER_CANCELLED");
             return 0;
         }
         catch (JsonException error) when (loadingConfiguration)
         {
+            runtimeState?.Stop("WORKER_CONFIGURATION_JSON_INVALID");
             logger.LogError("Worker stopped. Event={Event} Code={Code} LineNumber={LineNumber} BytePositionInLine={BytePositionInLine}",
                 "SCOM_WORKER_FAILED", "WORKER_CONFIGURATION_JSON_INVALID", error.LineNumber, error.BytePositionInLine);
             return 1;
         }
         catch (Exception error)
         {
+            runtimeState?.Stop(error is CollectionAttemptsExhaustedException
+                ? "COLLECTION_ATTEMPTS_EXHAUSTED"
+                : error is IngestionPublicationException publicationFailure ? publicationFailure.Code :
+                error is QueryFault queryFailure ? queryFailure.Code :
+                error is JsonException ? "WORKER_CONFIGURATION_JSON_INVALID" :
+                "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
             // Never log paths, source records, configuration, credentials or
             // arbitrary exception messages from a source-profile subprocess.
             logger.LogError("Worker stopped. Event={Event} ErrorType={ErrorType} Code={Code}",
                 "SCOM_WORKER_FAILED", error.GetType().Name,
+                error is CollectionAttemptsExhaustedException ? "COLLECTION_ATTEMPTS_EXHAUSTED" :
                 error is IngestionPublicationException publication ? publication.Code :
                 error is QueryFault query ? query.Code : "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
             return 1;
+        }
+        finally
+        {
+            runtimeShutdown?.Cancel();
+            if (stopRequestWatcher is not null)
+            {
+                try { await stopRequestWatcher; }
+                catch (OperationCanceledException) when (runtimeShutdown?.IsCancellationRequested == true) { }
+            }
+            runtimeShutdown?.Dispose();
+            runtimeState?.Dispose();
         }
     }
 }

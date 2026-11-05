@@ -25,7 +25,7 @@ public sealed record Device(
     string EntityId, string SourceObjectId, string Hostname, string EntityKind, string OsFamily,
     string? OsVersion, string Health, string RawHealth, string Virtualization, string MonitoringMode,
     double? MemoryTotalMiB, int? ProcessorCount, DateTimeOffset? DiscoveredAtUtc,
-    ImmutableArray<string> GroupIds, ImmutableArray<string> SourceRefs);
+    ImmutableArray<string> GroupIds, ImmutableArray<string> SourceRefs, string? OsCaption = null);
 public sealed record Volume(string EntityId, string ParentEntityId, string DeviceId, string? FileSystem,
     double? SizeMiB, ImmutableArray<string> SourceRefs);
 public sealed record Sample(string EntityId, string Metric, DateTimeOffset ObservedAtUtc, [property: JsonRequired] double Value,

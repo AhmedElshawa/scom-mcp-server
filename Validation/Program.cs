@@ -18,6 +18,19 @@ using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
 using ScomMcp;
 
+if (args is ["--operational-logging-checks"])
+{
+    var root = Path.Combine(Directory.GetCurrentDirectory(), ".validation-data", Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try
+    {
+        OperationalLoggingChecks.Run(root);
+        WorkerRuntimeStateChecks.Run(root);
+        await CollectionWorkerHostChecks.Run(root);
+    }
+    finally { Directory.Delete(root, true); }
+    return 0;
+}
 if (args is ["--targeted-live-checks"])
 {
     await TargetedLiveValidation.Run();
@@ -26,6 +39,14 @@ if (args is ["--targeted-live-checks"])
 if (args is ["--lifecycle-checks"])
 {
     OsLifecycleChecks.Run();
+    return 0;
+}
+if (args is ["--windows-source-checks"])
+{
+    var root = Path.Combine(Path.GetTempPath(), "scom-windows-source-" + Guid.NewGuid().ToString("N"));
+    Directory.CreateDirectory(root);
+    try { await WindowsSourceProjectionChecks.Run(root); }
+    finally { Directory.Delete(root, recursive: true); }
     return 0;
 }
 if (args is ["--read-model-fault", var mode, var path, var session])
@@ -63,6 +84,8 @@ static class Checks
             source.Validate();
             auth.Validate();
             TestAuth(auth);
+            SetupConfigurationChecks.Run(root);
+            OperationalLoggingChecks.Run(root);
             var snapshot = Fixture();
             var dataset = Validate(snapshot, source);
             var codec = new CursorCodec(Clock, source);
@@ -90,6 +113,7 @@ static class Checks
             await NormalizationProcessChecks.Run();
             await CertificatePublisherChecks.Run();
             await CollectionWorkerHostChecks.Run(root);
+            WorkerRuntimeStateChecks.Run(root);
             await WindowsSourceProjectionChecks.Run(root);
             await ManagementGroupSourceChecks.Run(root);
             Console.WriteLine($"PASS: {passed} assertions; pure auth, snapshots, counts, cursors, math, and authenticated MCP HTTP verified.");

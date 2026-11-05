@@ -53,7 +53,8 @@ namespace Microsoft.EnterpriseManagement.Configuration {
     }
 }
 public class SyntheticMetricModuleReference {
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; set; }
+    public SyntheticMetricModuleReference() { Id = Guid.NewGuid(); }
     public bool WrongId { get; set; }
     public bool Fail { get; set; }
     public Microsoft.EnterpriseManagement.Configuration.ManagementPackDataSourceModuleType GetElement() {
@@ -64,7 +65,8 @@ public class SyntheticMetricModuleReference {
     }
 }
 public class SyntheticUnsupportedModuleReference {
-    public Guid Id { get; set; } = Guid.NewGuid();
+    public Guid Id { get; set; }
+    public SyntheticUnsupportedModuleReference() { Id = Guid.NewGuid(); }
 }
 public class SyntheticMetricSample {
     public DateTime TimeSampled { get; set; }

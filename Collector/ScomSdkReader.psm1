@@ -6,7 +6,8 @@ function Read-SCOMObjectIdPages {
         [Parameter(Mandatory)] [object] $EntityObjects,
         [Parameter(Mandatory)] [Guid[]] $ObjectIds,
         [ValidateRange(1, 100000)] [int] $MaxObjects = 10000,
-        [ValidateRange(1, 100)] [int] $PageSize = 50
+        [ValidateRange(1, 100)] [int] $PageSize = 50,
+        [ValidateRange(1, 7200)] [int] $DeadlineSeconds = 900
     )
 
     $ids = New-Object 'System.Collections.Generic.List[System.Guid]'
@@ -59,11 +60,19 @@ function Read-SCOMObjectIdPages {
     $arguments = New-Object 'System.Object[]' 2
     $arguments[0] = $ids.PSObject.BaseObject
     $arguments[1] = $options.PSObject.BaseObject
+    $watch=[Diagnostics.Stopwatch]::StartNew()
     $reader = $method.Invoke($EntityObjects.PSObject.BaseObject, $arguments)
     if ($null -eq $reader) {
         throw 'SCOM_READER_NOT_RETURNED'
     }
-    Read-SCOMReaderPages -Reader $reader -ExpectedIds $ids.ToArray() -PageSize $PageSize
+    try {
+        $remaining=$DeadlineSeconds-$watch.Elapsed.TotalSeconds
+        if ($remaining -le 0) { throw 'SCOM_READER_DEADLINE' }
+        Read-SCOMReaderPages -Reader $reader -ExpectedIds $ids.ToArray() -PageSize $PageSize `
+            -DeadlineSeconds ([Math]::Max(1,[int][Math]::Floor($remaining)))
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_READER_DEADLINE' }
+    }
+    finally { if ($reader -is [IDisposable]) { $reader.Dispose() } }
 }
 
 function Read-SCOMReaderPages {
@@ -71,7 +80,8 @@ function Read-SCOMReaderPages {
     param(
         [Parameter(Mandatory)] [object] $Reader,
         [Parameter(Mandatory)] [Guid[]] $ExpectedIds,
-        [ValidateRange(1, 100)] [int] $PageSize = 50
+        [ValidateRange(1, 100)] [int] $PageSize = 50,
+        [ValidateRange(1, 7200)] [int] $DeadlineSeconds = 900
     )
 
     $expected = New-Object 'System.Collections.Generic.HashSet[System.Guid]'
@@ -83,6 +93,7 @@ function Read-SCOMReaderPages {
     if ($expected.Count -eq 0 -or $expected.Count -gt 100000) {
         throw 'SCOM_READER_EXPECTED_IDS_REQUIRED'
     }
+    $watch=[Diagnostics.Stopwatch]::StartNew()
     $Reader.PageSize = $PageSize
     $count = [int]$Reader.Count
     if ($count -lt 0 -or $count -gt $expected.Count) {
@@ -91,11 +102,13 @@ function Read-SCOMReaderPages {
     $found = New-Object 'System.Collections.Generic.HashSet[System.Guid]'
     $rows = New-Object 'System.Collections.Generic.List[object]'
     for ($offset = 0; $offset -lt $count; $offset += $PageSize) {
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_READER_DEADLINE' }
         $take = [Math]::Min($PageSize, $count - $offset)
         $page = $Reader.GetRange([int]$offset, [int]$take)
         if ($null -eq $page -or $page.Count -ne $take) {
             throw 'SCOM_READER_PAGE_INCOMPLETE'
         }
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_READER_DEADLINE' }
         foreach ($row in $page) {
             if ($null -eq $row) { throw 'SCOM_READER_OBJECT_INVALID' }
             $id = [Guid]::Empty
@@ -118,7 +131,7 @@ function Read-SCOMReaderPages {
     }
 }
 
-function Read-SCOMManagementGroupScope {
+function Read-SCOMClassScope {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)] [object]$EntityObjects,
@@ -132,7 +145,6 @@ function Read-SCOMManagementGroupScope {
     )
     if (-not $WholeManagementGroupApproved -or -not $ScopeVisibilityVerified -or
         -not $EnumerationQueryContractVerified) { throw 'SCOM_MANAGEMENT_GROUP_SCOPE_UNVERIFIED' }
-    if ([string]$EntityClass.Name -cne 'System.Entity') { throw 'SCOM_MANAGEMENT_GROUP_ROOT_CLASS_INVALID' }
     $managerType='Microsoft.EnterpriseManagement.Monitoring.IMonitoringObjectsManagement' -as [type]
     $objectType='Microsoft.EnterpriseManagement.Monitoring.MonitoringObject' -as [type]
     $classType='Microsoft.EnterpriseManagement.Configuration.ManagementPackClass' -as [type]
@@ -158,35 +170,106 @@ function Read-SCOMManagementGroupScope {
     $watch=[Diagnostics.Stopwatch]::StartNew()
     $reader=$candidate[0].MakeGenericMethod([type[]]@($objectType)).Invoke($EntityObjects.PSObject.BaseObject,$arguments)
     if ($null -eq $reader) { throw 'SCOM_MANAGEMENT_GROUP_READER_MISSING' }
-    $reader.PageSize=$PageSize
-    $initialCount=$reader.Count
-    if ($initialCount -isnot [int]) { throw 'SCOM_MANAGEMENT_GROUP_READER_COUNT_INVALID' }
-    $count=[int]$initialCount
-    if ($count -lt 0 -or $count -gt $MaxObjects) { throw 'SCOM_MANAGEMENT_GROUP_SCOPE_OVERFLOW' }
-    $ids=New-Object 'System.Collections.Generic.HashSet[System.Guid]'
-    $rows=New-Object 'System.Collections.Generic.List[object]'
-    for ($offset=0; $offset -lt $count; $offset+=$PageSize) {
-        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_MANAGEMENT_GROUP_DEADLINE' }
-        $take=[Math]::Min($PageSize,$count-$offset)
-        $page=$reader.GetRange([int]$offset,[int]$take)
-        if ($null -eq $page -or $page.Count -ne $take) { throw 'SCOM_MANAGEMENT_GROUP_PAGE_INCOMPLETE' }
-        foreach ($row in $page) {
-            $id=[Guid]::Empty
-            if ($null -eq $row -or -not [Guid]::TryParse([string]$row.Id,[ref]$id) -or
-                $id -eq [Guid]::Empty -or -not $ids.Add($id) -or -not $row.IsInstanceOf($EntityClass)) {
-                throw 'SCOM_MANAGEMENT_GROUP_OBJECT_INVALID'
+    try {
+        $reader.PageSize=$PageSize
+        $initialCount=$reader.Count
+        if ($initialCount -isnot [int]) { throw 'SCOM_MANAGEMENT_GROUP_READER_COUNT_INVALID' }
+        $count=[int]$initialCount
+        if ($count -lt 0 -or $count -gt $MaxObjects) { throw 'SCOM_MANAGEMENT_GROUP_SCOPE_OVERFLOW' }
+        $ids=New-Object 'System.Collections.Generic.HashSet[System.Guid]'
+        $rows=New-Object 'System.Collections.Generic.List[object]'
+        for ($offset=0; $offset -lt $count; $offset+=$PageSize) {
+            if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_MANAGEMENT_GROUP_DEADLINE' }
+            $take=[Math]::Min($PageSize,$count-$offset)
+            $page=$reader.GetRange([int]$offset,[int]$take)
+            if ($null -eq $page -or $page.Count -ne $take) { throw 'SCOM_MANAGEMENT_GROUP_PAGE_INCOMPLETE' }
+            foreach ($row in $page) {
+                $id=[Guid]::Empty
+                if ($null -eq $row -or -not [Guid]::TryParse([string]$row.Id,[ref]$id) -or
+                    $id -eq [Guid]::Empty -or -not $ids.Add($id) -or -not $row.IsInstanceOf($EntityClass)) {
+                    throw 'SCOM_MANAGEMENT_GROUP_OBJECT_INVALID'
+                }
+                $rows.Add($row)
             }
-            $rows.Add($row)
+        }
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds -or [int]$reader.Count -ne $count) {
+            throw 'SCOM_MANAGEMENT_GROUP_READER_CHANGED_OR_DEADLINE'
+        }
+        [pscustomobject]@{
+            ExpectedObjectIds=@($ids | Sort-Object)
+            MembershipObjects=$rows.ToArray()
+            MembershipVerified=$true
+            SourceWorkBoundVerified=$false
         }
     }
-    if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds -or [int]$reader.Count -ne $count) {
-        throw 'SCOM_MANAGEMENT_GROUP_READER_CHANGED_OR_DEADLINE'
+    finally { if ($reader -is [IDisposable]) { $reader.Dispose() } }
+}
+
+function Read-SCOMManagementGroupScope {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object]$EntityObjects,
+        [Parameter(Mandatory)] [object]$EntityClass,
+        [Parameter(Mandatory)] [bool]$WholeManagementGroupApproved,
+        [Parameter(Mandatory)] [bool]$ScopeVisibilityVerified,
+        [Parameter(Mandatory)] [bool]$EnumerationQueryContractVerified,
+        [ValidateRange(1,100000)] [int]$MaxObjects=10000,
+        [ValidateRange(1,100)] [int]$PageSize=50,
+        [ValidateRange(1,7200)] [int]$DeadlineSeconds=900
+    )
+    if ([string]$EntityClass.Name -cne 'System.Entity') { throw 'SCOM_MANAGEMENT_GROUP_ROOT_CLASS_INVALID' }
+    Read-SCOMClassScope @PSBoundParameters
+}
+
+function Read-SCOMWindowsManagementGroupScope {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object]$EntityObjects,
+        [Parameter(Mandatory)] [object[]]$Classes,
+        [Parameter(Mandatory)] [object]$Mapping,
+        [Parameter(Mandatory)] [bool]$WholeManagementGroupApproved,
+        [Parameter(Mandatory)] [bool]$ScopeVisibilityVerified,
+        [Parameter(Mandatory)] [bool]$EnumerationQueryContractVerified,
+        [ValidateRange(1,100000)] [int]$MaxObjects=10000,
+        [ValidateRange(1,100)] [int]$PageSize=50,
+        [ValidateRange(1,7200)] [int]$DeadlineSeconds=900
+    )
+    $names=@($Mapping.computerClassName,$Mapping.operatingSystemClassName,$Mapping.volumeClassName)
+    if ($null -ne $Mapping.PSObject.Properties['monitoringRoleMapping'] -and $null -ne $Mapping.monitoringRoleMapping) {
+        if ($Mapping.monitoringRoleMapping.verified -isnot [bool] -or -not $Mapping.monitoringRoleMapping.verified) {
+            throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
+        }
+        $names+=@($Mapping.monitoringRoleMapping.agentClassName,$Mapping.monitoringRoleMapping.managementServerClassName)
+    }
+    if ($Mapping.verified -isnot [bool] -or -not $Mapping.verified -or $Classes.Count -ne $names.Count -or
+        @($names | Sort-Object -Unique).Count -ne $names.Count) { throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED' }
+    for ($i=0; $i -lt $names.Count; $i++) {
+        if ($names[$i] -isnot [string] -or [string]::IsNullOrWhiteSpace($names[$i]) -or
+            $names[$i].Length -gt 256 -or $names[$i] -match '[*?\[\]]' -or
+            $names[$i] -ceq 'System.Entity' -or $null -eq $Classes[$i] -or
+            [string]$Classes[$i].Name -cne $names[$i]) { throw 'SCOM_WINDOWS_CLASS_MAPPING_INVALID' }
+    }
+    $watch=[Diagnostics.Stopwatch]::StartNew()
+    $rows=New-Object 'System.Collections.Generic.Dictionary[System.Guid,object]'
+    foreach ($class in $Classes) {
+        $remaining=$DeadlineSeconds-$watch.Elapsed.TotalSeconds
+        if ($remaining -le 0) { throw 'SCOM_MANAGEMENT_GROUP_DEADLINE' }
+        $scope=Read-SCOMClassScope -EntityObjects $EntityObjects -EntityClass $class `
+            -WholeManagementGroupApproved $WholeManagementGroupApproved -ScopeVisibilityVerified $ScopeVisibilityVerified `
+            -EnumerationQueryContractVerified $EnumerationQueryContractVerified -MaxObjects $MaxObjects `
+            -PageSize $PageSize -DeadlineSeconds ([Math]::Max(1,[int][Math]::Floor($remaining)))
+        foreach ($row in $scope.MembershipObjects) {
+            $id=[Guid]$row.Id
+            if (-not $rows.ContainsKey($id)) {
+                if ($rows.Count -ge $MaxObjects) { throw 'SCOM_MANAGEMENT_GROUP_SCOPE_OVERFLOW' }
+                $rows.Add($id,$row)
+            }
+        }
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_MANAGEMENT_GROUP_DEADLINE' }
     }
     [pscustomobject]@{
-        ExpectedObjectIds=@($ids | Sort-Object)
-        MembershipObjects=$rows.ToArray()
-        MembershipVerified=$true
-        SourceWorkBoundVerified=$false
+        ExpectedObjectIds=@($rows.Keys | Sort-Object); MembershipObjects=@($rows.Values)
+        MembershipVerified=$true; SourceWorkBoundVerified=$false
     }
 }
 
@@ -518,4 +601,4 @@ function Read-SCOMDirectGroupMembers {
     }
 }
 
-Export-ModuleMember -Function Read-SCOMObjectIdPages, Read-SCOMReaderPages, Read-SCOMManagementGroupScope, Resolve-SCOMApprovedGroupMembership, Read-SCOMDirectRelationshipRows, ConvertTo-SCOMObservedObject, ConvertTo-SCOMObservedAlert, Read-SCOMDirectGroupMembers
+Export-ModuleMember -Function Read-SCOMObjectIdPages, Read-SCOMReaderPages, Read-SCOMManagementGroupScope, Read-SCOMWindowsManagementGroupScope, Resolve-SCOMApprovedGroupMembership, Read-SCOMDirectRelationshipRows, ConvertTo-SCOMObservedObject, ConvertTo-SCOMObservedAlert, Read-SCOMDirectGroupMembers

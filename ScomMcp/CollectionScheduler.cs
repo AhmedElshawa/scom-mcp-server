@@ -6,14 +6,21 @@ public sealed class CollectionScheduleSettings
     public TimeSpan AttemptDeadline { get; set; } = TimeSpan.FromMinutes(20);
     public TimeSpan FailureBackoff { get; set; } = TimeSpan.FromMinutes(1);
     public TimeSpan MaxFailureBackoff { get; set; } = TimeSpan.FromMinutes(30);
+    public int MaxConsecutiveDeferredAttempts { get; set; } = 5;
     public void Validate()
     {
         if (Interval < TimeSpan.FromSeconds(1) || Interval > TimeSpan.FromDays(1) ||
             AttemptDeadline < TimeSpan.FromSeconds(1) || AttemptDeadline > TimeSpan.FromHours(2) ||
             FailureBackoff < TimeSpan.FromSeconds(1) || MaxFailureBackoff < FailureBackoff ||
-            MaxFailureBackoff > TimeSpan.FromDays(1))
+            MaxFailureBackoff > TimeSpan.FromDays(1) || MaxConsecutiveDeferredAttempts is < 1 or > 100)
             throw new InvalidOperationException("Collection schedule requires bounded intervals, deadlines and backoff.");
     }
+}
+
+public sealed class CollectionAttemptsExhaustedException : InvalidOperationException
+{
+    public CollectionAttemptsExhaustedException() :
+        base("Collection reached its consecutive deferred-attempt limit.") { }
 }
 
 // The adapter must preserve/reconcile any ambiguous session before reporting
@@ -36,7 +43,8 @@ public sealed class CollectionScheduler
         this.settings = new()
         {
             Interval = settings.Interval, AttemptDeadline = settings.AttemptDeadline,
-            FailureBackoff = settings.FailureBackoff, MaxFailureBackoff = settings.MaxFailureBackoff
+            FailureBackoff = settings.FailureBackoff, MaxFailureBackoff = settings.MaxFailureBackoff,
+            MaxConsecutiveDeferredAttempts = settings.MaxConsecutiveDeferredAttempts
         };
         this.attempt = attempt;
         this.logger = logger;
@@ -49,6 +57,7 @@ public sealed class CollectionScheduler
         var backoff = settings.FailureBackoff;
         try
         {
+            var consecutiveDeferredAttempts = 0;
             while (true)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -78,10 +87,19 @@ public sealed class CollectionScheduler
                         logger.LogInformation("Collection published. Event={Event}", "SCOM_COLLECTION_PUBLISHED");
                         delay = settings.Interval;
                         backoff = settings.FailureBackoff;
+                        consecutiveDeferredAttempts = 0;
                         break;
                     case CollectionAttemptOutcome.Deferred:
-                        logger.LogWarning("Collection deferred. Event={Event} DelaySeconds={DelaySeconds}",
-                            "SCOM_COLLECTION_DEFERRED", backoff.TotalSeconds);
+                        consecutiveDeferredAttempts++;
+                        logger.LogWarning("Collection deferred. Event={Event} Attempt={Attempt} MaxAttempts={MaxAttempts} DelaySeconds={DelaySeconds}",
+                            "SCOM_COLLECTION_DEFERRED", consecutiveDeferredAttempts,
+                            settings.MaxConsecutiveDeferredAttempts, backoff.TotalSeconds);
+                        if (consecutiveDeferredAttempts >= settings.MaxConsecutiveDeferredAttempts)
+                        {
+                            logger.LogError("Collection loop stopped. Event={Event} ErrorType={ErrorType}",
+                                "SCOM_COLLECTION_STOPPED", nameof(CollectionAttemptsExhaustedException));
+                            throw new CollectionAttemptsExhaustedException();
+                        }
                         delay = backoff;
                         backoff = TimeSpan.FromTicks(Math.Min(backoff.Ticks * 2, settings.MaxFailureBackoff.Ticks));
                         break;

@@ -7,6 +7,7 @@ $ProgressPreference = 'SilentlyContinue'
 [Console]::InputEncoding = New-Object System.Text.UTF8Encoding($false)
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 
+$operationalLog=$null
 try {
     if ($PSVersionTable.PSEdition -ne 'Desktop') { throw 'SCOM_PROFILE_DESKTOP_REQUIRED' }
     $text = [Console]::In.ReadToEnd()
@@ -16,6 +17,22 @@ try {
         throw 'SCOM_PROFILE_PROTOCOL_INVALID'
     }
     $config = $inputData.configuration
+    $inventoryKind='generic'
+    if ($null -ne $config.PSObject.Properties['inventoryKind']) {
+        $inventoryKind=$config.inventoryKind
+        if ($inventoryKind -cnotin @('generic','supportedWindows')) { throw 'SCOM_PROFILE_INVENTORY_KIND_INVALID' }
+    }
+    if ($null -ne $config.PSObject.Properties['operationalLogging'] -and $null -ne $config.operationalLogging) {
+        Import-Module (Join-Path $PSScriptRoot 'ScomOperationalLogging.psm1') -ErrorAction Stop | Out-Null
+        $operationalLog=New-SCOMOperationalLog -Configuration $config.operationalLogging
+        Write-SCOMOperationalEvent -Log $operationalLog -Event 'profile.started'
+    }
+    elseif ($inventoryKind -ceq 'supportedWindows') { throw 'SCOM_PROFILE_LOGGING_REQUIRED' }
+    if ($inventoryKind -ceq 'supportedWindows' -and (
+        $null -eq $config.PSObject.Properties['windowsMapping'] -or $null -eq $config.windowsMapping -or
+        $config.windowsMapping.verified -isnot [bool] -or -not $config.windowsMapping.verified)) {
+        throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
+    }
     if ($config.scopeKind -cnotin @('group','managementGroup') -or
         $config.scopeVisibilityVerified -isnot [bool] -or -not $config.scopeVisibilityVerified) {
         throw 'SCOM_PROFILE_SCOPE_UNVERIFIED'
@@ -40,6 +57,7 @@ try {
     if ($managementGroupId -eq [Guid]::Empty -or
         ($config.scopeKind -ceq 'group' -and $groupId -eq [Guid]::Empty) -or
         [string]::IsNullOrWhiteSpace([string]$config.managementServer)) { throw 'SCOM_PROFILE_SOURCE_INVALID' }
+    if ($null -ne $operationalLog) { Write-SCOMOperationalEvent -Log $operationalLog -Event 'configuration.validated' }
     Import-Module $module -ErrorAction Stop | Out-Null
     Import-Module (Join-Path $PSScriptRoot 'ScomNormalization.psm1') -ErrorAction Stop | Out-Null
     New-SCOMManagementGroupConnection -ComputerName ([string]$config.managementServer) -ErrorAction Stop | Out-Null
@@ -47,6 +65,7 @@ try {
     if ($groups.Count -ne 1 -or [Guid]$groups[0].Id -ne $managementGroupId) {
         throw 'SCOM_PROFILE_MANAGEMENT_GROUP_MISMATCH'
     }
+    if ($null -ne $operationalLog) { Write-SCOMOperationalEvent -Log $operationalLog -Event 'source.connected' }
     $scopeParameters=@{ScopeKind=$config.scopeKind}
     if ($config.scopeKind -ceq 'group') {
         $root = @(Get-SCOMGroup -Id $groupId -ErrorAction Stop)
@@ -61,12 +80,16 @@ try {
         $scopeParameters.MembershipRelationshipClass=$relationship[0]
         $scopeParameters.MembershipQueryContractVerified=$config.membershipQueryContractVerified
     }
-    else {
+    elseif ($inventoryKind -ceq 'generic') {
         $entityClass=@(Get-SCOMClass -Name 'System.Entity' -ErrorAction Stop)
         if ($entityClass.Count -ne 1 -or [string]$entityClass[0].Name -cne 'System.Entity') {
             throw 'SCOM_PROFILE_ENTITY_CLASS_UNAVAILABLE'
         }
         $scopeParameters.EntityClass=$entityClass[0]
+        $scopeParameters.WholeManagementGroupApproved=$config.wholeManagementGroupApproved
+        $scopeParameters.EnumerationQueryContractVerified=$config.enumerationQueryContractVerified
+    }
+    else {
         $scopeParameters.WholeManagementGroupApproved=$config.wholeManagementGroupApproved
         $scopeParameters.EnumerationQueryContractVerified=$config.enumerationQueryContractVerified
     }
@@ -107,6 +130,7 @@ try {
     $parameters = @{
         EntityObjects = $groups[0].EntityObjects
         ManagementGroupId = $managementGroupId
+        InventoryKind = $inventoryKind
         ScopeVisibilityVerified = $config.scopeVisibilityVerified
         Request = $inputData.request
         AllowedPropertiesByClass = $allowed
@@ -175,9 +199,13 @@ try {
     $scan = Get-SCOMGenericScan @parameters
     $output = @{ protocolVersion=1; scan=$scan } | ConvertTo-Json -Depth 24 -Compress
     if ([Text.Encoding]::UTF8.GetByteCount($output) -gt 33554432) { throw 'SCOM_PROFILE_OUTPUT_BUDGET' }
+    if ($null -ne $operationalLog) { Write-SCOMOperationalEvent -Log $operationalLog -Event 'scan.completed' }
     [Console]::Out.Write($output)
 }
 catch {
+    if ($null -ne $operationalLog) {
+        try { Write-SCOMOperationalEvent -Log $operationalLog -Event 'profile.failed' } catch { }
+    }
     # Do not expose arbitrary SDK exceptions, configuration or customer values.
     [Console]::Error.Write('SCOM_GENERIC_PROFILE_FAILED')
     exit 1

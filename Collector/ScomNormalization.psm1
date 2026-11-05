@@ -14,6 +14,7 @@ function Get-SCOMGenericScan {
         [Parameter(Mandatory)] [bool] $ScopeVisibilityVerified,
         [bool] $MembershipQueryContractVerified = $false,
         [ValidateSet('group','managementGroup')] [string] $ScopeKind = 'group',
+        [ValidateSet('generic','supportedWindows')] [string] $InventoryKind = 'generic',
         [bool] $WholeManagementGroupApproved = $false,
         [bool] $EnumerationQueryContractVerified = $false,
         [object] $EntityClass = $null,
@@ -45,8 +46,23 @@ function Get-SCOMGenericScan {
         ($ScopeKind -eq 'group' -and (-not $MembershipQueryContractVerified -or $GroupId -eq [Guid]::Empty -or
             $null -eq $GroupClass -or $null -eq $MembershipRelationshipClass)) -or
         ($ScopeKind -eq 'managementGroup' -and (-not $WholeManagementGroupApproved -or
-            -not $EnumerationQueryContractVerified -or $null -eq $EntityClass -or $GroupId -ne [Guid]::Empty))) {
+            -not $EnumerationQueryContractVerified -or
+            ($InventoryKind -eq 'generic' -and $null -eq $EntityClass) -or $GroupId -ne [Guid]::Empty))) {
         throw 'SCOM_PROFILE_SCOPE_UNVERIFIED'
+    }
+    if ($InventoryKind -eq 'supportedWindows') {
+        if ($null -eq $WindowsMapping) { throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED' }
+        # Validate the reviewed projection before touching any source reader, including empty scopes.
+        ConvertTo-SCOMWindowsInventory -Objects @() -ObservedObjects @() -Relationships @() `
+            -ExpectedComputerIds @() -ComputerClass $WindowsComputerClass -OperatingSystemClass $WindowsOsClass `
+            -VolumeClass $WindowsVolumeClass -Mapping $WindowsMapping -AgentClass $WindowsAgentClass `
+            -ManagementServerClass $WindowsManagementServerClass | Out-Null
+        foreach ($pair in @(
+            @($WindowsComputerClass,'computerClassName'), @($WindowsOsClass,'operatingSystemClassName'),
+            @($WindowsVolumeClass,'volumeClassName'))) {
+            if ([string]$pair[0].Name -cne [string]$WindowsMapping.($pair[1]) -or
+                [string]$pair[0].Name -ceq 'System.Entity') { throw 'SCOM_WINDOWS_CLASS_MAPPING_INVALID' }
+        }
     }
     if ($AdditionalRelationshipClasses.Count -gt 16 -or
         ($AdditionalRelationshipClasses.Count -gt 0 -and -not $AdditionalRelationshipContractVerified)) {
@@ -95,6 +111,19 @@ function Get-SCOMGenericScan {
             -ScopeVisibilityVerified $ScopeVisibilityVerified -MaxObjects $MaxObjects -MaxGroups $MaxGroups `
             -DeadlineSeconds $DeadlineSeconds
     }
+    elseif ($InventoryKind -eq 'supportedWindows') {
+        $classes=@($WindowsComputerClass,$WindowsOsClass,$WindowsVolumeClass)
+        if ($null -ne $WindowsAgentClass -or $null -ne $WindowsManagementServerClass) {
+            $classes+=@($WindowsAgentClass,$WindowsManagementServerClass)
+        }
+        $scope=Read-SCOMWindowsManagementGroupScope -EntityObjects $EntityObjects -Classes $classes `
+            -Mapping $WindowsMapping -WholeManagementGroupApproved $WholeManagementGroupApproved `
+            -ScopeVisibilityVerified $ScopeVisibilityVerified -EnumerationQueryContractVerified $EnumerationQueryContractVerified `
+            -MaxObjects $MaxObjects -PageSize $PageSize -DeadlineSeconds $DeadlineSeconds
+        foreach ($object in $scope.MembershipObjects) {
+            if ($object.IsInstanceOf($WindowsComputerClass)) { $expectedComputers.Add([Guid]$object.Id) | Out-Null }
+        }
+    }
     else {
         $scope = Read-SCOMManagementGroupScope -EntityObjects $EntityObjects -EntityClass $EntityClass `
             -WholeManagementGroupApproved $WholeManagementGroupApproved -ScopeVisibilityVerified $ScopeVisibilityVerified `
@@ -108,8 +137,11 @@ function Get-SCOMGenericScan {
     }
     $discovery=[pscustomobject]@{Objects=@();DiscoveryComplete=$true}
     if ($scope.ExpectedObjectIds.Count -gt 0) {
+        $remaining=$DeadlineSeconds-$watch.Elapsed.TotalSeconds
+        if ($remaining -le 0) { throw 'SCOM_PROFILE_DEADLINE' }
         $discovery = Read-SCOMObjectIdPages -EntityObjects $EntityObjects -ObjectIds $scope.ExpectedObjectIds `
-            -MaxObjects $MaxObjects -PageSize $PageSize
+            -MaxObjects $MaxObjects -PageSize $PageSize `
+            -DeadlineSeconds ([Math]::Max(1,[int][Math]::Floor($remaining)))
     }
     $objects = New-Object 'System.Collections.Generic.List[object]'
     $expected = New-Object 'System.Collections.Generic.HashSet[System.Guid]'
@@ -238,7 +270,8 @@ function Get-SCOMGenericScan {
         $projection = ConvertTo-SCOMWindowsInventory -Objects $discovery.Objects -ObservedObjects $objects.ToArray() `
             -Relationships @($relationships.Values) -ExpectedComputerIds @($expectedComputers) `
             -ComputerClass $WindowsComputerClass -OperatingSystemClass $WindowsOsClass -VolumeClass $WindowsVolumeClass `
-            -Mapping $WindowsMapping -AgentClass $WindowsAgentClass -ManagementServerClass $WindowsManagementServerClass
+            -Mapping $WindowsMapping -AllowedPropertiesByClass $AllowedPropertiesByClass `
+            -AgentClass $WindowsAgentClass -ManagementServerClass $WindowsManagementServerClass
         $windows=$projection.Inventory
         if (-not $projection.Complete) { $inventoryReason='SCOM_WINDOWS_PROJECTION_INCOMPLETE' }
     }
@@ -261,6 +294,7 @@ function Get-SCOMGenericScan {
         $result.windowsInventory=$windows
         $result.expectedComputerIds=@($expectedComputers | Sort-Object | ForEach-Object { $_.ToString('D') })
     }
+    if ($InventoryKind -eq 'supportedWindows') { $result.inventoryKind=$InventoryKind }
     [pscustomobject]$result
 }
 

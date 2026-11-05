@@ -5,6 +5,11 @@ as separate processes on **one MCP server**, reading an existing SCOM server
 remotely. No collector .NET runtime installation is needed on the SCOM server.
 The indexed path is opt-in; the legacy snapshot path remains supported separately.
 
+For a **new** dedicated installation, the additive
+[guided setup](guided-setup.md) implements resumable console stages and separate
+customer Entra provisioning. Existing application migrations, advanced approved
+management-group scope and unsupported wizard paths use this manual runbook.
+
 **Staging files does not activate settings. Connecting Copilot Studio does not
 start collection. Inventory becomes available only after a worker dataset commits.**
 Do not treat this guide or a verification flag as production certification.
@@ -114,7 +119,7 @@ Review these paired settings before activation:
 | Settings | Required agreement |
 |---|---|
 | Management-group ID, scope kind, group ID | Same on both sides; group ID is null only for explicitly approved `managementGroup` scope |
-| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` approve the intended fields for actual discovered class names; base-class mappings are not automatically inherited |
+| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` approve the intended fields for actual discovered class names; base-class mappings are not automatically inherited. Optional OS captions additionally require matching worker `windowsMapping.osCaptionProperty` and receiver `WindowsOsCaptionProperty`, plus reviewed `WindowsMetricHosting` for typed source provenance; see [README](../README.md). These are pinned policy changes, not an in-place database edit. |
 | Windows mapping | Verified properties, units, typed relationships and monitoring-role mapping; collect the corresponding hosting relationships |
 | Metrics | Start with worker `metricMappingsByClass={}` and receiver `AllowedMetricsByClass={}` until metric acceptance is separately complete |
 | Freshness | `Source` and `ReadModel` fresh/unavailable settings match |
@@ -267,19 +272,89 @@ record. Do not call the deployment successful merely because the agent connects.
 
 ## 9. Enable supervised recurring execution
 
-After separate operational approval, configure the reviewed Windows execution
-mechanism to run the same package/configuration as the same worker account:
+After initial one-shot publication and read-model acceptance, use the separate
+operational approval for recurring source reads. The opt-in task host is
+documented in [`Operations/DurableIndexedRefresh`](../Operations/DurableIndexedRefresh/README.md).
+It packages reusable task setup/inspect/start/stop/unregister commands; it does
+not install or run a task until an operator invokes it. Select and document the
+worker identity, recurrence and freshness budgets before registration.
+
+The schedule is in private worker configuration. Set `schedule.interval`,
+`attemptDeadline`, `failureBackoff`, `maxFailureBackoff` and
+`maxConsecutiveDeferredAttempts` against measured collection duration and the
+receiver's `Source`/`ReadModel` expiry budgets. The consecutive deferred-attempt
+limit is bounded to 1..100 (example default 5). A deferred attempt is retried
+only after reconciliation and bounded exponential backoff; exhaustion or any
+unexpected error stops the loop and requires operator investigation. Do not
+repeat `--worker-once` on a timer or widen freshness thresholds to hide a stop.
+
+Prepare a new empty local runtime-state directory separate from the checkpoint
+database, and register the long-running worker under the exact approved account.
+The installer rejects built-in identities, protects the runtime-state directory,
+sets Task Scheduler duplicate handling to `IgnoreNew`, requests one startup
+recovery after restart, and configures zero automatic task restarts. This avoids
+restart storms. Deferred attempts retry only inside the same worker process,
+after reconciliation and bounded backoff; Task Scheduler never retries a
+failed process. Windows-protected Task Scheduler credential storage is used for the
+supplied operator credential; the password is not embedded in scripts,
+configuration, command-line arguments, logs or source control. Follow the
+organization's approved script signing policy and do not bypass it.
 
 ```powershell
-dotnet 'C:\ApprovedApps\ScomMcp\ScomMcp.dll' --worker 'C:\ProtectedWorker\worker.json'
+$workerCredential = Get-Credential -UserName 'DOMAIN\approved-worker'
+& 'C:\ApprovedPackage\Operations\DurableIndexedRefresh\Register-ScomWorkerTask.ps1' `
+    -WorkerDllPath 'C:\ApprovedApps\ScomMcp\ScomMcp.dll' `
+    -WorkerConfigPath 'C:\ProtectedWorker\worker.json' `
+    -StateDirectory 'C:\ProgramData\ScomMcpWorker\runtime' `
+    -Credential $workerCredential
 ```
 
-This runs the built-in serialized fixed-delay scheduler; it does not install a
-service or task. Do not also launch overlapping one-shot schedules. Define
-supervision, failure alerts, disk monitoring, certificate rotation and protected
-backups. Worker errors can stop the loop; do not assume backoff retries every
-failure. Verify a later committed dataset and membership refresh. Review scan
-duration against freshness thresholds before choosing cadence.
+The task runs the existing fixed-delay `--worker` scheduler; it does not create
+queued or overlapping scans. Registration does not start collection immediately;
+it runs at system startup unless the operator explicitly supplies `-StartNow`.
+Use `Get-ScomWorkerTaskStatus.ps1` to inspect task liveness, deferred/stopped
+state, rearm gate and last publication time. `Stop-ScomWorkerTask.ps1` creates
+the protected cooperative stop request and waits for a recorded clean stop; it
+does not forcibly terminate the worker. If the task does not stop or its status
+is terminal/unknown, preserve the status/logs and investigate. A stop request
+cannot guarantee cancellation of work already accepted by a remote/backend
+system. `Unregister-ScomWorkerTask.ps1` and
+`Start-ScomWorkerTask.ps1` target only the marked task; unregister preserves
+logs, status and checkpoint data. The task still gets its normal startup
+invocation after reboot, but before reading configuration or attempting any
+source work the worker checks the durable runtime status. A known clean stop
+allows startup; a terminal failure remains gated across reboot. Power loss or
+an unexpected process exit leaves a prior `running` record, which is treated
+as an unknown outcome and gated as well. A malformed or unknown status is not
+repaired or overwritten automatically.
+
+After diagnosis and reconciliation of any ambiguous publication, explicitly
+rearm the exact stopped, owned task:
+
+```powershell
+.\Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure
+.\Get-ScomWorkerTaskStatus.ps1
+.\Start-ScomWorkerTask.ps1
+```
+
+Rearm validates the ownership marker and exact worker action, refuses while
+Task Scheduler reports the task running, and acquires the worker's exclusive
+runtime lease before updating only the gate fields. It preserves publication,
+checkpoint, logs and the last failure code. Normal start never rearms silently.
+Run it only from an operator context authorized to administer the exact task
+and modify its protected runtime-state directory.
+If status is malformed, stop and inspect protected state; do not edit or delete
+it to bypass the gate. Rearm does not establish that a remote/backend operation
+was cancelled or that publication succeeded; retain evidence and reconcile
+before resuming collection.
+
+The worker's last publication timestamp and the task's `Running` state are
+separate signals. Use authenticated `get_source_status`, coverage and the
+configured freshness budgets to decide whether data is still available and
+current. Define operator alerts for stopped/deferred status, stale published
+data, disk capacity, certificate rotation and protected backups. Verify a later
+committed dataset and membership refresh; do not widen expiry or clear/reseed
+checkpoints as recovery.
 
 ## Troubleshooting without restarting the whole setup
 
