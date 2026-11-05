@@ -1617,6 +1617,13 @@ The scope ID in this public version is `scom-lab`. Snapshots from earlier
 environment-specific versions using a different scope ID are not compatible;
 run this version of the collector and server together.
 
+## Optional supervised indexed-run wrapper
+
+The repository also contains an experimental, synthetic-test-only supervised
+one-shot wrapper under `Operations\SupervisedIndexedRun`. It does not expand
+the collector's source scope, provide recurrence, monitor SCOM/SQL, or establish
+production acceptance. Review its limitations and provenance before use.
+
 ## Security and known limitations
 
 - Keep real configuration, snapshots, logs, tokens, credentials, deployment

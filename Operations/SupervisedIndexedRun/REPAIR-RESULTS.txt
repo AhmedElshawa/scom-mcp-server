@@ -1,0 +1,102 @@
+REVIEW-ONLY CORRECTED WRAPPERS - NOT RELEASE ACCEPTANCE
+
+Scope: external fixed ZIP, isolated session artifacts only. No repository/PR
+changes, SCOM collection, deployment, merge or publication to GitHub performed.
+
+Root cause independently reproduced in Windows PowerShell 5.1:
+Start-Process -PassThru with redirected files, polling HasExited followed by
+WaitForExit and Refresh returned ExitCode=$null for a child that exited 7.
+Casting that null to [int] produced 0. This was an actual exit-code-loss bug,
+not an assertion/harness-only failure.
+
+Fix:
+- Retain the native process creation handle; GetExitCodeProcess retrieves the
+  actual exit value without a nullable managed Start-Process exit-code cache.
+- Create the worker with a Windows job-list attribute atomically, suspended
+  until its creation handle is owned. Kill-on-close job contains descendants.
+  No post-launch assignment window; no fallback to uncontained launch.
+- Post-launch identity capture, arm/state writes and monitor setup are in a
+  guarded try/catch/finally. Failure terminates the owned job and bounds empty-job
+  verification to 5 seconds; an unverified stop is explicitly an error.
+- Cleanup closes the job even when stop/verification fails. It never labels
+  that failure as verified cleanup. It also bounds monitor termination/join.
+- Monitor loss or stalled monitoring triggers an independently timed launcher
+  stop. No unbounded WaitForExit remains in launcher/cleanup.
+- Manual stop validates creation identity on a pinned process handle and kills
+  through that handle, not a later PID lookup. It reports root stop pending
+  launcher child join, not unconditional whole-tree completion.
+- No snapshot-based descendant PID kills. Launcher job membership is the
+  authority for child cleanup, including children created after a snapshot.
+- Recheck CIM competitors for a live process before refusing launch, avoiding
+  stale CIM entries for monitors already joined by a prior synthetic run.
+- Parse Windows executable arguments and PowerShell command ASTs instead of
+  searching entire command lines for marker text. An actual dotnet worker switch
+  or profile invocation remains a conflict; strings, comments and test paths are
+  not invocations. No process allowlist/exclusion for the harness was added.
+- Identity checks pin a live handle without redundant CIM command-line lookups.
+  Monitor timeout uses the current monotonic time after sampling, not stale
+  pre-sample elapsed time; independent launcher stop limits are unchanged.
+- Tests now resolve co-located files correctly and exit nonzero on any failed
+  assertion. Existing nonzero==7 assertion is preserved, not weakened.
+
+Runtime evidence:
+1. PowerShell 7.6.9 FULL synthetic suite: 19/19 PASS on revised repaired scripts.
+   Includes success, exact nonzero7, monitor failure, timeout, memory breach,
+   child cleanup, stale PID refusal, explicit stop failure, independent exit
+   probes0/7/23 and four post-launch injected failures. Each post-launch failure
+   observed at least TWO active job processes before stop, verified empty job
+   and checked no synthetic worker/child remained. Stop-failure injection
+   returned CLEANUP_UNVERIFIED and did not claim successful verification;
+   kill-on-close still removed the synthetic process.
+   Added eight argument/invocation classification cases; a LIVE harmless
+   PowerShell marker process reproduces the old regex false positive while the
+   revised launcher succeeds. A LIVE synthetic profile invocation is detected
+   and launch refused without killing that competitor. Both owned test jobs
+   are then stopped with bounded verified cleanup. No real profile is executed.
+   The first revised full run passed these new cases but failed the existing
+   timeout assertion (18/19): redundant CIM checks plus stale pre-sample time
+   raced the independent launcher fallback. The timing fix above resolved that
+   actual failure; no assertion/limit was relaxed. Final suite exited 0.
+   Historical customer pid29176 command line was not supplied; its exact
+   identity cannot be reconstructed from a later empty residual check.
+2. Windows PowerShell 5.1 independent native-handle child probes: PASS exact
+   expected/actual0/0,7/7,23/23, each bounded10seconds. C# helper compiled there.
+3. Windows PowerShell 5.1 FULL suite: BLOCKED, NOT PASSED. The machine refuses
+   unsigned .ps1 files. Exact invocation attempted without policy bypass:
+   powershell.exe -NoProfile -File .\Run-SyntheticSupervisedIndexedRunTests.ps1
+   Error: script is not digitally signed / UnauthorizedAccess.
+   No execution-policy change, trust-store change, unsigned-script evaluation
+   workaround or signing credential was used. Full Desktop execution must be
+   performed on an authorized trusted/signed test host before accepting this ZIP.
+
+Existing CI path assessment (read-only):
+The repository's offline-validation.yml checks out a reviewed commit and runs
+repository validation/package scripts. It has no input or step for this external
+ZIP, which is not committed to either PR. Dispatching it unchanged would not
+test these wrappers. No existing authorized artifact-specific Desktop test path
+was identified. A trusted host accepting these sources under its existing policy
+or normal owner-approved signing is needed. A new CI integration/upload would
+require separate authorization; no workflow push, dispatch or PR was performed.
+
+Current ZIP includes only corrected sources, this report, usage notes and final
+PS7 summary. It deliberately omits stale supplied RC acceptance/release claims,
+old pass/fail logs and private synthetic per-run state. It is not a release
+candidate approval and must not be used to claim full dual-runtime acceptance.
+
+Limitations:
+- Windows 10 / Server 2016+ job-list support and permitted nested job policy
+  required. Unsupported/restricted hosts fail closed before worker execution.
+- This wrapper still uses --worker-once. It is not sustained recurrence.
+- Limits cover local worker/child memory and elapsed monitoring, not SCOM/SQL
+  pressure. Source-owner telemetry/limits/approval still required separately.
+- A stopped local job does not prove backend work cancellation or no commit.
+  Publication/checkpoint/receiver and authenticated reader evidence stay separate.
+- Output/state paths may contain identities, command lines or customer values;
+  use approved protected local RunRoot. No ACL provisioning or auto-redaction
+  of arbitrary synthetic/custom worker output is supplied.
+- Abrupt launcher death closes its job (kernel cleanup), but cannot write
+  a successful cleanup-verification record. Operators must retain unknown state.
+- Review-only package has NOT been executed against a real worker configuration.
+- Competitor discovery remains best-effort process inspection, not an atomic
+  cross-launch mutex or proof of arbitrary indirect/dynamic wrapper invocations.
+  Argument/AST matching does not execute or resolve dynamic PowerShell code.

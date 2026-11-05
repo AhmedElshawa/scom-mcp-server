@@ -1,0 +1,102 @@
+{
+  "engine": "Core 7.6.9",
+  "generatedAtUtc": "2026-11-03T14:27:22.634616+02:00",
+  "tests": [
+    {
+      "name": "competitor argument classification",
+      "passed": true,
+      "detail": "8 invocation/string/path cases"
+    },
+    {
+      "name": "live harmless harness marker",
+      "passed": true,
+      "detail": "old regex matched; launcher permitted; marker process alive"
+    },
+    {
+      "name": "live actual profile conflict",
+      "passed": true,
+      "detail": "launcher rejected; competitor not killed"
+    },
+    {
+      "name": "independent exit 0",
+      "passed": true,
+      "detail": 0
+    },
+    {
+      "name": "independent exit 7",
+      "passed": true,
+      "detail": 7
+    },
+    {
+      "name": "independent exit 23",
+      "passed": true,
+      "detail": 23
+    },
+    {
+      "name": "successful execution",
+      "passed": true,
+      "detail": "WORKER_SUCCESS_CONFIRMED_PUBLICATION"
+    },
+    {
+      "name": "nonzero exit",
+      "passed": true,
+      "detail": "WORKER_FAILED_NONZERO_EXIT:7"
+    },
+    {
+      "name": "monitor failure",
+      "passed": true,
+      "detail": "UNKNOWN_MONITOR_FAILURE"
+    },
+    {
+      "name": "timeout",
+      "passed": true,
+      "detail": "RUN_TIMEOUT_LIMIT"
+    },
+    {
+      "name": "memory breach",
+      "passed": true,
+      "detail": "LIMIT_BREACH_workerPrivateMb"
+    },
+    {
+      "name": "child cleanup",
+      "passed": true,
+      "detail": "remaining=0"
+    },
+    {
+      "name": "stale PID",
+      "passed": true,
+      "detail": "stop_refused_stale_pid"
+    },
+    {
+      "name": "stop failure",
+      "passed": true,
+      "detail": "stop_failed"
+    },
+    {
+      "name": "postlaunch identity cleanup",
+      "passed": true,
+      "detail": "JOB_EMPTY_VERIFIED"
+    },
+    {
+      "name": "postlaunch arm cleanup",
+      "passed": true,
+      "detail": "JOB_EMPTY_VERIFIED"
+    },
+    {
+      "name": "postlaunch state cleanup",
+      "passed": true,
+      "detail": "JOB_EMPTY_VERIFIED"
+    },
+    {
+      "name": "postlaunch monitor cleanup",
+      "passed": true,
+      "detail": "JOB_EMPTY_VERIFIED"
+    },
+    {
+      "name": "bounded explicit cleanup stop failure",
+      "passed": true,
+      "detail": "STOP_FAILED_OPERATOR_ATTENTION_REQUIRED"
+    }
+  ],
+  "passed": true
+}
