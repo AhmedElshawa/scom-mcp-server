@@ -15,6 +15,25 @@ foreach ($block in $blocks) {
     if ($errors.Count) { throw 'Upgrade guide PowerShell block has syntax errors.' }
     $count++
 }
+$operatorGuidePath = Join-Path $PSScriptRoot '..\Operations\DurableIndexedRefresh\README.md'
+$operatorGuide = Get-Content -LiteralPath $operatorGuidePath -Raw
+foreach ($block in [regex]::Matches($operatorGuide, '(?s)```powershell\r?\n(.*?)```')) {
+    $tokens = $null
+    $errors = $null
+    $null = [Management.Automation.Language.Parser]::ParseInput(
+        $block.Groups[1].Value, [ref]$tokens, [ref]$errors)
+    if ($errors.Count) { throw 'Durable-refresh operator guide PowerShell block has syntax errors.' }
+    $count++
+}
+foreach ($required in @(
+    'was not independently established',
+    'been live-tested',
+    'rearmRequired=false',
+    '--worker-stop-request'
+)) {
+    if (-not $operatorGuide.Contains($required)) { throw 'Durable-refresh reboot evidence or native control guidance is missing.' }
+    $count++
+}
 $upgrade = $blocks[0].Groups[1].Value
 $tokens = $null
 $errors = $null
@@ -93,14 +112,23 @@ foreach ($required in @(
     'Get-ScheduledTask -ErrorAction Stop',
     '$null -eq $argumentsProperty',
     "Assert-NoActiveWorkerTask -Tasks @(Get-ScheduledTask -ErrorAction Stop)",
+    'Get-CimInstance Win32_Process -ErrorAction Stop',
     'Get-WebApplication -Site $site.Name',
     'Start-WebAppPool -Name $pool'
 )) {
     if (-not $upgrade.Contains($required)) { throw 'Upgrade block lost a required scope/preservation guard.' }
     $count++
 }
+foreach ($required in @(
+    '$task.Principal.UserId -ine $workerAccount',
+    '$updatedUtc -lt $bootUtc',
+    '& $dotnet $dll --worker-rearm $runtime'
+)) {
+    if (-not $guide.Contains($required)) { throw 'Upgrade recovery lost its exact-task or stale-status rearm guard.' }
+    $count++
+}
 if ($upgrade -match '(?i)ExecutionPolicy|Unblock-File|Stop-Process|Remove-Item|--worker-rearm') {
     throw 'Happy-path upgrade must not bypass policy, delete data, force processes or implicitly rearm.'
 }
 $count++
-Write-Output "PASS: $count upgrade-guide assertions; actual pasted blocks parse, path preflight executes and preservation guards remain present. No IIS/task/deployment action ran."
+Write-Output "PASS: $count upgrade/operator-guide assertions; PowerShell blocks parse, path preflight executes and preservation/reboot guards remain present. No IIS/task/deployment action ran."

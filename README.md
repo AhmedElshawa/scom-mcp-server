@@ -15,8 +15,14 @@ provisioning are part of this flow. New installations must complete the
 **Availability limitation:** starting each new collection deliberately makes
 indexed reads unavailable until commit (about 35 seconds in the observed lab,
 not a duration guarantee). A failed attempt can leave them unavailable until
-recovery. This evaluation release is not continuous-availability or production
-certification; interactive logoff and reboot acceptance remain operator checks.
+recovery. Repeated scheduled publications and an operator-rearmed postboot
+publication were observed, but automatic recovery after an unclean reboot was
+not: a startup attempt exited while status still showed the preboot running
+state, consistent with the persisted fail-closed gate (the exit cause was not
+independently proven). The planned cooperative-stop/reboot path remains
+untested. See the [sanitized lab evidence and operator procedure](Operations/DurableIndexedRefresh/README.md).
+This evaluation release is not continuous-availability or production
+certification.
 
 [Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Two-server setup](#two-server-deployment-indexed-path) | [IIS and Copilot Studio](#azure-iis-and-copilot-studio-reader-setup) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
 

@@ -296,20 +296,49 @@ task stopped and no remaining worker/source children, use the native control:
 
 ```powershell
 # Set these to the exact values printed above; this does not start collection.
+$ErrorActionPreference = 'Stop'
 $dotnet = 'C:\Program Files\dotnet\dotnet.exe'
 $dll = 'C:\ApprovedApps\ScomMcp\ScomMcp.dll'
 $runtime = 'C:\ProgramData\ScomMcpWorker\runtime'
 $config = 'C:\ProtectedWorker\worker.json'
+$workerAccount = 'DOMAIN\approved-worker'
 $task = Get-ScheduledTask -TaskName 'YOUR EXACT TASK NAME' -TaskPath '\' -ErrorAction Stop
 $expectedArguments = '"{0}" --worker "{1}" --runtime-state-dir "{2}"' -f $dll, $config, $runtime
 if ([string]$task.State -eq 'Running' -or @($task.Actions).Count -ne 1 -or
     $task.Description -ne "SCOM-MCP-DURABLE-INDEXED-REFRESH-V1; StateDirectory=$runtime" -or
+    [string]$task.Principal.UserId -ine $workerAccount -or
     $task.Actions[0].Execute.Trim('"') -ne $dotnet -or
     $task.Actions[0].Arguments -ne $expectedArguments -or
     $task.Actions[0].WorkingDirectory -ne (Split-Path -Parent $dll) -or
     [string]$task.Principal.LogonType -ne 'Password' -or
     [string]$task.Settings.MultipleInstances -ne 'IgnoreNew' -or
     [int]$task.Settings.RestartCount -ne 0) { throw 'Stopped owned task contract does not match; rearm refused.' }
+$workers = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
+    $_.CommandLine -and $_.CommandLine.IndexOf($dll, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
+        $_.CommandLine -match '(^|\s)--worker(\s|$)'
+})
+if ($workers.Count) { throw 'A matching worker process remains; rearm refused.' }
+$statusPath = Join-Path $runtime 'worker.status.json'
+if (-not (Test-Path -LiteralPath $statusPath -PathType Leaf)) { throw 'Worker status is missing; rearm refused.' }
+$status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
+$expectedStatusProperties = @('state', 'startedUtc', 'updatedUtc', 'lastAttemptUtc', 'lastPublicationUtc',
+    'lastOutcome', 'consecutiveDeferredAttempts', 'failureCode', 'processId', 'rearmRequired',
+    'lastFailureCode', 'rearmedUtc')
+$statusProperties = @($status.PSObject.Properties | ForEach-Object { $_.Name })
+if ($statusProperties.Count -ne $expectedStatusProperties.Count -or
+    @($statusProperties | Where-Object { $_ -notin $expectedStatusProperties }).Count -or
+    @($expectedStatusProperties | Where-Object { $_ -notin $statusProperties }).Count) {
+    throw 'Worker status schema is malformed or unknown; preserve it and investigate.'
+}
+$updatedUtc = [DateTimeOffset]::Parse([string]$status.updatedUtc).UtcDateTime
+$bootUtc = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToUniversalTime()
+$stalePriorRun = $status.state -eq 'running' -and $status.rearmRequired -eq $false -and
+    [int]$status.processId -gt 0 -and $updatedUtc -lt $bootUtc
+$terminalFailure = $status.state -eq 'stopped' -and $status.rearmRequired -eq $true -and
+    -not [string]::IsNullOrWhiteSpace([string]$status.failureCode)
+if (-not ($stalePriorRun -or $terminalFailure)) {
+    throw 'Status is not a diagnosed stale preboot run or terminal failure; rearm refused.'
+}
 if ((Read-Host 'After diagnosis, type REARM to acknowledge this exact stopped task failure') -cne 'REARM') {
     throw 'Rearm not acknowledged.'
 }
@@ -317,9 +346,12 @@ if ((Read-Host 'After diagnosis, type REARM to acknowledge this exact stopped ta
 if ($LASTEXITCODE -ne 0) { throw 'Rearm refused; preserve state and diagnose.' }
 ```
 
-The pasted guard validates the stopped owned task/action; the native control
-takes the exclusive worker lease. Verify no remaining worker/source children
-before acknowledging. Prefer `Rearm-ScomWorkerTask.ps1` where approved script execution is available:
+The pasted guard validates the exact task marker, worker identity/action, stopped
+state, absence of the matching worker process, and either a stale preboot
+`running` status or a structurally known terminal-failure status. The native
+control takes the exclusive worker lease and independently validates its state.
+Verify no remaining worker/source children before acknowledging. Prefer
+`Rearm-ScomWorkerTask.ps1` where approved script execution is available:
 it adds exact-task ownership and not-running validation. Never automatically
 rearm on every deployment. Malformed state is not repaired; preserve it.
 
