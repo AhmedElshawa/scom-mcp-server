@@ -190,6 +190,22 @@ public sealed class ReconciledCollectionSource : IScomCollectionSource
         finally { gate.Release(); }
     }
 
+    public async Task<string?> ReplaceExpiredEmptyReservationAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (checkpoint is null || reserved != sessionId || pending is not null ||
+                pendingCollection is not null || acknowledged == sessionId)
+                return null;
+            var replacement = Guid.NewGuid().ToString("D");
+            checkpoint.Save(new(priorAlerts, priorMetrics, priorScope, null, acknowledged, replacement), settingsHash);
+            reserved = replacement;
+            return replacement;
+        }
+        finally { gate.Release(); }
+    }
+
     private PreparedCollection Prepared(PendingSourceState state) =>
         new(state.SessionId, state.Manifest, Batches(state.Inventory, state.ServedAlerts, state.ServedMetrics));
 

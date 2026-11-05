@@ -80,6 +80,7 @@ static class Checks
             await ReadModelChecks.Run(root);
             await ReadModelFaultChecks.Run(root);
             await IngestionPublisherChecks.Run(root);
+            await ExpiredReservationChecks.Run(root);
             await CollectionSchedulerChecks.Run();
             await IndexedWindowsChecks.Run(root, dataset);
             AlertReconcilerChecks.Run();
@@ -90,6 +91,7 @@ static class Checks
             await NormalizationProcessChecks.Run();
             await CertificatePublisherChecks.Run();
             await CollectionWorkerHostChecks.Run(root);
+            WorkerRuntimeStateChecks.Run(root);
             await WindowsSourceProjectionChecks.Run(root);
             await ManagementGroupSourceChecks.Run(root);
             Console.WriteLine($"PASS: {passed} assertions; pure auth, snapshots, counts, cursors, math, and authenticated MCP HTTP verified.");

@@ -23,16 +23,34 @@ $server = Join-Path $output 'server'
 foreach ($name in @('appsettings.example.json', 'appsettings.ReadModel.example.json', 'appsettings.Worker.example.json')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "ScomMcp\$name") -Destination $server
 }
+$operations = Join-Path $output 'Operations\DurableIndexedRefresh'
+$null = New-Item -ItemType Directory -Path $operations -Force
+foreach ($name in @('DurableIndexedRefresh.Common.ps1', 'Register-ScomWorkerTask.ps1',
+    'Get-ScomWorkerTaskStatus.ps1', 'Start-ScomWorkerTask.ps1', 'Stop-ScomWorkerTask.ps1',
+    'Rearm-ScomWorkerTask.ps1', 'Unregister-ScomWorkerTask.ps1', 'README.md')) {
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Operations\DurableIndexedRefresh\$name") -Destination $operations
+}
 foreach ($name in @('README.md', 'LICENSE')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination $output
 }
 $docs = Join-Path $output 'docs'
 $null = New-Item -ItemType Directory -Path (Join-Path $docs 'images')
 foreach ($name in @('indexed-deployment-runbook.md', 'deployment-issue-log.md', 'customer-evaluation.md',
-    'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md')) {
+    'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md',
+    'easy-indexed-upgrade.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\$name") -Destination $docs
 }
 foreach ($name in @('scom-reference-architecture.png', 'scom-reference-architecture.excalidraw')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\images\$name") -Destination (Join-Path $docs 'images')
 }
+$manifestFiles = @(Get-ChildItem -LiteralPath $output -File -Recurse | ForEach-Object {
+    [ordered]@{
+        path = $_.FullName.Substring($output.Length + 1)
+        sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+    }
+})
+$commit = git -C $PSScriptRoot rev-parse HEAD
+if ($LASTEXITCODE -ne 0) { throw 'Cannot identify package source commit.' }
+[ordered]@{ format = 1; sourceCommit = [string]$commit; files = $manifestFiles } |
+    ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $output 'package-manifest.json') -Encoding utf8
 Write-Output 'Package created. It includes the legacy collector and opt-in worker host/ingestion foundation, not a certified SCOM normalization profile.'

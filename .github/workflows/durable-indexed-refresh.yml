@@ -1,0 +1,97 @@
+name: Durable indexed refresh synthetic tests
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: durable-indexed-refresh-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  synthetic-tests:
+    name: ${{ matrix.engine }} durable refresh contract
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - engine: Windows PowerShell 5.1
+            executable: powershell.exe
+          - engine: PowerShell 7
+            executable: pwsh
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+      TESTED_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+      TEST_ENGINE: ${{ matrix.engine }}
+      TEST_EXECUTABLE: ${{ matrix.executable }}
+    steps:
+      - name: Checkout the exact reviewed head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.427'
+
+      - name: Verify tested head and build synthetic harness
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = git rev-parse HEAD
+          if ($actual -ne $env:TESTED_HEAD_SHA) { throw 'Checkout does not match the reviewed head.' }
+          '{"sdk":{"version":"8.0.427","rollForward":"disable","allowPrerelease":false}}' |
+            Set-Content -LiteralPath global.json -Encoding utf8NoBOM
+          if ((dotnet --version) -ne '8.0.427') { throw 'Unexpected SDK selection.' }
+          dotnet restore .\Validation\Validation.csproj --locked-mode --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          dotnet build .\Validation\Validation.csproj --configuration Release --no-restore --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic harness build failed.' }
+          "Tested commit: $actual; requested engine: $env:TEST_ENGINE; executable version: $(& $env:TEST_EXECUTABLE -NoProfile -Command '$PSVersionTable.PSVersion.ToString()')" |
+            Tee-Object -FilePath $env:GITHUB_STEP_SUMMARY
+
+      - name: Run core refresh, checkpoint recovery and child-lifetime tests
+        run: |
+          dotnet .\Validation\bin\Release\net8.0\Validation.dll
+          if ($LASTEXITCODE -ne 0) { throw 'Synthetic C# validation failed.' }
+
+      - name: Run task setup contracts in the selected PowerShell engine
+        run: |
+          $suiteRoot = Join-Path $env:RUNNER_TEMP ("durable-refresh-" + [guid]::NewGuid().ToString('N'))
+          $summaryPath = Join-Path $suiteRoot 'ci-results.json'
+          $null = New-Item -ItemType Directory -Path $suiteRoot
+          $output = & $env:TEST_EXECUTABLE -NoProfile -File .\Operations\DurableIndexedRefresh\Run-SyntheticDurableIndexedRefreshTests.ps1 2>&1
+          $suiteExitCode = $LASTEXITCODE
+          $guideOutput = & $env:TEST_EXECUTABLE -NoProfile -File .\Validation\Test-UpgradeGuide.ps1 2>&1
+          if ($LASTEXITCODE -ne 0) { $suiteExitCode = 1 }
+          $result = [ordered]@{
+            testedCommit = git rev-parse HEAD
+            engine = $env:TEST_ENGINE
+            runtime = & $env:TEST_EXECUTABLE -NoProfile -Command '$PSVersionTable.PSEdition + " " + $PSVersionTable.PSVersion'
+            suiteExitCode = $suiteExitCode
+            suiteOutput = @(@($output) + @($guideOutput) | ForEach-Object { [string]$_ })
+          }
+          $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $summaryPath -Encoding utf8
+          if ($suiteExitCode -ne 0) { throw 'PowerShell task contract tests failed.' }
+          "Task definitions were inspected with mocks only; no task was registered and no SCOM/production collection ran." |
+            Out-File -LiteralPath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Retain sanitized result summary
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: durable-indexed-refresh-${{ github.event.pull_request.head.sha || github.sha }}-${{ matrix.engine }}
+          path: ${{ runner.temp }}\durable-refresh-*\ci-results.json
+          if-no-files-found: warn
+          retention-days: 7

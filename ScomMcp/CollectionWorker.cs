@@ -6,6 +6,8 @@ public sealed record PreparedCollection(string SessionId, ReadModelManifest Mani
 public interface IScomCollectionSource
 {
     Task<string> ReserveSessionAsync(CancellationToken cancellationToken);
+    Task<string?> ReplaceExpiredEmptyReservationAsync(string sessionId, CancellationToken cancellationToken) =>
+        Task.FromResult<string?>(null);
     // Return the same prepared identity/data after ambiguous publication until
     // the outcome has been reconciled. Do not advance a source watermark here.
     Task<PreparedCollection> PrepareAsync(CancellationToken cancellationToken);
@@ -23,7 +25,16 @@ public sealed class CollectionWorker(IScomCollectionSource source, IngestionPubl
         try
         {
             var session = await source.ReserveSessionAsync(cancellationToken);
-            await publisher.BeginAsync(session, cancellationToken);
+            try { await publisher.BeginAsync(session, cancellationToken); }
+            catch (IngestionPublicationException error) when (error.Code == "PUBLISHER_SESSION_EXPIRED_EMPTY_RESERVATION")
+            {
+                // Only an authenticated receiver's exact empty-expired rejection
+                // plus a durable source with no prepared payload permits replacement.
+                var replacement = await source.ReplaceExpiredEmptyReservationAsync(session, cancellationToken);
+                if (replacement is null) throw;
+                session = replacement;
+                await publisher.BeginAsync(session, cancellationToken);
+            }
             var prepared = await source.PrepareAsync(cancellationToken);
             if (prepared is null || prepared.SessionId != session)
                 throw new InvalidOperationException("Source preparation differs from its reserved session.");
