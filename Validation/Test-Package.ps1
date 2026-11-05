@@ -10,7 +10,7 @@ if (-not (Test-Path -LiteralPath $root -PathType Container)) {
     throw 'Package directory does not exist.'
 }
 $required = @(
-    'README.md', 'LICENSE',
+    'README.md', 'LICENSE', 'package-manifest.json', 'docs\easy-indexed-upgrade.md',
     'server\ScomMcp.dll', 'server\ScomMcp.deps.json', 'server\ScomMcp.runtimeconfig.json',
     'server\web.config', 'server\appsettings.example.json',
     'server\appsettings.ReadModel.example.json', 'server\appsettings.Worker.example.json',
@@ -37,6 +37,23 @@ $required = @(
 foreach ($relative in $required) {
     if (-not (Test-Path -LiteralPath (Join-Path $root $relative) -PathType Leaf)) {
         throw "Required package file missing: $relative"
+    }
+    $manifest = Get-Content -LiteralPath (Join-Path $root 'package-manifest.json') -Raw | ConvertFrom-Json
+    if ($manifest.format -ne 1 -or $manifest.sourceCommit -notmatch '^[0-9a-f]{40}$') {
+        throw 'Package manifest identity is invalid.'
+    }
+    $seen = @{}
+    foreach ($entry in $manifest.files) {
+        $resolved = [IO.Path]::GetFullPath((Join-Path $root $entry.path))
+        if (-not $resolved.StartsWith($root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase) -or
+            $seen.ContainsKey($resolved) -or $entry.sha256 -notmatch '^[0-9A-Fa-f]{64}$' -or
+            (Get-FileHash -LiteralPath $resolved -Algorithm SHA256).Hash -ne $entry.sha256) {
+            throw 'Package manifest path, duplicate or digest mismatch.'
+        }
+        $seen[$resolved] = $true
+    }
+    if (@(Get-ChildItem -LiteralPath $root -File -Recurse).Count -ne $seen.Count + 1) {
+        throw 'Package contains unmanifested files.'
     }
 }
 $files = @(Get-ChildItem -LiteralPath $root -File -Recurse)
