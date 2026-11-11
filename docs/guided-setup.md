@@ -313,6 +313,11 @@ media through the platform process and resume after any required restart.
 The default prerequisite check does not install anything. The separately opt-in
 `InstallPrerequisites` step below can install explicit IIS features and an
 operator-supplied approved local .NET 8 Hosting Bundle. It never acquires an installer.
+Hosting Bundle detection checks official Windows Server Hosting registrations in
+both native and WOW6432Node uninstall registry views, plus the native ANCM V2 DLL;
+the separate "Hosting Bundle Options" entry alone does not qualify. An unreadable
+registry probe blocks rather than assuming installation. Do not move registry
+entries or reinstall solely to compensate for a detection error.
 
 Use Microsoft's [Windows Hosting Bundle 8.0.34 download](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-8.0.34-windows-hosting-bundle-installer)
 as a concrete example; check the [.NET 8 downloads page](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)

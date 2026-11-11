@@ -85,6 +85,19 @@ function Get-ScomSetupHash {
     (Get-FileHash -LiteralPath $Path -Algorithm SHA256).Hash
 }
 
+function Get-ScomSetupHostingBundles {
+    param([string]$ExpectedVersion)
+    foreach ($path in @('HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*',
+        'HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*')) {
+        Get-ItemProperty -Path $path -ErrorAction Stop | Where-Object {
+            $_.PSObject.Properties['DisplayName'] -and $_.PSObject.Properties['DisplayVersion'] -and
+            $_.DisplayName -match '^Microsoft \.NET 8\.0\.[0-9]+ - Windows Server Hosting$' -and
+            $_.DisplayVersion -match '^8\.0\.[0-9]+(\.[0-9]+)?$' -and
+            (-not $ExpectedVersion -or $_.DisplayVersion -match ('^'+[regex]::Escape($ExpectedVersion)+'($|\.)'))
+        }
+    }
+}
+
 function Get-ScomSetupScopeDescription {
     param($Plan)
     if ($Plan.scopeKind -ceq 'managementGroup') { return 'all supported Windows inventory in the selected management group (not every SCOM class)' }

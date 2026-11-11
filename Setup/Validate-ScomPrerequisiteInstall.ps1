@@ -32,6 +32,58 @@ $adapters=@{
 }
 $argsBase=@{Adapters=$adapters;InstallerPath=(Join-Path $root 'dotnet-hosting-8.0.22-win.exe');ExpectedVersion='8.0.22';ExpectedSha256=('A'*64);Approve={$true};InstallIis=$true}
 try {
+    function Test-RegistryViews {
+    $registry=[pscustomobject]@{view='32';name='Microsoft .NET 8.0.34 - Windows Server Hosting';version='8.0.34.26523';unreadable=$false;ancm=$true}
+    & (Get-Module ScomSetup) {
+        param($fixture)
+        $script:hostingFixture=$fixture
+        function script:Get-ItemProperty {
+            param($Path)
+            if ($script:hostingFixture.unreadable -and $Path -match 'WOW6432Node') { throw 'SYNTHETIC_REGISTRY_UNREADABLE' }
+            $view=if ($Path -match 'WOW6432Node') {'32'} else {'64'}
+            if ($script:hostingFixture.view -in @($view,'both')) {
+                [pscustomobject]@{DisplayName=$script:hostingFixture.name;DisplayVersion=$script:hostingFixture.version}
+            }
+        }
+    } $registry
+    & (Get-Module ScomPrerequisiteInstall) {
+        param($fixture)
+        $script:hostingFixture=$fixture
+        function script:Get-CimInstance {
+            [pscustomobject]@{ProductType=3;BuildNumber=20348;LastBootUpTime=[DateTime]::UtcNow.AddDays(-1)}
+        }
+        function script:Import-Module {}
+        function script:Get-WindowsFeature { 1..3 | ForEach-Object { [pscustomobject]@{Installed=$true} } }
+        function script:Get-ItemProperty { [pscustomobject]@{} }
+        function script:Test-Path {
+            param($Path,$LiteralPath)
+            $target=if ($LiteralPath) {$LiteralPath} else {$Path}
+            if ($target -match 'aspnetcorev2') { return $script:hostingFixture.ancm }
+            $false
+        }
+    } $registry
+    $windowsAdapters=New-ScomPrerequisiteWindowsAdapters $root
+    foreach ($view in @('32','64','both','none')) {
+        $registry.view=$view
+        $probe=& $windowsAdapters.Probe '8.0.34'
+        Check ($probe.exactBundleInstalled -eq ($view -ne 'none'))
+    }
+    $registry.view='32';$registry.name='Microsoft ASP.NET Core 8.0.34 Hosting Bundle Options'
+    Check (-not (& $windowsAdapters.Probe '8.0.34').exactBundleInstalled)
+    $registry.name='Microsoft .NET 8.0.34 - Windows Server Hosting'
+    Check (-not (& $windowsAdapters.Probe '8.0.33').exactBundleInstalled)
+    $registry.ancm=$false
+    $probe=& $windowsAdapters.Probe '8.0.34'
+    Check ($probe.exactBundleInstalled -and -not $probe.ancmReady -and -not $probe.runtimeReady)
+    $registry.view='64';$registry.unreadable=$true
+    Reject { & $windowsAdapters.Probe '8.0.34' } 'SYNTHETIC_REGISTRY_UNREADABLE'
+    & (Get-Module ScomPrerequisiteInstall) {
+        foreach ($name in @('Get-CimInstance','Import-Module','Get-WindowsFeature','Get-ItemProperty','Test-Path')) {
+            Remove-Item -LiteralPath "Function:script:$name"
+        }
+    }
+    & (Get-Module ScomSetup) { Remove-Item -LiteralPath Function:script:Get-ItemProperty }
+    }
     Assert-ScomHostingInstallerEvidence $evidence '8.0.22' ('A'*64); Check $true
     foreach ($field in @('fileName','productVersion','sha256','signatureStatus','signerSubject')) {
         $before=$evidence.$field
@@ -87,6 +139,11 @@ try {
         Check ($record.processId -eq 12345)
         Check ($(if ($exitCode -eq 3010) { [bool]$record.restartBootUtc -and -not $record.pendingAction } else { [bool]$record.pendingAction }))
     }
+    Test-RegistryViews
     Write-Output "PASS: $script:count prerequisite installer assertions; vendor/version/checksum, opt-in, every fake effect, interrupted no-retry, exit/reboot and repair. No installers or OS changes."
 }
-finally { Remove-Item -LiteralPath $root -Recurse -Force }
+finally {
+    Remove-Item -LiteralPath $root -Recurse -Force
+    Remove-Module ScomPrerequisiteInstall
+    Remove-Module ScomSetup
+}

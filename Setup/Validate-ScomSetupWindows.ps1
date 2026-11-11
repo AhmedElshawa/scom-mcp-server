@@ -5,8 +5,20 @@ $module = Get-Module ScomSetup.Windows
 $facts = [pscustomobject]@{
     osBuild=20348; productType=3; dotnet=$true; runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]','Microsoft.AspNetCore.App 8.0.0 [synthetic]')
     iis=$true; iisServer=$true; ancm=$true; hostingBundle=$true; sdk=$true; sdkMetadata=$true; restart=$false; poolExists=$false; siteExists=$false
-    osProbeFails=$false;registryProbeFails=$false;runtimeExit=0
+    osProbeFails=$false;registryProbeFails=$false;runtimeExit=0;bundleView='64';bundleName='Microsoft .NET 8.0.34 - Windows Server Hosting';bundleVersion='8.0.34.26523'
 }
+& (Get-Module ScomSetup -All | Select-Object -First 1) {
+    param($fixture)
+    $script:hostingFacts=$fixture
+    function script:Get-ItemProperty {
+        param($Path)
+        if ($script:hostingFacts.registryProbeFails) { throw 'Synthetic registry access denied: private-marker' }
+        $view=if ($Path -match 'WOW6432Node') {'32'} else {'64'}
+        if ($script:hostingFacts.hostingBundle -and $script:hostingFacts.bundleView -in @($view,'both')) {
+            [pscustomobject]@{DisplayName=$script:hostingFacts.bundleName;DisplayVersion=$script:hostingFacts.bundleVersion}
+        }
+    }
+} $facts
 # Substitute read-only command probes INSIDE the adapter module. No IIS
 # commands, registry writes, runtime execution or source connection can occur.
 & $module {
@@ -69,6 +81,19 @@ function Check-Code([string]$Code) {
     $script:count++
 }
 try {
+    foreach ($view in @('32','64','both')) {
+        $facts.bundleView=$view
+        $result=Get-ScomSetupPrerequisites $plan
+        if ('DOTNET8_HOSTING_BUNDLE_REQUIRED' -in $result.codes -or 'HOSTING_BUNDLE_PROBE_FAILED' -in $result.codes) {
+            throw 'Official Hosting Bundle registry view rejected'
+        }
+        $count++
+    }
+    $facts.bundleName='Microsoft ASP.NET Core 8.0.34 Hosting Bundle Options'
+    Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'
+    $facts.bundleName='Microsoft .NET 8.0.34 - Windows Server Hosting'
+    $facts.bundleVersion='9.0.34.26523';Check-Code 'DOTNET8_HOSTING_BUNDLE_REQUIRED'
+    $facts.bundleVersion='8.0.34.26523';$facts.bundleView='64'
     if ($PSVersionTable.PSEdition -eq 'Desktop') {
         if (-not (Get-ScomSetupPrerequisites $plan).ready) { throw 'Synthetic complete Desktop prerequisites rejected' }
         $count++
@@ -224,4 +249,4 @@ try {
     } finally { if (Test-Path -LiteralPath $fixtureRoot) {Remove-Item -LiteralPath $fixtureRoot -Recurse -Force} }
     Write-Output "PASS: $count synthetic Windows prerequisite/IIS-conflict checks; every external read probe replaced, no host mutation."
 }
-finally { Remove-Module ScomSetup.Windows }
+finally { Remove-Module ScomSetup.Windows; Get-Module ScomSetup -All | Remove-Module }

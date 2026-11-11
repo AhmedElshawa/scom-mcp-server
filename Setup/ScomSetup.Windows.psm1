@@ -128,8 +128,7 @@ function Get-ScomSetupPrerequisites {
         if ($iisServices.Count -ne 2) { $codes.Add('IIS_WEB_SERVER_REQUIRED') }
     } catch { $codes.Add('IIS_PROBE_FAILED');$codes.Add('IIS_MANAGEMENT_TOOLS_REQUIRED');$codes.Add('IIS_WEB_SERVER_REQUIRED') }
     try {
-        $bundles = @(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-            Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.DisplayName -match '^Microsoft \.NET 8\.0\..*Windows Server Hosting' })
+        $bundles = @(Get-ScomSetupHostingBundles)
         if ($bundles.Count -eq 0 -or -not (Test-Path "$env:ProgramFiles\IIS\Asp.Net Core Module\V2\aspnetcorev2.dll")) {
             $codes.Add('DOTNET8_HOSTING_BUNDLE_REQUIRED')
         }

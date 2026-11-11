@@ -104,10 +104,7 @@ function New-ScomPrerequisiteWindowsAdapters {
             $os=Get-CimInstance Win32_OperatingSystem
             Import-Module ServerManager -ErrorAction Stop
             $features=@(Get-WindowsFeature -Name Web-Server,Web-Mgmt-Console,Web-Scripting-Tools)
-            $bundles=@(Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*' |
-                Where-Object { $_.PSObject.Properties['DisplayName'] -and $_.PSObject.Properties['DisplayVersion'] -and
-                    $_.DisplayName -match '^Microsoft \.NET 8\.0\..*Windows Server Hosting' -and
-                    $_.DisplayVersion -match ('^' + [regex]::Escape($version) + '($|\.)') })
+            $bundles=@(Get-ScomSetupHostingBundles -ExpectedVersion $version)
             $restart=(Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') -or
                 (Test-Path 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired')
             $session=Get-ItemProperty 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
@@ -124,7 +121,7 @@ function New-ScomPrerequisiteWindowsAdapters {
                     $os.ProductType -ne 1 -and [int]$os.BuildNumber -in @(17763,20348,26100))
                 bootUtc=$os.LastBootUpTime.ToUniversalTime().ToString('o'); restartPending=$restart
                 iisReady=($features.Count -eq 3 -and @($features | Where-Object Installed -NE $true).Count -eq 0)
-                exactBundleInstalled=($bundles.Count -eq 1); runtimeReady=$runtimeReady
+                exactBundleInstalled=($bundles.Count -gt 0); runtimeReady=$runtimeReady
                 ancmReady=(Test-Path "$env:ProgramFiles\IIS\Asp.Net Core Module\V2\aspnetcorev2.dll")
             }
         }
