@@ -329,6 +329,11 @@ replace them in private deployment configuration only.
 Have the platform administrator provision a supported Windows Server host with
 IIS and the current approved .NET 8 **Hosting Bundle** (including the ASP.NET Core
 Module for IIS). A standalone runtime alone does not provide IIS integration.
+For example, Microsoft offers the [Windows Hosting Bundle 8.0.34](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-8.0.34-windows-hosting-bundle-installer);
+check the [.NET 8 downloads page](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+for the latest customer-approved servicing version. Install it after IIS, with
+customer approval and Microsoft signature verification; existing SDKs or runtimes
+need not be uninstalled. The example is not a minimum or a latest-forever claim.
 Follow [Microsoft's IIS hosting instructions](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-8.0)
 for prerequisites, installation order and any required service restart.
 
@@ -589,7 +594,17 @@ If packaging fails, do not deploy the incomplete output. The script refuses to
 reuse an existing output directory; preserve it for inspection and choose a new,
 explicit `-OutputDirectory` for a subsequent attempt rather than mixing builds.
 
-### Downloaded scripts and execution policy
+### Downloaded packages/scripts and execution policy
+
+The CI evaluation artifact is unsigned. Before using it on a customer host,
+verify the **inner** `scom-evaluation.zip` SHA-256 against the independently
+obtained digest for that exact reviewed run. A matching digest verifies integrity,
+not publisher identity. If the customer's authorized administrator approves this
+unsigned package, they may use the approved download-trust procedure on the
+verified archive only, then extract the entire archive into a new directory and
+launch `ci-evaluation\ScomSetup.exe`. The wizard still enforces its normal
+PowerShell and host checks. This is not permission to change execution policy,
+bypass warnings or alter application control.
 
 If PowerShell reports that `package.ps1` is not digitally signed, inspect policy:
 
@@ -607,7 +622,7 @@ Get-Item -LiteralPath .\package.ps1 -Stream Zone.Identifier -ErrorAction Silentl
 ```
 
 Only after reviewing the script and confirming that organizational policy permits
-trusting this download, remove the marker from that one file and retry:
+trusting this development script, remove the marker from that one file and retry:
 
 ```powershell
 Unblock-File -LiteralPath .\package.ps1
@@ -616,11 +631,14 @@ Unblock-File -LiteralPath .\package.ps1
 
 `Unblock-File` removes the file's download marker; it does not sign the code or
 change execution policy. Do not recursively unblock the repository/package.
-If policy requires signatures, or the organization does not permit unblocking,
-obtain approved code signing instead. Validation and collector scripts/modules
-may independently require review/signing on their execution hosts; a successful
-package build does not sign or approve them. Stop on further policy errors rather
-than weakening protections.
+Do not use this development-script example to unblock files in the evaluation
+package. For the evaluation package, any approved zone-marker removal applies to
+the verified inner `scom-evaluation.zip` before full extraction, as described above; never unblock
+extracted package files individually or recursively. If the organization forbids
+unsigned downloads or its application-control policy still blocks the package,
+stop and follow its normal software-approval path. Validation and collector
+scripts/modules remain subject to the customer's policy; successful artifact
+verification does not sign or approve them.
 
 ## Indexed read-model configuration (opt-in)
 

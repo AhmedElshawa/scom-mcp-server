@@ -28,6 +28,7 @@ foreach ($name in $retained) {
 }
 $start.EnvironmentVariables['PATH']=(Join-Path $env:SystemRoot 'System32')+';'+$env:SystemRoot+';'+
     (Join-Path ([Environment]::GetFolderPath('ProgramFiles')) 'dotnet')
+$start.EnvironmentVariables['PATHEXT']='.EXE'
 $requests=@{Bootstrap='{"action":"Bootstrap"}';Empty='';Malformed='{';Null='null';Unknown='{"action":"NotAnAction"}'}
 $process=[Diagnostics.Process]::new()
 $process.StartInfo=$start

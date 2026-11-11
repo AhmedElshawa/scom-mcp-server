@@ -72,6 +72,14 @@ try {
             @($diagnostic.checks | Where-Object { $_.name -ceq 'Windows PowerShell 5.1' -and $_.passed }).Count -ne 1) {
             throw 'Actual packaged GUI/PowerShell protocol did not return real individual local prerequisite results.'
         }
+        $dotnet=Get-Command dotnet.exe -CommandType Application -ErrorAction Stop
+        $runtimes=@(& $dotnet.Source --list-runtimes)
+        if ($LASTEXITCODE -ne 0) { throw 'Independent native runtime enumeration failed.' }
+        if (@($runtimes -match '^Microsoft\.NETCore\.App 8\.').Count -gt 0 -and
+            @($runtimes -match '^Microsoft\.AspNetCore\.App 8\.').Count -gt 0 -and
+            @($diagnostic.checks | Where-Object { $_.name -ceq '.NET and ASP.NET Core 8 runtimes' -and $_.passed }).Count -ne 1) {
+            throw 'Packaged native bridge failed to detect independently verified .NET 8 runtimes.'
+        }
         Write-Output 'PASS: actual packaged native-to-Windows-PowerShell 5.1 Bootstrap transport/JSON/check contract; read-only local probes only, no SCOM connection or installation.'
     }
 } finally {

@@ -316,6 +316,7 @@ internal sealed class SetupBridge(string packageRoot) : ISetupBridge
             if (Environment.GetEnvironmentVariable(name) is { } value) info.Environment[name] = value;
         info.Environment["PATH"] = Path.Combine(windows, "System32") + ";" + windows + ";" +
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet");
+        info.Environment["PATHEXT"] = ".EXE";
         return info;
     }
 

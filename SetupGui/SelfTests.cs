@@ -66,15 +66,16 @@ internal static class SelfTests
         Require(!DisplayText.IsExactSummarySafe("bad\u202evalue") && !DisplayText.IsExactSummarySafe("bad\0value") &&
             DisplayText.IsExactSummarySafe(request.Approval));
         Require(DisplayText.Clean("a\u202eb\0c", 2) == "ab");
-        string[] overrides = ["SCOM_SETUP_TEST_OVERRIDE", "ASPNETCORE_URLS", "DOTNET_ROOT", "PSExecutionPolicyPreference", "PSModulePath", "PATH"];
+        string[] overrides = ["SCOM_SETUP_TEST_OVERRIDE", "ASPNETCORE_URLS", "DOTNET_ROOT", "PSExecutionPolicyPreference", "PSModulePath", "PATH", "PATHEXT"];
         var saved = overrides.ToDictionary(name => name, Environment.GetEnvironmentVariable);
         System.Diagnostics.ProcessStartInfo start;
         try
         {
             foreach (var name in overrides) Environment.SetEnvironmentVariable(name, "untrusted-inherited-test-value");
             start = SetupBridge.StartInfo(AppContext.BaseDirectory);
-            Require(overrides.Where(name => name != "PATH").All(name => !start.Environment.ContainsKey(name)));
+            Require(overrides.Where(name => name is not "PATH" and not "PATHEXT").All(name => !start.Environment.ContainsKey(name)));
             Require(!start.Environment["PATH"]!.Contains("untrusted-inherited-test-value"));
+            Require(start.Environment["PATHEXT"] == ".EXE");
         }
         finally
         {
@@ -91,6 +92,24 @@ internal static class SelfTests
             !start.Environment.ContainsKey("PSExecutionPolicyPreference") &&
             !start.Environment.Keys.Any(k => k.StartsWith("SCOM", StringComparison.OrdinalIgnoreCase)));
         Require(start.StandardInputEncoding is UTF8Encoding);
+        var executableProbe = SetupBridge.StartInfo(AppContext.BaseDirectory);
+        executableProbe.ArgumentList.Clear();
+        executableProbe.ArgumentList.Add("-NoProfile");
+        executableProbe.ArgumentList.Add("-Command");
+        executableProbe.ArgumentList.Add("Set-StrictMode -Version Latest; $ErrorActionPreference='Stop'; " +
+            "$app=Get-Command cmd.exe -CommandType Application -ErrorAction Stop; " +
+            "$result=& $app.Source /c 'echo SCOM_NATIVE_EXIT_PROBE&exit /b 7'; " +
+            "if ($LASTEXITCODE -ne 7 -or $result -cne 'SCOM_NATIVE_EXIT_PROBE') { exit 1 }; 'SCOM_NATIVE_EXIT_OK'");
+        using (var probe = System.Diagnostics.Process.Start(executableProbe))
+        {
+            Require(probe is not null);
+            probe!.StandardInput.Close();
+            var output = probe.StandardOutput.ReadToEndAsync();
+            var error = probe.StandardError.ReadToEndAsync();
+            Require(probe.WaitForExit(30000) && probe.ExitCode == 0 &&
+                output.GetAwaiter().GetResult().Trim() == "SCOM_NATIVE_EXIT_OK" &&
+                error.GetAwaiter().GetResult().Length == 0);
+        }
         var taskSetup = WizardForm.TaskSetupStartInfo(AppContext.BaseDirectory, @"C:\approved-journal", "Register");
         Require(taskSetup.ArgumentList.SequenceEqual(new[] { "-NoProfile", "-File",
             Path.Combine(AppContext.BaseDirectory, @"setup\Start-ScomWorkerTaskSetup.ps1"),
