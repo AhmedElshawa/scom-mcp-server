@@ -24,9 +24,10 @@ or red for BLOCKED, with a remedy. Unknown or failed checks are never marked gre
 Use **Back / Next** for the sequential screens. Normal setup asks for a log folder
 (separate MCP/collector subfolders), safe IIS placement, the approved execution
 account and SCOM server/scope. Installation/private/state paths and a new dedicated
-pool are proposed; detailed overrides, certificate/HTTPS evidence, reviewed JSON
-and resume options live in **Advanced**, not a long initial form. Proposed defaults
-do not grant permission, override existing paths or certify external evidence.
+pool are proposed; detailed overrides, certificate/HTTPS evidence and resume
+options live in **Advanced**. The configuration screen shows the three reviewed
+JSON inputs separately. Proposed defaults do not grant permission, override
+existing paths or certify external evidence.
 If required, use the explicit elevation action and approve the genuine Windows
 UAC prompt yourself, then rerun the checks.
 
@@ -42,22 +43,13 @@ Windows inventory. Review the final proposal and explicitly confirm **Prepare**.
 Configuration/activation/worker/publication/acceptance remain separate gated
 actions, never automatic consequences of navigation.
 
-### Resume the current MCPTest evaluation
+### Continue or resume a deployment
 
-The latest customer report says Step 5's whole-management-group checkbox is
-checked. Step 6 still says “Discovery complete. Select an existing group
-explicitly; no inventory or installation was approved,” but that message does
-not reflect the selected whole-management-group mode. Step 6 reports **Stage:
-Staged**. Treat that only as the prepared/staged phase, not configured or
-activated. No inventory collection or activation is reported. The checkbox
-selects a scope; it is not itself approval for collection or installation, and
-each gated action still requires its own confirmation.
-
-The inputs summary reports identity/receiver/worker JSON as missing; Advanced
-shows the identity path populated and receiver and worker paths blank. A
-populated path is not proof the file exists or is valid. Source connection
-remains unverified. Do not treat green prerequisite checks, completed
-discovery, or the staged state as a working deployment.
+Use **Status** to inspect the existing private journal before resuming. A prepared
+or staged deployment is not configured or activated; green prerequisite checks,
+group discovery and selected paths do not establish a working deployment. If a
+previous action is pending, inspect the journal and follow the recovery guidance
+instead of repeating the action blindly.
 
 1. On **Choose SCOM scope**, confirm the intended mode: select one existing
    discovered group (the narrower default), or keep **ALL supported Windows
@@ -66,17 +58,17 @@ discovery, or the staged state as a working deployment.
    class; it requires a distinct scope confirmation and is still not an
    installation or collection approval. Declining a confirmation starts no
    corresponding action.
-2. On **Prepare the new deployment**, select **Prepare new deployment**. This
-   saves the protected plan and stages new files after the separate exact effect
-   approval. Pressing **Next (navigate only)** just changes screens. Prepare does
-   not configure Entra, activate IIS or collect inventory.
+2. For a new deployment, select **Prepare new deployment** only after reviewing
+   the proposal. This saves the protected plan and stages new files after the
+   separate exact effect approval. Pressing **Next (navigate only)** just changes
+   screens. Prepare does not configure Entra, activate IIS or collect inventory.
 3. On **Select identity and reviewed configuration**, check each file status
-   separately. The identity path may remain populated; select actual reviewed
+   separately. Select the nonsecret identity file and actual reviewed
    receiver and worker JSON files only when available. The updated visible
    checklist distinguishes “no file selected”, “selected path does not exist”,
    and “selected file exists; backend review still required”. File presence is
    not validation. Receiver/worker Browse opens at an existing settings folder
-   (or Documents), not the identity file's folder, and the wizard rejects using
+   (or Documents), and the wizard rejects using
    the same JSON path for multiple roles. Store the two reviewed settings files
    separately from Entra's `identity.json`; there is no required customer path.
    Do not copy the repository examples as customer config: they use synthetic IDs
