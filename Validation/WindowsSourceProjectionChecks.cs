@@ -42,7 +42,8 @@ static class WindowsSourceProjectionChecks
                     },
                     WindowsOsCaptionProperty = "Caption"
                 };
-                var labStore = new ReadModelStore(settingsLab, new() { SnapshotEnabled = false }, TimeProvider.System);
+                var labSourceSettings = new SourceSettings { SnapshotEnabled = false };
+                var labStore = new ReadModelStore(settingsLab, labSourceSettings, TimeProvider.System);
                 var labSource = new ReconciledCollectionSource(new Profile(scan), new(), TimeProvider.System);
                 var candidate = await labSource.PrepareAsync(CancellationToken.None);
                 labStore.Begin(Publisher, candidate.SessionId);
@@ -57,12 +58,24 @@ static class WindowsSourceProjectionChecks
                 }
                 catch (QueryFault fault) when (fault.Message == "OFFLINE_HOSTING_PREVIEW_MUST_REPORT_UNVERIFIED_COVERAGE") { count++; }
                 labStore.Commit(Publisher, candidate.SessionId, Encoding.UTF8.GetBytes(Wire.Encode(candidate.Manifest)));
-                var preview = labStore.ReadWindowsDataset().Snapshot;
+                var labDataset = labStore.ReadWindowsDataset();
+                var preview = labDataset.Snapshot;
                 var device = preview.Devices.Single();
                 Check(preview.Status == "partial" && device.MonitoringMode == "unknown" && device.OsVersion == "10.0.20348" &&
                     preview.Volumes.Length == (mode == "lab" ? 1 : 0) &&
                     preview.Volumes.All(v => v.ParentEntityId == device.EntityId),
                     "lab preview is partial, attaches supplied OS/disk edges and invents no missing disk parent", ref count);
+                var engineLab = new QueryEngine(labSourceSettings, TimeProvider.System,
+                    new CursorCodec(TimeProvider.System, labSourceSettings));
+                using var response = JsonDocument.Parse(Wire.Encode(engineLab.SourceStatus(labDataset)));
+                var coverage = response.RootElement.GetProperty("coverage");
+                Check(coverage.GetProperty("expectedDeviceCount").GetInt32() == 1 &&
+                    coverage.GetProperty("uniqueDeviceCount").GetInt32() == 1 &&
+                    !coverage.GetProperty("complete").GetBoolean() &&
+                    response.RootElement.GetProperty("status").GetString() == "partial" &&
+                    response.RootElement.GetProperty("limitations").EnumerateArray().Any(
+                        limit => limit.GetString() == "SCOM_OFFLINE_HOSTING_PREVIEW_SOURCE_UNVERIFIED"),
+                    "lab source-status JSON reports unverified coverage even when device counts match", ref count);
                 try
                 {
                     labStore.Begin(Publisher, Guid.NewGuid().ToString("D"));

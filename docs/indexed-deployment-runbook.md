@@ -167,8 +167,10 @@ mapping and keep `additionalRelationshipContractVerified` false. Monitoring role
 remain unknown; alerts, metrics and live checks stay disabled. The local result
 limit and timeout do not bound SDK/SQL work. A separate approved worker-once
 attempt is required; no recurrence or normal acceptance. The receiver accepts at
-most one capture and always shows it as incomplete. Do not reuse or delete its
-attempt journal or promote the preview to production.
+most one capture and always reports `status: "partial"` and
+`coverage.complete: false` on Windows inventory responses, even if the expected
+and observed device counts match. Do not reuse or delete its attempt journal or
+promote the preview to production.
 
 The documented `GetRelatedObjects` containment overload is not a replacement for
 typed OS/disk hosting edges. Do not try an unbounded relationship query to gather
