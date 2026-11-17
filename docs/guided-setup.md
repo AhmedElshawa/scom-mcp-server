@@ -9,11 +9,12 @@ environment before use; preserve existing private state and approval gates.
 Download the reviewed CI evaluation artifact. Verify the SHA-256 of the **inner
 `scom-evaluation.zip`** against a value obtained independently from the reviewed CI
 run or a trusted administrator. A matching hash verifies the downloaded bytes,
-not who published them. If the customer's administrator approves running this
-unsigned evaluation package, use the administrator-approved Windows download-trust
-procedure on that verified ZIP only, then extract **the entire
-`scom-evaluation.zip`** into a new directory. Do not recursively unblock extracted
-contents. Open the extracted `ci-evaluation` folder and double-click
+not who published them or whether Windows trusts them. Use only a distribution
+and signing route approved by the organization's software-security process. If
+the package is blocked or lacks required authorization, stop and request an
+approved build/distribution path; do not remove download markers or change policy.
+Then extract **the entire `scom-evaluation.zip`** into a new directory. Open the
+extracted `ci-evaluation` folder and double-click
 **`ScomSetup.exe`**. Keep the executable, its bundled
 runtime DLLs, `server`, `collector`, `setup` and documentation together; copying
 only the EXE is not supported. This is a genuine Windows Forms application with
@@ -49,6 +50,85 @@ than typed in normal setup. Then choose a group or separately confirm all suppor
 Windows inventory. Review the final proposal and explicitly confirm **Prepare**.
 Configuration/activation/worker/publication/acceptance remain separate gated
 actions, never automatic consequences of navigation.
+
+### What setup checks automatically, and what the operator must do
+
+Follow these steps in order. A displayed value, discovered asset, successful
+local check or prepared stage is not approval for the next operation.
+
+1. **Resolve package authorization through the normal software process.** Obtain
+   the evaluation build through an approved distribution channel and use the
+   organization's required signing, trust and endpoint-security review. If
+   Windows or organizational policy blocks launch, stop and ask the responsible
+   administrator; do not suppress a warning, remove a zone marker, or change
+   policy to continue. The separate
+   [local evaluation signing procedure](local-evaluation-signing.md) is for an
+   explicitly approved personal-lab derivative only. It is not a production
+   prerequisite, publisher model or production distribution recommendation.
+2. **Run Bootstrap and review the returned local checks.** On launch, the wizard
+   reads local OS/runtime/IIS/SCOM-module metadata and discovers local IIS and
+   certificate options. These checks do not install components, connect to SCOM,
+   verify a source query contract, or collect inventory. Continue only when the
+   individual prerequisite results have actually returned and all required
+   checks pass. `NOT CHECKED`, missing results, or a blocked row means stop and
+   investigate the displayed code; do not infer a missing component or treat
+   navigation as a retry.
+3. **Handle pending reboot outside setup.** Bootstrap only detects common
+   pending-restart indicators. It does not reboot or clear them. If a restart is
+   reported, stop before installation effects, have the host owner schedule the
+   appropriate maintenance, and let that operator perform the restart. Reopen
+   the wizard and run the checks again; use the new results rather than the
+   pre-restart report.    Never clear a pending-restart indicator to pass the gate.
+
+   In one observed evaluation, nine local checks passed while a pending-reboot
+   check blocked. A read-only check later found a pending file-rename indicator;
+   after the operator performed the restart, the indicators were clear and a
+   separately approved Bootstrap run returned all ten local checks as passing.
+   This records only that local prerequisite sequence; it does not establish
+   SCOM connectivity, installation, configuration or acceptance.
+4. **Review existing identity, HTTPS and IIS assets.** Reuse existing assets
+   only after their owner and suitability are reviewed. The Entra publisher
+   certificate and the IIS HTTPS/TLS certificate have different purposes and
+   are not interchangeable. An identity file on disk does not prove its
+   contents, ownership, permissions or source authorization. A visible TLS
+   certificate does not prove chain trust, usable private-key access or an IIS
+   binding; a discovered IIS site may have no matching HTTPS binding. Verify the
+   intended DNS name, certificate and placement through the normal host-owner
+   process. Do not issue duplicate identity or certificates merely because a
+   selector is blank. The observed inspection found an existing identity file
+   and a locally eligible TLS certificate, but did not inspect identity
+   contents, prove certificate chain/key usability, or establish served HTTPS.
+5. **Supply reviewed configuration and source evidence.** The operator and
+   relevant identity/source owners must provide the real nonsecret identity file
+   and complete reviewed receiver and worker JSON. Confirm their schema,
+   intended reader grants, source mapping, authorization and evidence separately;
+   repository examples are synthetic and are not deployable inputs. Approve
+   bounded group discovery as a read-only source operation, then select and
+   approve the intended scope. Discovery does not read inventory or set source
+   verification flags. If required files or independent source evidence are
+   absent, stop; setup does not generate them or certify claims.
+6. **Approve each consequential stage separately.** After reviewing paths,
+   scope, IIS placement, log destinations and the exact effect summary, the
+   operator separately approves Prepare/staging. Configure requires the reviewed
+   files and source gates; activation requires the configured stage and an
+   explicitly approved, conflict-free IIS/HTTPS target. A pending action or
+   ambiguous result stays subject to journal review, not blind retry. Installing
+   optional IIS features or a Hosting Bundle is another explicit operator
+   choice; the operator supplies the independently verified installer, approves
+   each host-wide effect, and reruns preflight afterward. Setup does not download
+   prerequisites or restart Windows.
+7. **Connect, publish and accept as distinct actions.** The exact worker account
+   separately verifies its selected source scope and, after reviewed configuration,
+   performs an explicitly approved one-shot publication. The host administrator
+   separately records the worker receipt. An intended reader must then verify
+   tool access, expected scope/coverage and unauthorized-user denial before the
+   operator records acceptance. These steps do not enable recurrence, metrics or
+   targeted-live checks; recurrence remains a later opt-in after acceptance.
+
+The observed evaluation reached local prerequisite success, but the reviewed
+receiver/worker inputs, source verification, scope approval, configuration,
+installation/activation and reader acceptance were not established by that
+result. Do not represent the evaluation as a completed setup.
 
 ### Continue or resume a deployment
 
@@ -172,55 +252,23 @@ not infer a Windows marketing name from a version/build. The presence of
 `OSVersionDisplayName` in legacy repository code does not establish that the
 customer's installed MP populates it.
 
-**Trust/signing limitation:** this evaluation EXE and repository scripts do not
-carry a customer-trusted publisher signature. A self-contained EXE does not
-establish trust or override PowerShell `AllSigned`/RemoteSigned, UAC, SmartScreen,
-certificate, antivirus or unsafe-content warnings. The native GUI invokes the
-existing Windows PowerShell 5.1 scripts using normal `-File` execution with no
-policy override; customer-approved download-trust approval may be needed before
-checks/actions can run. If the customer does not approve the unsigned package or
-Windows still blocks it, stop and use the customer's normal software-approval
-process. No embedded credentials or fake signing certificate are supplied.
+**Trust/signing limitation:** the evaluation EXE and repository scripts do not
+carry a production customer-trusted publisher signature. A self-contained EXE
+does not establish trust or override PowerShell policy, UAC, SmartScreen,
+certificate, antivirus or unsafe-content controls. The native GUI invokes the
+existing Windows PowerShell 5.1 scripts normally, without a policy override. If
+Windows or organizational policy blocks launch, stop and ask the responsible
+security administrator for the approved signing or software-distribution route.
+Do not remove download markers, suppress warnings, lower/bypass policy or alter
+application-control settings. A matching archive hash proves only byte
+integrity against the supplied checksum; it is not publisher authentication.
 
-**Unsigned-download trust step:** an approved administrator may decide to remove
-the Internet-download zone marker from the verified ZIP before extraction, using
-the customer's normal reviewed download-trust procedure. For example, only after
-the archive hash has been independently verified and approval granted:
-
-```powershell
-Get-FileHash -LiteralPath 'C:\ApprovedDownload\scom-evaluation.zip' -Algorithm SHA256
-# Compare the result with the independently obtained reviewed-run hash first.
-Unblock-File -LiteralPath 'C:\ApprovedDownload\scom-evaluation.zip'
-```
-
-This is an explicit, one-archive deployment trust decision, not a signing or
-publisher-authentication step. Extract the complete archive to a **new** folder
-afterward; do not run `Unblock-File` recursively, unblock individual scripts
-automatically, lower execution policy, bypass PowerShell policy, suppress
-security prompts or alter AppLocker/WDAC/application-control settings. The wizard
-must still run and display every prerequisite check, and installation remains
-blocked until checks pass and the customer confirms each action. If the customer
-does not approve this unsigned-package procedure or security controls still
-block execution, stop; this evaluation approach does not require the customer to
-issue a signing certificate.
-
-Before retrying, inspect the extracted scripts and modules for zone markers
-from Windows PowerShell, with the current directory set to the new `ci-evaluation`
-folder:
-
-```powershell
-Get-ChildItem -LiteralPath .\setup, .\collector, .\Operations -Recurse -File -ErrorAction Stop |
-    Where-Object { $_.Extension -in '.ps1', '.psm1' } |
-    ForEach-Object {
-        Get-Item -LiteralPath $_.FullName -Stream * -ErrorAction Stop |
-            Where-Object { $_.Stream -eq 'Zone.Identifier' }
-    }
-```
-
-No output means no matching markers were found if the command completed without
-errors. If a marker remains or inspection fails, stop and ask the customer security
-process to review; do not assume success or unblock extracted files. Otherwise
-open `ScomSetup.exe` normally and inspect the actual prerequisite results.
+The separate [local evaluation signing procedure](local-evaluation-signing.md)
+describes an explicitly approved, untimestamped personal-lab derivative. Its
+certificate, trust and transfer steps are lab-specific and are **not** a
+production prerequisite or a production signing recommendation. A lab signature
+does not imply that another account or host trusts the package. No embedded
+credentials or production signing certificate are supplied.
 
 The normal PR artifact is an **unsigned evaluation package**. CI runs manifest,
 tamper and missing-signer rejection tests without creating a certificate or
@@ -260,7 +308,7 @@ prove that a prerequisite probe ran; only returned individual checks do.
 | `SETUP_GUI_POLICY_BLOCKED` | PowerShell emitted specific policy/security markers. Have the customer security process inspect signing/zone/policy; do not bypass it. |
 | `SETUP_GUI_MODULE_LOAD_FAILED` | The entry script ran but could not import its setup module. Verify complete extraction and ask the administrator to review the applicable trust/application-control policy; this alone does not establish a policy cause or universal signature requirement. |
 | `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | Returned output was not accepted. The schema message/report includes an allowlisted `contractField`, `expectedType` and `actualType` (no values). Report those; mixed files, a missing prerequisite or a policy problem has not been established by this code alone. |
-| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy, downloaded-file zone/trust prompts, signatures and application-control policy. Even Unrestricted can warn about Internet-zone scripts; signing is not always mandatory. This does not establish a missing SDK. An administrator may separately approve the verified-archive trust step above; do not unblock extracted scripts, bypass policy or change application control. |
+| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy, downloaded-file zone/trust prompts, signatures and application-control policy. Even Unrestricted can warn about Internet-zone scripts; signing is not always mandatory. This does not establish a missing SDK. Use only the organization's approved software-signing/distribution process; do not unblock extracted scripts, bypass policy or change application control. |
 | `SETUP_GUI_CHILD_EXIT` / `SETUP_GUI_NO_RESPONSE` | No usable response was obtained. Collect the read-only diagnostic; no missing component is inferred. |
 | `SETUP_GUI_BOOTSTRAP_PROBE_FAILED` | Local probes could not complete. Privately inspect local component access; do not install based on this code alone. |
 
@@ -303,13 +351,12 @@ stderr/request is displayed or logged, and this classification grants no
 installation or navigation approval. The administrator must review the
 `.ps1`/`.psm1` trust and authorization chain. Unrestricted permits unsigned
 scripts but can still prompt for Internet-zone files; redirected protocol stdin
-is not an appropriate channel for answering a Windows trust prompt. Do not send prompt answers through the bridge or change policy. Do not remove
-zone markings as a diagnostic workaround. For an intended installation, an
-authorized administrator may separately approve the one-archive trust step in
-the quickstart; it is a deployment decision, not a diagnostic. Approved signing
-or another customer software-approval path may be required by local policy, but
-is not proven universally mandatory by this error. The evaluation package does
-not provide a trusted publisher signature.
+is not an appropriate channel for answering a Windows trust prompt. Do not send
+prompt answers through the bridge, remove zone markings, or change policy. For
+an intended installation, use only the signing or distribution route approved
+by the organization's software-security process; it is a deployment decision,
+not a diagnostic. The personal-lab signing procedure is not a production route.
+The evaluation package does not provide a production trusted publisher signature.
 
 Maintainers can run `Validation\Get-BootstrapTransportShape.ps1` under Windows
 PowerShell 5.1 with `-PackageDirectory` set to the extracted package. It uses
@@ -333,8 +380,7 @@ This uses normal `-File` execution, performs only local read-only checks and
 neither connects to SCOM nor installs anything. Do not change execution policy,
 unblock files as a diagnostic or bypass a Windows warning to make it run. If
 policy prevents the script from starting, the customer security process should
-review that specific error. If the administrator separately approves deployment,
-use only the verified-archive trust step in the quickstart. If JSON is returned, report the fixed `code` and the check names
+review that specific error. If JSON is returned, report the fixed `code` and the check names
 and PASS/BLOCKED values; do not share raw configuration, paths, identity details
 or credentials. Missing files require the complete reviewed package to be
 extracted, not prerequisite installation.
@@ -357,12 +403,11 @@ prompts, script-managed downloads, execution-policy changes, broad group creatio
 
 Use the complete reviewed [evaluation package](../README.md#build-and-validate),
 not a single DLL. On the customer host, open **64-bit Windows PowerShell 5.1**
-through the approved administrator mechanism. Obtain administrator approval for
-the unsigned package using the quickstart's verified-archive trust procedure if
-permitted; never bypass `AllSigned`, OS authentication or unsafe-content warnings.
-If customer policy forbids the unsigned package, stop and use its normal software
-approval process. This repository does not ship a customer-trusted signing
-certificate.
+through the approved administrator mechanism. Use the organization's approved
+signing/distribution route. If policy blocks the package, stop and request an
+approved software-distribution path; never bypass `AllSigned`, OS authentication
+or unsafe-content controls. This repository does not ship a production
+customer-trusted signing certificate.
 
 The metadata prerequisite checks recognize Windows Server 2019/2022/2025 build
 families (17763/20348/26100), .NET and ASP.NET Core 8 runtimes, a registered .NET 8
