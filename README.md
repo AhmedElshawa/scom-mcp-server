@@ -758,10 +758,10 @@ Do not grant it delegated reader access or reuse a human identity as publisher.
 
 #### 4. Provision the publisher certificate
 
-For an explicitly approved isolated lab publisher, see the
-[MCPTest certificate and Azure portal walkthrough](docs/guided-setup.md#mcptest-a-separate-publisher-certificate-and-app-step-by-step).
-It creates a separate test credential/app without changing the existing
-publisher or reader; customer-managed production enrollment remains separate.
+For reuse guidance and an optional explicitly approved isolated lab publisher, see
+the [publisher identity and certificate walkthrough](docs/guided-setup.md#publisher-identity-and-certificate-reuse-or-create).
+An existing approved identity and certificate can be reused; creating a new
+credential/app is not required. Customer-managed production enrollment remains separate.
 
 Have the certificate/security administrator issue and deploy an approved
 certificate for the worker. The implementation requires an RSA private key of at

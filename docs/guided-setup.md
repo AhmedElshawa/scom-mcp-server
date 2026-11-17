@@ -726,9 +726,17 @@ Graph v1.0 contracts:
 [service principal create](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-serviceprincipals?view=graph-rest-1.0),
 [publisher role assignment](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignments?view=graph-rest-1.0).
 
-### MCPTest: a separate publisher certificate and app, step by step
+### Publisher identity and certificate: reuse or create
 
-Use this lane when the administrator has chosen a **new isolated test publisher**
+First review whether an existing publisher registration and certificate are
+approved and suitable for this worker. Reuse them when their ownership,
+permissions, validity and private-key access meet the requirements below;
+creating a new application or certificate is **not** required for every setup.
+Do not modify an existing registration or credential without its owner's
+approval. The creation steps below are an optional lane, not a prerequisite
+for an approved existing identity.
+
+Use the creation lane when the administrator has chosen a **new isolated test publisher**
 while reusing reviewed API/reader registrations. Do not edit production publisher
 credentials, permissions or certificates. Reusing an API/reader still shares its
 authorization boundary: a new publisher credential is not a separate test tenant,
@@ -749,8 +757,11 @@ HTTPS/TLS certificate remain separate pending requirements.
    `Scom.Ingest`. Inspect the existing reader's intended delegated permission and
    ownership without changing its callbacks, secret or credentials. A screenshot
    of a scope/role alone does not establish this full compatibility contract.
-2. **Create one dedicated publisher key on MCPTest.** Run the following in elevated
-   Windows PowerShell 5.1 on the intended worker host, only after customer approval.
+2. **Reuse or create the publisher key.** If an approved certificate with an
+   accessible private key already exists on the worker, verify it and skip the
+   creation commands. Otherwise, only after customer approval, run the following
+   illustrative commands in elevated Windows PowerShell 5.1 on the worker host.
+   Replace both placeholders with approved values before running.
    Select an existing approved local directory for the public `.cer` file.
    This is a lab client-authentication certificate, **not** TLS or code signing.
    No Root/TrustedPublisher import or PowerShell trust change is needed. The
@@ -758,8 +769,8 @@ HTTPS/TLS certificate remain separate pending requirements.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$subject = 'CN=SCOM-MCPTest-Worker-Publisher'
-$publicFile = 'C:\ApprovedCerts\SCOM-MCPTest-Worker-Publisher.cer'
+$subject = '<approved-certificate-subject>'
+$publicFile = '<approved-absolute-public-certificate-path>'
 if (-not (Test-Path -LiteralPath (Split-Path -Parent $publicFile) -PathType Container)) {
     throw 'Select an existing approved public-certificate directory.'
 }
@@ -780,36 +791,39 @@ Export-Certificate -Cert $cert -FilePath $publicFile -Type CERT -NoClobber -Erro
 If creation succeeds but export fails, stop and inspect the created certificate;
 do not rerun creation blindly. Record its **full** thumbprint and expiry. A public
 certificate already present in an existing publisher app does not put its private
-key on MCPTest. Use customer-managed enrollment/renewal instead where self-signed
+key on the worker host. Use customer-managed enrollment/renewal instead where self-signed
 lab credentials are not allowed.
 
-3. **Create only the new publisher app.** In **App registrations**, first check
-   whether the exact intended test app already exists. If it does, inspect its
-   recorded object/client IDs rather than registering another. Otherwise select
-   **New registration**, name it `SCOM MCPTest Worker Publisher`, select **Accounts
-   in this organizational directory only**, leave Redirect URI empty and register.
+3. **Reuse or create the publisher app.** In **App registrations**, first check
+   whether an approved publisher app already exists. If it does, inspect its
+   recorded object/client IDs rather than registering another. Only when a new
+   app is explicitly approved, select **New registration**, use an approved name,
+   select **Accounts in this organizational directory only**, leave Redirect URI
+   empty and register.
    Record the Directory (tenant) ID, Application (client) ID and this registration's
    Object ID. Do not create a client secret or add a redirect for this app.
-4. **Upload public certificate only.** In the new publisher's **Certificates &
-   secrets > Certificates > Upload certificate**, upload the exported DER `.cer`.
+4. **Verify the public certificate.** If the approved certificate is not already
+   registered, upload only its DER `.cer` in the publisher's **Certificates &
+   secrets > Certificates > Upload certificate**, after explicit approval.
    Compare the complete portal thumbprint and validity dates with the local
    `LocalMachine\My` certificate, not just its subject or last characters. Stop on
-   mismatch. Never upload/export the private key or modify the existing publisher.
-5. **Approve only the ingestion role.** In the new publisher's **API permissions >
-   Add a permission > My APIs**, choose the reviewed API by its exact client ID,
-   select **Application permissions**, then `Scom.Ingest`. The publisher does not
-   need delegated `Scom.Read` or Microsoft Graph runtime permissions. If a default
-   Graph `User.Read` permission exists on this newly created publisher, remove that
-   default only; do not alter any existing application. An authorized tenant
-   administrator must explicitly review and **Grant admin consent** for this
-   tenant. Confirm `Scom.Ingest` shows Granted for the intended resource, and inspect
-   the corresponding Enterprise application. Adding a requested permission alone
-   is not an app-role grant. Stop if the API/role cannot be identified exactly.
-6. **Grant private-key Read to the exact worker account.** Confirm the Windows
+   mismatch. Never upload/export the private key.
+5. **Verify the ingestion role.** Confirm `Scom.Ingest` is granted for the
+   intended API and inspect the corresponding Enterprise application. If a
+   grant is missing, only with owner approval use **API permissions > Add a
+   permission > My APIs** to select the exact reviewed API and its application
+   permission `Scom.Ingest`; an authorized tenant administrator must review and
+   grant admin consent. Adding a requested permission alone is not an app-role
+   grant. The publisher does not need delegated `Scom.Read` or Microsoft Graph
+   runtime permissions. On a newly created publisher, remove the default Graph
+   `User.Read` permission if present; do not alter existing applications without
+   owner approval. Stop if the API/role cannot be identified exactly.
+6. **Verify private-key Read for the exact worker account.** Confirm the Windows
    account selected in setup; do not guess an account from the app display name.
-   On MCPTest open `certlm.msc` as the authorized administrator, then **Personal >
+   On the worker host open `certlm.msc` as the authorized administrator, then **Personal >
    Certificates**, locate the exact full thumbprint, right-click **All Tasks >
-   Manage Private Keys**, and add **Read** only for that confirmed worker account.
+   Manage Private Keys**. If access is missing, after approval add **Read** only
+   for that confirmed worker account.
    Preserve existing SYSTEM/administrator permissions; do not grant Everyone,
    Users, the IIS pool or Full Control, replace the ACL wholesale, or export the
    key. Stop if Manage Private Keys is absent or the account cannot be resolved.
@@ -820,7 +834,7 @@ lab credentials are not allowed.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$thumbprint = '<full-40-hex-MCPTest-publisher-thumbprint>'
+$thumbprint = '<full-40-hex-publisher-thumbprint>'
 if ($thumbprint -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Enter the exact recorded thumbprint.' }
 $cert = Get-Item -LiteralPath "Cert:\LocalMachine\My\$thumbprint" -ErrorAction Stop
 if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt (Get-Date) -or $cert.NotAfter -le (Get-Date)) {
@@ -849,16 +863,18 @@ This proves only local key use under that account, not Entra token issuance,
 tenant consent, SCOM visibility, receiver authorization or successful publication.
 Retain the existing separately approved connection/publication/acceptance gates.
 
-8. **Generate the validated nonsecret identity file.** The following IDs have
-   different meanings; never substitute display names or swap object/client IDs.
+8. **Use the validated nonsecret identity file.** An existing reviewed file can
+   be used if it matches the approved identities and certificate; generate one
+   only when needed. The following IDs have different meanings; never substitute
+   display names or swap object/client IDs.
 
 | Value | Correct source / use |
 |---|---|
 | Tenant ID | Intended tenant's Directory ID |
 | API client ID | API App registration's Application ID; forms `api://<API-client-ID>` |
 | API/reader/publisher registration Object IDs | App registrations > Overview; script reuse inputs `-ApiObjectId`, `-ReaderObjectId`, `-PublisherObjectId` |
-| Publisher client ID | New test publisher's Application ID; worker token client |
-| Publisher service-principal Object ID | Enterprise applications > exact test publisher > Overview; output `publisherObjectId` for receiver authorization, **not** `-PublisherObjectId` input |
+| Publisher client ID | Approved publisher's Application ID; worker token client |
+| Publisher service-principal Object ID | Enterprise applications > exact publisher > Overview; output `publisherObjectId` for receiver authorization, **not** `-PublisherObjectId` input |
 | Certificate thumbprint | Full matching local/portal public certificate thumbprint; worker private key stays local |
 
 Use an authorized provisioning workstation/session with the existing approved
@@ -869,15 +885,15 @@ three reviewed registration Object IDs to avoid creating more apps:
 
 ```powershell
 .\setup\Provision-ScomEntra.ps1 -TenantId '<approved-tenant-guid>' `
-    -NamePrefix 'SCOM-MCPTest' -PublicCertificatePath 'C:\ApprovedCerts\SCOM-MCPTest-Worker-Publisher.cer' `
-    -StateDirectory 'C:\ApprovedState\ScomEntra-MCPTest' `
+    -NamePrefix '<approved-name-prefix>' -PublicCertificatePath '<approved-public-DER-cer-path>' `
+    -StateDirectory '<approved-private-state-directory>' `
     -ApiObjectId '<existing-api-registration-object-guid>' `
-    -PublisherObjectId '<new-MCPTest-publisher-registration-object-guid>' `
+    -PublisherObjectId '<approved-publisher-registration-object-guid>' `
     -ReaderObjectId '<existing-reader-registration-object-guid>'
 ```
 
-Omit `-GrantPublisherRole` here because the administrator explicitly granted it
-in the portal. The script reads API/client/certificate contracts, service
+Omit `-GrantPublisherRole` here when the role has already been granted. The
+script reads API/client/certificate contracts, service
 principals and the actual role assignment before producing identity output;
 incompatible reuse blocks instead of patching existing apps. Inspect all prompts:
 if it proposes an unexpected create, cancel and review the IDs/service principals.
@@ -900,105 +916,20 @@ certificate hash. Malformed identifiers, a different thumbprint, an expired
 credential or more than one matching credential still fail closed. See the
 [Microsoft Graph `keyCredential` definition](https://learn.microsoft.com/en-us/graph/api/resources/keycredential?view=graph-rest-1.0).
 
-For `ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE` after the
-publisher app and public certificate already exist, use only a reviewed package
-containing this comparison fix. On the authorized provisioning workstation:
+For `ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE`, stop and
+independently verify the exact publisher, certificate and credential validity.
+Use a reviewed, verified package containing the comparison fix; do not overwrite
+credentials, change execution policy or remove trust markers to force a retry.
+Replacing a module on disk does not update a module already loaded in a PowerShell
+process; confirm that the approved package's module is the one actually loaded.
+Preserve the existing state directory and public certificate. Inspect any journal
+read-only and stop if `pending` is non-null. Do not reinitialize state or create
+another app or credential to work around the error.
 
-1. Use the actual full path of the downloaded repair ZIP; the chat attachment
-   download may prefix the filename (for example, `0-`). Do not hash a guessed
-   path. Verify the file exists before reading it, then check its published hash:
-
-```powershell
-$zipPath = '<actual-full-path-to-downloaded-ScomEntra-keyidentifier-fix.zip>'
-if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Repair ZIP not found; check the actual downloaded filename and path.' }
-if ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash -cne
-    '2D8B6194B74C141FD480D5F03B2D1EAD0012B1060144D4B850F90C15D45C1B96') {
-    throw 'Repair ZIP hash mismatch; do not extract or run it.'
-}
-```
-
-2. Extract only after that check to a new, empty staging directory. Confirm it
-   contains only `ScomEntra.psm1` and that the module hash is
-   `B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE`.
-   If using the package archive's trusted-download procedure, apply only its
-   explicitly approved archive-only handling; do not recursively unblock files
-   or change execution policy.
-
-```powershell
-$stagingPath = Join-Path $env:TEMP 'ScomEntra-keyidentifier-fix'
-if (Test-Path -LiteralPath $stagingPath) { throw 'Staging directory already exists; choose a new empty directory.' }
-Expand-Archive -LiteralPath $zipPath -DestinationPath $stagingPath -ErrorAction Stop
-$stagedFiles = @(Get-ChildItem -LiteralPath $stagingPath -File -Recurse)
-if ($stagedFiles.Count -ne 1 -or $stagedFiles[0].Name -cne 'ScomEntra.psm1') {
-    throw 'Repair ZIP did not extract as exactly one ScomEntra.psm1; do not install it.'
-}
-$fixedModulePath = $stagedFiles[0].FullName
-if ((Get-FileHash -LiteralPath $fixedModulePath -Algorithm SHA256).Hash -cne
-    'B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE') {
-    throw 'Fixed module hash mismatch; do not install it.'
-}
-```
-3. Keep the existing state directory and already-exported public DER `.cer`.
-   In the confirmed customer retry, the original error occurred before
-   `entra-journal.json` existed. Do **not** rerun first-run state initialization,
-   replace/export the certificate, or create another app or credential. The
-   corrected provisioner creates its journal in the existing state directory.
-4. Before replacement, confirm the package root and module path, then require
-   the existing package module to match the published baseline bytes. The
-   Git-source copy differs from the CI ZIP only by line endings, so either exact
-   hash is acceptable:
-
-```powershell
-$packageRoot = 'C:\9\evaluation-a5105db500b68cd7f283fd1cc7c8495c97896da0\reviewed-a5105db5\ci-evaluation'
-$modulePath = Join-Path $packageRoot 'setup\ScomEntra.psm1'
-if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) { throw 'Expected package module not found.' }
-$originalHash = (Get-FileHash -LiteralPath $modulePath -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($originalHash -cnotin @(
-    '1ADCFBBA3079E73B6E2F1E6D842EA25600D661ACB8D6B37325322F73F544CA66',
-    '02737EBEC52DDA04349FD1DCD2E04C1754D16066780877E541CE7F087EC0AC8A'
-)) { throw 'Package module is not a verified baseline; stop without replacing it.' }
-if (-not (Test-Path -LiteralPath $fixedModulePath -PathType Leaf) -or
-    (Get-FileHash -LiteralPath $fixedModulePath -Algorithm SHA256).Hash -cne
-    'B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE') {
-    throw 'Fixed module missing or hash mismatch; stop.'
-}
-$backupPath = "$modulePath.before-keyidentifier-fix-$(Get-Date -Format yyyyMMdd-HHmmss).bak"
-Copy-Item -LiteralPath $modulePath -Destination $backupPath -ErrorAction Stop
-if ((Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash.ToUpperInvariant() -cne $originalHash) {
-    throw 'Backup verification failed; do not replace the package module.'
-}
-Copy-Item -LiteralPath $fixedModulePath -Destination $modulePath -Force -ErrorAction Stop
-if ((Get-FileHash -LiteralPath $modulePath -Algorithm SHA256).Hash -cne
-    'B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE') {
-    Copy-Item -LiteralPath $backupPath -Destination $modulePath -Force -ErrorAction Stop
-    throw 'Replacement verification failed; original module restored from the verified backup.'
-}
-```
-
-5. In the **same authenticated PowerShell process**, unload the old in-memory
-   module and import the exact replaced file. Replacing a file on disk does not
-   update module code already loaded in that process. Verify the active command
-   comes from this path and its definition calls the new identifier decoder:
-
-```powershell
-Remove-Module -Name ScomEntra -Force -ErrorAction SilentlyContinue
-Import-Module -Name $modulePath -Force -ErrorAction Stop
-$command = Get-Command Invoke-ScomEntraProvisioning -ErrorAction Stop
-if ($command.Module.Path -ne $modulePath -or
-    $command.Definition -notmatch 'ConvertFrom-ScomEntraKeyIdentifier') {
-    throw 'Corrected provisioning function is not loaded from the replaced package module.'
-}
-```
-
-6. Retry only after confirming the state and active module. In the confirmed
-   customer case there was no journal before this retry; preserve the existing
-   state directory and certificate. If a journal has appeared, inspect it
-   read-only and stop if `pending` is non-null. Use the same tenant, state
-   directory, public `.cer`, and
-   reviewed API, publisher and reader **app-registration Object IDs** used for
-   the existing resources.
-   Do not include `-GrantPublisherRole` when the role is already granted. Cancel
-   unexpected create/grant prompts. Rerun the guarded provisioner:
+After review, use the same tenant, state directory, public `.cer`, and reviewed
+API, publisher and reader **app-registration Object IDs** for the existing
+resources. Cancel unexpected create/grant prompts. The guarded retry uses the
+following placeholders:
 
 ```powershell
 .\setup\Provision-ScomEntra.ps1 -TenantId '<same-approved-tenant-guid>' `
@@ -1018,18 +949,8 @@ incompatible API/client contract, malformed/mismatched identifier, or pending
 journal is a stop condition. This recovery does not require changing the tenant,
 certificate, Graph permissions, customer machine or trust policy.
 
-**Verified customer outcome:** the local repair passed hash verification, the
-original module was backed up, and the customer force-reloaded the exact package
-module after confirming its exported provisioning function contained
-`ConvertFrom-ScomEntraKeyIdentifier`. The identity-only retry then saved the
-nonsecret identity successfully, without repeating state initialization or
-certificate export. Configure the Studio-generated Web callback, protected
-OAuth credential and scoped delegated reader consent separately; this success
-does not attest those gates or deploy/configure DNS, firewall, TLS or a live
-collector.
-
-No existing reader callback/credential, production publisher key, DNS record or
-TLS binding is changed by these instructions. The approved host name, HTTPS
+Identity generation does not establish reader consent or deploy/configure DNS,
+firewall, TLS or a live collector. The approved host name, HTTPS
 certificate/private-key access for IIS, reader consent and end-to-end acceptance
 remain independent gates.
 
