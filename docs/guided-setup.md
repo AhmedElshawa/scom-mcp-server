@@ -225,7 +225,11 @@ open `ScomSetup.exe` normally and inspect the actual prerequisite results.
 
 The normal PR artifact is an **unsigned evaluation package**. CI runs manifest,
 tamper and missing-signer rejection tests without creating a certificate or
-changing trust. Actual local signed-derivative integration remains a separate
+changing trust. Before packaging is accepted, validation also compares the
+packaged `ScomEntra.psm1` and `ScomSetup.Windows.psm1` bytes with the reviewed
+checkout, independent of the package's own manifest. A signed derivative changes
+those bytes, so its content-only check must be paired with separate signing
+provenance validation. Actual local signed-derivative integration remains a separate
 explicit workflow-dispatch opt-in: Windows protected-root trust can require an
 interactive prompt, which unattended CI must not auto-approve or bypass.
 Passing the package workflow does not claim that signing integration passed,

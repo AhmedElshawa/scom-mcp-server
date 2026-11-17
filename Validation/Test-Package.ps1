@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$PackageDirectory
+    [string]$PackageDirectory,
+    [switch]$ContentOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,6 +80,17 @@ foreach ($entry in $manifest.files) {
         throw 'Package manifest file digest mismatch.'
     }
 }
+if (-not $ContentOnly) {
+    foreach ($name in @('ScomEntra.psm1', 'ScomSetup.Windows.psm1')) {
+        $checkout = Join-Path (Join-Path $PSScriptRoot '..\Setup') $name
+        $packaged = Join-Path (Join-Path $root 'setup') $name
+        if (-not (Test-Path -LiteralPath $checkout -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $checkout -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash) {
+            throw "Package setup module does not match the reviewed checkout: $name"
+        }
+    }
+}
 foreach ($file in $files | Where-Object Extension -eq '.md') {
     $text = Get-Content -LiteralPath $file.FullName -Raw
     foreach ($match in [regex]::Matches($text, '\]\(([^)]+)\)')) {
@@ -91,5 +103,10 @@ foreach ($file in $files | Where-Object Extension -eq '.md') {
             throw 'Package documentation contains a broken or outside-package file link.'
         }
     }
+}
+if ($ContentOnly) {
+    Write-Output 'Content-only validation: checkout byte comparison was not performed. Validate provenance separately.'
+} else {
+    Write-Output 'PASS: both repaired setup modules match the current checkout bytes.'
 }
 Write-Output "Package content checks passed: $($required.Count) required files, JSON parsing, documentation links and runtime-state exclusions. No application or source connection started."

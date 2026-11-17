@@ -20,6 +20,7 @@ function Reject {
 }
 try {
     Write-Output 'Signing CI: validating rejection paths before any certificate creation.'
+    & (Join-Path $PSScriptRoot 'Test-Package.ps1') -PackageDirectory $source
     $arguments=@{PackageDirectory=$source;DestinationDirectory=(Join-Path $root 'signed')
         ExpectedManifestSha256=$hash;ExpectedSourceCommit=$manifest.sourceCommit}
     $bad=$arguments.Clone();$bad.ExpectedManifestSha256='0'*64;Reject $bad
@@ -69,7 +70,7 @@ try {
     if ($derivative.localSigning.originalManifestSha256 -cne $hash -or
         $derivative.localSigning.signerThumbprint -ine $cert.Thumbprint -or
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $hash) { throw 'Signing provenance or original preservation failed.' }
-    & (Join-Path $PSScriptRoot 'Test-Package.ps1') -PackageDirectory $arguments.DestinationDirectory
+    & (Join-Path $PSScriptRoot 'Test-Package.ps1') -PackageDirectory $arguments.DestinationDirectory -ContentOnly
     Reject $arguments
     Write-Output 'PASS: original manifest pins, overlap/existing outputs, missing signer/trust rejection, actual SHA256 EXE/script signing, archive revalidation, derivative provenance and original preservation. Disposable CI CurrentUser certificate/trust only.'
 } finally {
