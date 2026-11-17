@@ -18,6 +18,10 @@ $receiverPath=Join-Path $plan.installPath 'server\appsettings.json'
 if ($state.workerHash -cne (Get-ScomSetupHash $workerPath) -or
     $state.receiverHash -cne (Get-ScomSetupHash $receiverPath)) { throw 'SETUP_ACCEPTED_CONFIGURATION_CHANGED' }
 $worker=Read-ScomSetupJson $workerPath
+if ($worker.profile.configuration.PSObject.Properties['hostingLabPreview'] -and
+    $worker.profile.configuration.hostingLabPreview -ne $false) {
+    throw 'SETUP_HOSTING_LAB_PREVIEW_DOES_NOT_SUPPORT_RECURRENCE'
+}
 if ($worker.checkpointPath -ine (Join-Path $plan.workerStatePath 'worker.db') -or
     $worker.profile.scriptPath -ine (Join-Path $plan.installPath 'collector\Invoke-SCOMGenericGroupProfile.ps1') -or
     $worker.profile.scriptSha256 -cne (Get-ScomSetupHash $worker.profile.scriptPath) -or

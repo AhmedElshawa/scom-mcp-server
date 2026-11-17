@@ -105,8 +105,10 @@ local check or prepared stage is not approval for the next operation.
    repository examples are synthetic and are not deployable inputs. Approve
    bounded group discovery as a read-only source operation, then select and
    approve the intended scope. Discovery does not read inventory or set source
-   verification flags. If required files or independent source evidence are
-   absent, stop; setup does not generate them or certify claims.
+   verification flags. Before configuring or publishing supported Windows
+   inventory, follow the [typed relationship-query stop gate](indexed-deployment-runbook.md#typed-relationship-query-stop-gate).
+   If required files or independent source evidence are absent, stop; setup does
+   not generate them or certify claims.
 6. **Approve each consequential stage separately.** After reviewing paths,
    scope, IIS placement, log destinations and the exact effect summary, the
    operator separately approves Prepare/staging. Configure requires the reviewed

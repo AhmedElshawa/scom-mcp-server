@@ -50,6 +50,10 @@ public static class SetupConfigurationValidation
         worker.LiveChecks.Validate();
         _ = new PowerShellNormalizationProfile(worker.Profile);
         var profile = worker.Profile.Configuration;
+        if (HostingLabPreviewEnabled(profile) != model.OfflineHostingPreview)
+            throw new InvalidOperationException("Hosting lab preview must be explicitly paired in receiver and worker settings.");
+        if (model.OfflineHostingPreview)
+            ValidateHostingLabPreview(profile, model);
         var mcpLogs = ReviewedLogDirectory(receiverDocument.RootElement.GetProperty("OperationalLogging"));
         var workerLogs = ReviewedLogDirectory(workerDocument.RootElement.GetProperty("operationalLogging"));
         var profileLogs = ReviewedLogDirectory(profile.GetProperty("operationalLogging"));
@@ -98,6 +102,34 @@ public static class SetupConfigurationValidation
             return resource.StartsWith("api://", StringComparison.Ordinal) &&
                 Guid.TryParse(resource[6..], out var id) ? id.ToString("D") : resource;
         }
+
+    }
+
+    internal static bool HostingLabPreviewEnabled(JsonElement profile) =>
+        profile.ValueKind == JsonValueKind.Object &&
+        profile.TryGetProperty("hostingLabPreview", out var value) && value.GetBoolean();
+
+    private static void ValidateHostingLabPreview(JsonElement profile, ReadModelSettings model)
+    {
+        var mapping = profile.GetProperty("windowsMapping");
+        if (mapping.ValueKind != JsonValueKind.Object || profile.GetProperty("additionalRelationshipContractVerified").GetBoolean() ||
+            mapping.TryGetProperty("monitoringRoleMapping", out var role) && role.ValueKind != JsonValueKind.Null)
+            throw new InvalidOperationException("Lab preview must omit monitoring-role mapping and keep relationship verification false.");
+        var graph = profile.GetProperty("additionalRelationshipNames").EnumerateArray()
+            .Select(value => value.GetString()).ToArray();
+        var typed = new[] { "computerHostsOsRelationship", "osHostsVolumeRelationship", "computerHostsVolumeRelationship" }
+            .Where(name => mapping.TryGetProperty(name, out var value) && value.ValueKind != JsonValueKind.Null)
+            .Select(name => mapping.GetProperty(name).GetString()).ToArray();
+        if (typed.Length != 2 || !mapping.TryGetProperty("computerHostsOsRelationship", out var os) ||
+            os.ValueKind != JsonValueKind.String || typed.Any(string.IsNullOrWhiteSpace) ||
+            typed.Distinct(StringComparer.Ordinal).Count() != 2 || graph.Length != 2 ||
+            !typed.ToHashSet(StringComparer.Ordinal).SetEquals(graph))
+            throw new InvalidOperationException("Lab preview requires exactly the OS and one disk hosting relationship.");
+        if (model.WindowsMetricHosting is { } hosting &&
+            (hosting.ComputerClass != mapping.GetProperty("computerClassName").GetString() ||
+             hosting.OperatingSystemClass != mapping.GetProperty("operatingSystemClassName").GetString() ||
+             hosting.RelationshipClass != os.GetString()))
+            throw new InvalidOperationException("Lab receiver OS hosting settings do not match the worker mapping.");
     }
 
     private static string ReviewedLogDirectory(JsonElement settings)

@@ -12,7 +12,7 @@ static class WindowsSourceProjectionChecks
     {
         var count = 0;
         foreach (var mode in new[] { "complete", "direct", "partial", "managementServer", "unknownRole",
-            "legacy", "missingCaption", "blankCaption", "unmappedCaption", "buildOnly" })
+            "legacy", "missingCaption", "blankCaption", "unmappedCaption", "buildOnly", "lab", "labMissingDisk" })
         {
             var start = new ProcessStartInfo("pwsh")
             {
@@ -27,6 +27,57 @@ static class WindowsSourceProjectionChecks
                 TimeSpan.FromSeconds(60), CancellationToken.None);
             Check(scan.WindowsInventory is not null && scan.ExpectedComputerIds is { Length: 1 },
                 "SDK projection deserializes explicit expected membership", ref count);
+            if (mode is "lab" or "labMissingDisk")
+            {
+                var settingsLab = new ReadModelSettings
+                {
+                    Enabled = true, WindowsToolsEnabled = true, OfflineHostingPreview = true,
+                    DatabasePath = Path.Combine(root, $"windows-source-{mode}.db"),
+                    ManagementGroupId = scan.ManagementGroupId, ScopeKind = "managementGroup", PublisherObjectIds = [Publisher],
+                    AllowedPropertiesByClass = new() { ["Synthetic.Os"] = ["Caption"] },
+                    WindowsMetricHosting = new()
+                    {
+                        ComputerClass = "Synthetic.Computer", OperatingSystemClass = "Synthetic.Os",
+                        RelationshipClass = "Synthetic.ComputerHostsOs"
+                    },
+                    WindowsOsCaptionProperty = "Caption"
+                };
+                var labStore = new ReadModelStore(settingsLab, new() { SnapshotEnabled = false }, TimeProvider.System);
+                var labSource = new ReconciledCollectionSource(new Profile(scan), new(), TimeProvider.System);
+                var candidate = await labSource.PrepareAsync(CancellationToken.None);
+                labStore.Begin(Publisher, candidate.SessionId);
+                var index = 0;
+                await foreach (var batch in candidate.Batches)
+                    labStore.Append(Publisher, candidate.SessionId, index++, Encoding.UTF8.GetBytes(Wire.Encode(batch)));
+                try
+                {
+                    var falselyComplete = candidate.Manifest with { Inventory = new(scan.Inventory.AsOfUtc, true, null) };
+                    labStore.Commit(Publisher, candidate.SessionId, Encoding.UTF8.GetBytes(Wire.Encode(falselyComplete)));
+                    throw new InvalidOperationException("False completeness accepted.");
+                }
+                catch (QueryFault fault) when (fault.Message == "OFFLINE_HOSTING_PREVIEW_MUST_REPORT_UNVERIFIED_COVERAGE") { count++; }
+                labStore.Commit(Publisher, candidate.SessionId, Encoding.UTF8.GetBytes(Wire.Encode(candidate.Manifest)));
+                var preview = labStore.ReadWindowsDataset().Snapshot;
+                var device = preview.Devices.Single();
+                Check(preview.Status == "partial" && device.MonitoringMode == "unknown" && device.OsVersion == "10.0.20348" &&
+                    preview.Volumes.Length == (mode == "lab" ? 1 : 0) &&
+                    preview.Volumes.All(v => v.ParentEntityId == device.EntityId),
+                    "lab preview is partial, attaches supplied OS/disk edges and invents no missing disk parent", ref count);
+                try
+                {
+                    labStore.Begin(Publisher, Guid.NewGuid().ToString("D"));
+                    throw new InvalidOperationException("Second lab capture accepted.");
+                }
+                catch (QueryFault fault) when (fault.Message == "OFFLINE_HOSTING_PREVIEW_ALREADY_CAPTURED") { count++; }
+                settingsLab.OfflineHostingPreview = false;
+                try
+                {
+                    _ = new ReadModelStore(settingsLab, new() { SnapshotEnabled = false }, TimeProvider.System);
+                    throw new Exception("Preview database reused by a normal receiver.");
+                }
+                catch (InvalidOperationException) { count++; }
+                continue;
+            }
             var metricId = Guid.NewGuid().ToString("D");
             var os = scan.Objects.Single(o => o.ClassName == "Synthetic.Os");
             var at = scan.MetricsAsOfUtc;

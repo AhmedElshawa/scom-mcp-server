@@ -12,7 +12,7 @@ public sealed record NormalizedSourceScan(string ManagementGroupId, string Scope
     ImmutableArray<ObservedAlert> AlertObservations, DomainObservation Alerts,
     ImmutableArray<MetricSeriesScan> MetricSeries, DateTimeOffset MetricsAsOfUtc,
     WindowsInventoryBatch? WindowsInventory = null, ImmutableArray<string>? ExpectedComputerIds = null,
-    DomainObservation? MetricAssessment = null);
+    DomainObservation? MetricAssessment = null, string? InventoryKind = null);
 
 public interface IScomNormalizationProfile
 {
@@ -252,6 +252,7 @@ public sealed class ReconciledCollectionSource : IScomCollectionSource
     private void ValidateScan(NormalizedSourceScan? scan)
     {
         if (scan is null || !scan.MembershipVerified || !Canonical(scan.ManagementGroupId) ||
+            scan.InventoryKind is not (null or "supportedWindows") ||
             scan.ScopeKind is not ("group" or "managementGroup") ||
             (scan.ScopeKind == "group" ? !Canonical(scan.GroupId) : scan.GroupId is not null) ||
             scan.ExpectedObjectIds.IsDefault || scan.ExpectedObjectIds.Length > settings.MaxRecords ||

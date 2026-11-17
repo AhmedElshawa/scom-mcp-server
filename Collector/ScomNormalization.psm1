@@ -29,6 +29,7 @@ function Get-SCOMGenericScan {
         [ValidateRange(1, 100000)] [int] $MaxSeriesSamples = 10000,
         [ValidateRange(1, 1000000)] [int] $MaxMetricSamples = 50000,
         [object] $WindowsMapping = $null,
+        [switch] $HostingLabPreview,
         [object] $WindowsComputerClass = $null,
         [object] $WindowsOsClass = $null,
         [object] $WindowsVolumeClass = $null,
@@ -42,6 +43,11 @@ function Get-SCOMGenericScan {
         [ValidateRange(1, 7200)] [int] $DeadlineSeconds = 900
     )
 
+    if ($HostingLabPreview -and ($ScopeKind -ne 'managementGroup' -or $InventoryKind -ne 'supportedWindows' -or
+        $null -eq $WindowsMapping -or $AdditionalRelationshipClasses.Count -ne 2 -or
+        $AdditionalRelationshipContractVerified -or $MetricMappingsByClass.Count -ne 0 -or $IncludeAlertDescriptions)) {
+        throw 'SCOM_HOSTING_LAB_CONFIGURATION_INVALID'
+    }
     if ($ManagementGroupId -eq [Guid]::Empty -or -not $ScopeVisibilityVerified -or
         ($ScopeKind -eq 'group' -and (-not $MembershipQueryContractVerified -or $GroupId -eq [Guid]::Empty -or
             $null -eq $GroupClass -or $null -eq $MembershipRelationshipClass)) -or
@@ -55,7 +61,7 @@ function Get-SCOMGenericScan {
         # Validate the reviewed projection before touching any source reader, including empty scopes.
         ConvertTo-SCOMWindowsInventory -Objects @() -ObservedObjects @() -Relationships @() `
             -ExpectedComputerIds @() -ComputerClass $WindowsComputerClass -OperatingSystemClass $WindowsOsClass `
-            -VolumeClass $WindowsVolumeClass -Mapping $WindowsMapping -AgentClass $WindowsAgentClass `
+            -VolumeClass $WindowsVolumeClass -Mapping $WindowsMapping -AgentClass $WindowsAgentClass -OfflineHostingPreview:$HostingLabPreview `
             -ManagementServerClass $WindowsManagementServerClass | Out-Null
         foreach ($pair in @(
             @($WindowsComputerClass,'computerClassName'), @($WindowsOsClass,'operatingSystemClassName'),
@@ -65,7 +71,7 @@ function Get-SCOMGenericScan {
         }
     }
     if ($AdditionalRelationshipClasses.Count -gt 16 -or
-        ($AdditionalRelationshipClasses.Count -gt 0 -and -not $AdditionalRelationshipContractVerified)) {
+        ($AdditionalRelationshipClasses.Count -gt 0 -and -not ($AdditionalRelationshipContractVerified -or $HostingLabPreview))) {
         throw 'SCOM_PROFILE_GRAPH_CONTRACT_UNVERIFIED'
     }
     $relationshipNames = New-Object 'System.Collections.Generic.HashSet[string]'
@@ -88,7 +94,7 @@ function Get-SCOMGenericScan {
     $membershipEdges = New-Object 'System.Collections.Generic.Dictionary[System.Guid,object]'
     $expectedComputers = New-Object 'System.Collections.Generic.HashSet[System.Guid]'
     if ($null -ne $WindowsMapping -and ($null -eq $WindowsComputerClass -or $null -eq $WindowsOsClass -or
-        $null -eq $WindowsVolumeClass -or -not $AdditionalRelationshipContractVerified)) {
+        $null -eq $WindowsVolumeClass -or -not ($AdditionalRelationshipContractVerified -or $HostingLabPreview))) {
         throw 'SCOM_WINDOWS_PROFILE_TYPES_OR_GRAPH_UNVERIFIED'
     }
     $direct = {
@@ -163,6 +169,7 @@ function Get-SCOMGenericScan {
         $at = [DateTimeOffset]::UtcNow
         $objects.Add((ConvertTo-SCOMObservedObject -Object $object -ObservedAtUtc $at -AllowedProperties $allowed))
         $served.Add([Guid]$object.Id) | Out-Null
+        if ($HostingLabPreview) { continue }
         if ($MetricMappingsByClass.ContainsKey([string]$classes[0].Name)) {
             $metricResult = Read-SCOMSelectedMetricSeries -Object $object `
                 -Mappings @($MetricMappingsByClass[[string]$classes[0].Name]) -StartUtc $history -EndUtc $requested `
@@ -188,6 +195,7 @@ function Get-SCOMGenericScan {
         }
     }
     $priorSeen = New-Object 'System.Collections.Generic.HashSet[System.Guid]'
+    if ($HostingLabPreview -and $prior.Count -ne 0) { throw 'SCOM_HOSTING_LAB_CHECKPOINT_MUST_BE_NEW' }
     foreach ($hint in $prior) {
         if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_PROFILE_DEADLINE' }
         $alertId = [Guid]$hint.alertId
@@ -234,6 +242,14 @@ function Get-SCOMGenericScan {
     $graphQueries = 0
     foreach ($class in $AdditionalRelationshipClasses) {
         foreach ($source in $discovery.Objects) {
+            if ($HostingLabPreview) {
+                $sourceClass = $WindowsComputerClass
+                if ($null -ne $WindowsMapping.PSObject.Properties['osHostsVolumeRelationship'] -and
+                    [string]$class.Name -ceq $WindowsMapping.osHostsVolumeRelationship) {
+                    $sourceClass = $WindowsOsClass
+                }
+                if (-not $source.IsInstanceOf($sourceClass)) { continue }
+            }
             if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_PROFILE_DEADLINE' }
             if ($graphQueries -ge $MaxGraphQueries) { throw 'SCOM_PROFILE_GRAPH_QUERY_BUDGET' }
             $graphQueries++
@@ -259,6 +275,7 @@ function Get-SCOMGenericScan {
     if ($outsideEdges) { $inventoryReason='SCOM_GRAPH_ENDPOINTS_OUTSIDE_SERVED_SCOPE' }
     $alertReason = $null
     if (-not $discovery.DiscoveryComplete) { $alertReason = 'SCOM_ALERT_PARENTS_DISCOVERY_INCOMPLETE' }
+    if ($HostingLabPreview) { $alertReason='SCOM_HOSTING_LAB_ALERTS_NOT_COLLECTED' }
     if (-not $discovery.DiscoveryComplete -or $assessedMetricObjects -eq 0) { $metricComplete=$false }
     $metricReason = $null
     if (-not $metricComplete) {
@@ -271,9 +288,10 @@ function Get-SCOMGenericScan {
             -Relationships @($relationships.Values) -ExpectedComputerIds @($expectedComputers) `
             -ComputerClass $WindowsComputerClass -OperatingSystemClass $WindowsOsClass -VolumeClass $WindowsVolumeClass `
             -Mapping $WindowsMapping -AllowedPropertiesByClass $AllowedPropertiesByClass `
-            -AgentClass $WindowsAgentClass -ManagementServerClass $WindowsManagementServerClass
+            -AgentClass $WindowsAgentClass -ManagementServerClass $WindowsManagementServerClass -OfflineHostingPreview:$HostingLabPreview
         $windows=$projection.Inventory
         if (-not $projection.Complete) { $inventoryReason='SCOM_WINDOWS_PROJECTION_INCOMPLETE' }
+        if ($HostingLabPreview) { $inventoryReason=$projection.Reason }
     }
     $result = [ordered]@{
         managementGroupId = $ManagementGroupId.ToString('D')
@@ -285,7 +303,7 @@ function Get-SCOMGenericScan {
         relationships = @($relationships.Values | Sort-Object id)
         inventory = @{ asOfUtc=$asOf; complete=($null -eq $inventoryReason); reason=$inventoryReason }
         alertObservations = @($alerts.Values | Sort-Object id)
-        alerts = @{ asOfUtc=$asOf; complete=[bool]$discovery.DiscoveryComplete; reason=$alertReason }
+        alerts = @{ asOfUtc=$asOf; complete=($null -eq $alertReason); reason=$alertReason }
         metricSeries = $metricSeries.ToArray()
         metricsAsOfUtc = $requested.ToString('o')
         metricAssessment = @{ asOfUtc=$requested.ToString('o'); complete=$metricComplete; reason=$metricReason }

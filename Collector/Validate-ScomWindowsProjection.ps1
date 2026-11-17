@@ -1,4 +1,4 @@
-param([ValidateSet('','complete','direct','partial','managementServer','unknownRole','legacy','missingCaption','blankCaption','unmappedCaption','buildOnly')] [string]$BridgeMode='')
+param([ValidateSet('','complete','direct','partial','managementServer','unknownRole','legacy','missingCaption','blankCaption','unmappedCaption','buildOnly','lab','labMissingDisk')] [string]$BridgeMode='')
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'ScomWindowsProjection.psm1') -Force
@@ -66,6 +66,23 @@ if (-not $result.Complete -or $result.Inventory.devices.Count -ne 1 -or $result.
     $result.Inventory.devices[0].memoryTotalMiB -ne 8192 -or $result.Inventory.volumes[0].sizeMiB -ne 10240 -or
     $result.Inventory.volumes[0].parentEntityId -ne $computer.Id.ToString('D')) { throw 'Typed projection or unit conversion failed.' }
 if ($null -ne $result.Inventory.devices[0].osCaption) { throw 'Unconfigured caption must remain null.' }
+$mapping.agentMonitoringVerified=$false
+$preview=ConvertTo-SCOMWindowsInventory @projectionArgs -OfflineHostingPreview
+if ($preview.Complete -or -not $preview.PreviewOnly -or $preview.SourceWorkBoundVerified -or
+    $preview.Reason -cne 'SCOM_OFFLINE_HOSTING_PREVIEW_SOURCE_UNVERIFIED' -or
+    $preview.Inventory.devices[0].monitoringMode -cne 'unknown' -or
+    $preview.Inventory.devices[0].memoryTotalMiB -ne 8192 -or
+    $preview.Inventory.volumes[0].parentEntityId -ne $computer.Id.ToString('D')) {
+    throw 'Offline hosting preview lost its typed links or overstated coverage.'
+}
+Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs } 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
+$projectionArgs.Relationships=@($edges[0],$edges[0],$edges[1])
+Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs -OfflineHostingPreview } 'SCOM_WINDOWS_OS_PARENT_AMBIGUOUS'
+$projectionArgs.Relationships=$edges
+$mapping.verified=$false
+Assert-ProjectionFault { ConvertTo-SCOMWindowsInventory @projectionArgs -OfflineHostingPreview } 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
+$mapping.verified=$true
+$mapping.agentMonitoringVerified=$true
 $os.Values['Caption']='Microsoft Windows Server 2022 Datacenter'
 $os.Values['Version']='10.0.20348'
 $mapping | Add-Member -NotePropertyName osCaptionProperty -NotePropertyValue 'Caption'
@@ -280,6 +297,31 @@ if ($BridgeMode -in @('managementServer','unknownRole')) {
         $script:Rows+=@($roleObject)
         if ($mode -eq 'managementServer') { $script:Edges+=@($roleEdge) }
     } $roleObject $roleEdge $BridgeMode
+}
+if ($BridgeMode -in @('lab','labMissingDisk')) {
+    $mapping | Add-Member -NotePropertyName computerClassName -NotePropertyValue $projectionArgs.ComputerClass.Name
+    $mapping | Add-Member -NotePropertyName operatingSystemClassName -NotePropertyValue $projectionArgs.OperatingSystemClass.Name
+    $mapping | Add-Member -NotePropertyName volumeClassName -NotePropertyValue $projectionArgs.VolumeClass.Name
+    $mapping.agentMonitoringVerified=$false
+    $scanArgs.Remove('GroupId')
+    $scanArgs.ScopeKind='managementGroup'
+    $scanArgs.InventoryKind='supportedWindows'
+    $scanArgs.WholeManagementGroupApproved=$true
+    $scanArgs.EnumerationQueryContractVerified=$true
+    $scanArgs.AdditionalRelationshipContractVerified=$false
+    $scanArgs.HostingLabPreview=$true
+    $scanArgs.ReadActiveAlerts={ throw 'Unexpected lab alert read' }
+    & $module {
+        param($root, $missingDisk)
+        $script:Rows=@($script:Rows | Where-Object Id -NE $root.Id)
+        if ($missingDisk) { $script:Edges=@($script:Edges[0]) }
+        function script:Read-SCOMWindowsManagementGroupScope {
+            [pscustomobject]@{ExpectedObjectIds=@($script:Rows.Id); MembershipObjects=$script:Rows}
+        }
+    } $root ($BridgeMode -eq 'labMissingDisk')
+    $scan=Get-SCOMGenericGroupScan @scanArgs
+    [Console]::Out.Write((@{protocolVersion=1;scan=$scan} | ConvertTo-Json -Depth 24 -Compress))
+    return
 }
 $scan=Get-SCOMGenericGroupScan @scanArgs
 $wire=$scan | ConvertTo-Json -Depth 24 | ConvertFrom-Json

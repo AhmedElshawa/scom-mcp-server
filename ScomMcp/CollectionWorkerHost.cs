@@ -74,6 +74,9 @@ public static class CollectionWorkerHost
             settings.Publisher.Validate();
             settings.Identity.Validate();
             settings.LiveChecks.Validate();
+            var hostingLab = SetupConfigurationValidation.HostingLabPreviewEnabled(settings.Profile.Configuration);
+            if (hostingLab && (!once || settings.LiveChecks.Enabled))
+                throw new InvalidOperationException("Hosting lab preview requires worker-once with live checks disabled.");
             if (once && settings.LiveChecks.Enabled)
                 throw new InvalidOperationException("Live checks require the explicitly enabled long-running worker, not worker-once.");
             var profile = new PowerShellNormalizationProfile(settings.Profile);
@@ -85,6 +88,8 @@ public static class CollectionWorkerHost
                 settings.Publisher.Endpoint, settings.Identity.TenantId, settings.Identity.ClientId,
                 settings.Identity.Resource
             }))));
+            if (hostingLab && File.Exists(settings.CheckpointPath))
+                throw new InvalidOperationException("Hosting lab preview requires a new checkpoint.");
             using var checkpoint = new SourceCheckpointStore(settings.CheckpointPath, policy, settings.MaxCheckpointBytes);
             using var identity = new CertificatePublisherToken(settings.Identity);
             using var publisher = new IngestionPublisher(settings.Publisher, identity.AcquireAsync);
@@ -92,6 +97,13 @@ public static class CollectionWorkerHost
             var worker = new CollectionWorker(source, publisher);
             if (once)
             {
+                if (hostingLab)
+                {
+                    using var attempt = new FileStream(settings.CheckpointPath + ".hosting-preview-attempt",
+                        FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    attempt.WriteByte(1);
+                    attempt.Flush(flushToDisk: true);
+                }
                 var start = Stopwatch.GetTimestamp();
                 var outcome = await worker.RunOnceAsync(workerCancellationToken);
                 OperationalLog.Write(logger, OperationalEvent.CollectionCompleted,

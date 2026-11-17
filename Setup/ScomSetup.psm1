@@ -159,16 +159,24 @@ function Invoke-ScomSetupWorkerPublication {
     if ($CallerName -ne $Plan.workerAccount) { throw 'SETUP_EXACT_WORKER_ACCOUNT_REQUIRED_NO_IMPERSONATION' }
     Assert-ScomSetupInstalledFiles $Plan
     & $Validate $Plan | Out-Null
-    if (-not (& $Approve "ONE bounded collection/publication/checkpoint attempt for $(Get-ScomSetupScopeDescription $Plan), as $($Plan.workerAccount), to $($Plan.httpsBaseUrl). Uses reviewed worker deadlines. No recurrence, metrics or live checks. Existing pending dataset can resume under the same policy.")) {
+    $worker = Join-Path $Plan.privatePath 'worker.json'
+    $approvedWorkerHash = Get-ScomSetupHash $worker
+    $workerConfig = Read-ScomSetupJson $worker
+    $previewWarning = if ($workerConfig.PSObject.Properties['profile'] -and
+        $workerConfig.profile.configuration.PSObject.Properties['hostingLabPreview'] -and
+        $workerConfig.profile.configuration.hostingLabPreview -eq $true) {
+        ' LAB PREVIEW ONLY: typed OS/disk queries may burden SCOM/SQL. Coverage is always incomplete; no monitoring roles or alerts. Use only an isolated lab backend with a separately approved maintenance window.'
+    } else { '' }
+    if (-not (& $Approve "ONE collection/publication/checkpoint attempt for $(Get-ScomSetupScopeDescription $Plan), as $($Plan.workerAccount), to $($Plan.httpsBaseUrl). Worker deadlines apply locally; a timeout does not guarantee that SCOM/SQL stops. This prompt does not waive source evidence requirements. No recurrence, metrics or live checks. Existing pending dataset can resume under the same policy.$previewWarning")) {
         throw 'SETUP_CANCELLED_NO_ACTION'
     }
     $lease = [IO.File]::Open((Join-Path $Plan.workerStatePath 'setup-worker.lock'), 'OpenOrCreate','ReadWrite','None')
     try {
         $receipt = Join-Path $Plan.workerStatePath 'setup-publication.json'
         if (Test-Path -LiteralPath $receipt) { throw 'SETUP_EXISTING_RECEIPT_REVIEW_REQUIRED_NO_IMPLICIT_RERUN' }
-        $worker = Join-Path $Plan.privatePath 'worker.json'
         $receiver = Join-Path $Plan.installPath 'server\appsettings.json'
         $workerHash = Get-ScomSetupHash $worker
+        if ($workerHash -cne $approvedWorkerHash) { throw 'SETUP_APPROVED_WORKER_CONFIG_CHANGED' }
         $receiverHash = Get-ScomSetupHash $receiver
         # Journal before invocation: a crash after commit must not cause an
         # automatic source read/publication when setup resumes.
@@ -284,6 +292,14 @@ function Invoke-ScomSetupTransition {
             throw 'SETUP_CONFIGURATION_CHANGED_REVIEW_REQUIRED'
         }
         & $Adapters.Validate $Plan | Out-Null
+        if ($Action -eq 'Accept') {
+            $receiverConfig = Read-ScomSetupJson (Join-Path $Plan.installPath 'server\appsettings.json')
+            if ($receiverConfig.PSObject.Properties['ReadModel'] -and
+                $receiverConfig.ReadModel.PSObject.Properties['OfflineHostingPreview'] -and
+                $receiverConfig.ReadModel.OfflineHostingPreview -eq $true) {
+                throw 'SETUP_HOSTING_LAB_PREVIEW_IS_NOT_ACCEPTANCE'
+            }
+        }
     }
     $summaries = @{
         Prepare="Create ONLY new installation $($Plan.installPath), private config $($Plan.privatePath), receiver state $($Plan.receiverStatePath), worker state $($Plan.workerStatePath), MCP logs $($Plan.mcpLogPath) and collector logs $($Plan.collectorLogPath). Copy reviewed package; restrict ACLs. No IIS startup/source queries."

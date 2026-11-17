@@ -78,6 +78,20 @@ static class SetupConfigurationChecks
         Reject(() => worker["profile"]!["configuration"]!["groupId"] = "");
         Reject(() => worker["profile"]!["configuration"]!["wholeManagementGroupApproved"] = false);
         Reject(() => receiver["ReadModel"]!["WindowsToolsEnabled"] = false);
+        Reject(() => receiver["ReadModel"]!["OfflineHostingPreview"] = true);
+        Reject(() => worker["profile"]!["configuration"]!["hostingLabPreview"] = true);
+        receiver["ReadModel"]!["OfflineHostingPreview"] = true;
+        var profile = worker["profile"]!["configuration"]!;
+        profile["hostingLabPreview"] = true;
+        profile["additionalRelationshipNames"] = new JsonArray("Microsoft.Windows.ComputerHostsOperatingSystem",
+            "Microsoft.Windows.OperatingSystemHostsLogicalDisk");
+        Save();
+        Check(SetupConfigurationValidation.Validate(directory, workerPath));
+        Reject(() => worker["profile"]!["configuration"]!["additionalRelationshipContractVerified"] = true);
+        Reject(() => worker["profile"]!["configuration"]!["additionalRelationshipNames"]![1] = "Synthetic.Unrelated");
+        worker["profile"]!["configuration"]!["enumerationQueryContractVerified"] = false;
+        Save();
+        Check(!SetupConfigurationValidation.Validate(directory, workerPath));
         receiver = groupReceiver;
         worker = groupWorker;
         Save();

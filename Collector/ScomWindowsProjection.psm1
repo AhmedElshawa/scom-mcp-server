@@ -35,7 +35,8 @@ function ConvertTo-SCOMWindowsInventory {
         [Parameter(Mandatory)] [object]$Mapping,
         [hashtable]$AllowedPropertiesByClass = @{},
         [object]$AgentClass = $null,
-        [object]$ManagementServerClass = $null
+        [object]$ManagementServerClass = $null,
+        [switch]$OfflineHostingPreview
     )
 
     $captionProperty=$null
@@ -53,7 +54,12 @@ function ConvertTo-SCOMWindowsInventory {
     if ($Mapping.verified -isnot [bool] -or -not $Mapping.verified) {
         throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
     }
-    if ($null -eq $roleMapping) {
+    if ($OfflineHostingPreview) {
+        if ($null -ne $roleMapping -or $null -ne $AgentClass -or $null -ne $ManagementServerClass) {
+            throw 'SCOM_WINDOWS_OFFLINE_PREVIEW_ROLE_CONFIGURATION'
+        }
+    }
+    elseif ($null -eq $roleMapping) {
         if ($Mapping.agentMonitoringVerified -isnot [bool] -or -not $Mapping.agentMonitoringVerified) {
             throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
         }
@@ -178,7 +184,10 @@ function ConvertTo-SCOMWindowsInventory {
             $hostname -match '\s|\*') { throw 'SCOM_WINDOWS_HOSTNAME_INVALID' }
         $osVersion=$null; $osCaption=$null; $memory=$null; $processors=$null
         $monitoringMode='agent'
-        if ($null -ne $roleMapping) {
+        if ($OfflineHostingPreview) {
+            $monitoringMode='unknown'
+        }
+        elseif ($null -ne $roleMapping) {
             $monitoringMode='unknown'
             if ($computerRoles.ContainsKey($id)) { $monitoringMode=$computerRoles[$id] }
             else { $partial=$true }
@@ -242,7 +251,16 @@ function ConvertTo-SCOMWindowsInventory {
             $partial=$true
         }
     }
-    [pscustomobject]@{ Inventory=@{devices=$devices.ToArray();volumes=$volumes.ToArray()}; Complete=(-not $partial) }
+    $result = @{
+        Inventory=@{devices=$devices.ToArray();volumes=$volumes.ToArray()}
+        Complete=(-not $partial -and -not $OfflineHostingPreview)
+    }
+    if ($OfflineHostingPreview) {
+        $result.PreviewOnly=$true
+        $result.SourceWorkBoundVerified=$false
+        $result.Reason='SCOM_OFFLINE_HOSTING_PREVIEW_SOURCE_UNVERIFIED'
+    }
+    [pscustomobject]$result
 }
 
 Export-ModuleMember -Function ConvertTo-SCOMWindowsInventory

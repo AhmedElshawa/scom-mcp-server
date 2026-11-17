@@ -265,7 +265,17 @@ try {
     $sourceRun={ param($p) $script:sourceRuns++; [pscustomobject]@{exitCode=0;published=$true} }
     Reject { Invoke-ScomSetupWorkerPublication $f.plan 'SYNTHETIC\administrator' {} $sourceRun -Approve {$true} } 'SETUP_EXACT_WORKER_ACCOUNT'
     Reject { Invoke-ScomSetupWorkerPublication $f.plan $f.plan.workerAccount {throw 'SYNTHETIC_DISABLED_GUARD'} $sourceRun -Approve {$true} } 'SYNTHETIC_DISABLED_GUARD'
-    Reject { Invoke-ScomSetupWorkerPublication $f.plan $f.plan.workerAccount {} $sourceRun -Approve {$false} } 'SETUP_CANCELLED_NO_ACTION'
+    $script:publicationPrompt=$null
+    Reject {
+        Invoke-ScomSetupWorkerPublication $f.plan $f.plan.workerAccount {} $sourceRun -Approve {
+            param($summary)
+            $script:publicationPrompt=$summary
+            $false
+        }
+    } 'SETUP_CANCELLED_NO_ACTION'
+    Check ($script:publicationPrompt -match 'deadlines apply locally' -and
+        $script:publicationPrompt -match 'does not guarantee that SCOM/SQL stops' -and
+        $script:publicationPrompt -notmatch 'bounded collection')
     Check ($script:sourceRuns -eq 0 -and -not (Test-Path -LiteralPath (Join-Path $f.plan.workerStatePath 'setup-publication-attempt.json')))
     Invoke-ScomSetupWorkerPublication $f.plan $f.plan.workerAccount {} $sourceRun -Approve {$true}
     Check ($script:sourceRuns -eq 1 -and (Read-ScomSetupJson (Join-Path $f.plan.workerStatePath 'setup-publication.json')).event -eq 'SCOM_WORKER_PUBLISHED')
