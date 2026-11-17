@@ -1,5 +1,9 @@
 # Guided, resumable setup (evaluation installer)
 
+Example paths, account names and commands in this guide are illustrative, not
+verified deployment inputs. Replace them with values reviewed for the actual
+environment before use; preserve existing private state and approval gates.
+
 ## Double-click quickstart
 
 Download the reviewed CI evaluation artifact. Verify the SHA-256 of the **inner
@@ -500,56 +504,36 @@ of entering fields; it does not skip approval.
 ### Recovery: local TLS certificate discovery reports missing `Value`
 
 In Windows PowerShell 5.1 the certificate provider's
-`EnhancedKeyUsageRepresentation.ObjectId` is a **string**, not an OID object
-with a `.Value` member. The original `a5105db5` catalog filter could therefore
-throw `PropertyNotFoundStrict` at `ScomSetup.Windows.psm1:96` when examining a
-certificate with an EKU. The local repair compares that string directly to the
-Server Authentication OID `1.3.6.1.5.5.7.3.1`. It still requires a private key,
-current validity and that exact EKU; a signing-only certificate is not eligible.
-This fix does not require replacing or modifying any customer certificate.
+`EnhancedKeyUsageRepresentation.ObjectId` can be a **string**, not an OID object
+with a `.Value` member. Older catalog filters can therefore throw
+`PropertyNotFoundStrict` while examining a certificate with an EKU. A corrected
+filter compares the string to the Server Authentication OID
+`1.3.6.1.5.5.7.3.1`. Discovery still requires a private key, current validity
+and that exact EKU; a signing-only certificate is not eligible. The fix does
+not require replacing or modifying a certificate.
 
-The local-only `ScomSetup-Windows-EKU-fix.zip` contains exactly one file,
-`ScomSetup.Windows.psm1`, with no changed dependencies. These hashes apply only
-to this repair and baseline:
+1. Inspect the failure; let any active operation finish before closing the GUI.
+   Preserve the current package, private journal, identity, configuration and
+   certificates; do not reinitialize state or provision replacement identities.
+2. Obtain a reviewed complete package containing the corrected
+   `setup\ScomSetup.Windows.psm1`. Verify the archive against the hash obtained
+   independently for that exact artifact and follow the organization's software
+   approval process. Do not substitute individual files into a manifest-verified
+   package or change policy or trust markers to force execution.
+3. Extract the verified package to a new approved directory. Its actual path is
+   deployment-specific, not a required example path. Before resuming an existing
+   deployment, inspect the journal and package-drift requirements; stop if an
+   action is pending or the package does not match the recorded plan. Do not
+   clear pending state or override drift checks.
+4. With approval, reopen the corrected GUI and retry the local certificate
+   catalog. For a read-only retry in an existing PowerShell process, reload the
+   exact corrected package module before invoking `Get-ScomSetupLocalCatalog`;
+   cached module code can outlive a package change. A newly launched GUI uses a
+   fresh bridge process. Do not install or activate anything during the check.
 
-| File | SHA256 |
-|---|---|
-| Repair ZIP | `33E1296A1732DC61E5856DFB8859469EC9B38F299637824E70EA4850438A1F06` |
-| Fixed module | `ECDF109CAC300994C4DC160DDC566CECB3BD2892BAF390B84CD5C4F2F7F4E288` |
-| Original CI package module (CRLF) | `E71E675FE8F602DA2DCBC0673299FB2CD3F48B52932E68B0047FBE230340CD48` |
-| Original Git module at `a5105db500b68cd7f283fd1cc7c8495c97896da0` (LF) | `D50671CDE73FEE38ADE86F26E27CC9C452873992098E1008E7DD8293B89354CE` |
-
-Close the setup GUI and any active setup operation before customer-approved
-replacement. Use the actual downloaded ZIP path (attachments may prefix `0-`),
-check `Test-Path -LiteralPath ... -PathType Leaf` before hashing, then require
-the ZIP hash above. Follow only the already-approved archive handling procedure;
-do not bypass policy or recursively unblock files. Extract to a new staging
-directory, verify exactly the one named module and its fixed hash, and stop on
-any discrepancy.
-
-In the existing
-`C:\9\evaluation-a5105db500b68cd7f283fd1cc7c8495c97896da0\reviewed-a5105db5\ci-evaluation`
-package, require `setup\ScomSetup.Windows.psm1` to match one of the two original
-hashes above. Make a uniquely named backup of that file, verify the backup hash,
-replace **only** that module, and verify its fixed hash before restarting
-`ScomSetup.exe` normally. On replacement verification failure stop and restore
-the verified backup. Preserve the earlier `ScomEntra.psm1` repair, all private
-state, identity JSON and certificates; do not rerun initialization or Entra
-provisioning. The package's original manifest is intentionally unchanged and
-will no longer attest the replaced module; retain the backup and repair
-checksums as the explicit local exception, not as a newly CI-built package.
-
-For a read-only catalog retry in an already-open PowerShell process, force-reload
-the exact package module before calling `Get-ScomSetupLocalCatalog`; cached
-module code can outlive a file replacement. A newly launched GUI uses a fresh
-bridge process. Do not select/install anything automatically during this check.
-
-Local validation confirmed the Windows PowerShell 5.1 provider property type,
-and 46 synthetic Windows checks passed, covering provider-shaped server-auth
-EKU, unsupported/no EKU, missing private key, expired and not-yet-valid
-certificates. Windows PowerShell 5.1 suite execution on the development host
-remains blocked by its unsigned-script policy; no bypass was used. Customer
-catalog/GUI recovery with this repair is **not yet verified**.
+These steps do not establish that the actual certificate is suitable or that
+the deployment is configured, activated or accepted. Verify those gates
+separately in the target environment.
 
 After prerequisites pass, interactive Prepare requests separate approval for
 read-only group discovery using the console identity. It checks the selected
