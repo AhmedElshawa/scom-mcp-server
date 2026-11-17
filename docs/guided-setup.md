@@ -25,6 +25,9 @@ Server Core uses the separate console lane below.
 The wizard opens directly to automatic **read-only prerequisite checks**, without
 host changes or SCOM connections. Each completed check is shown in green for PASS
 or red for BLOCKED, with a remedy. Unknown or failed checks are never marked green.
+The Step 1 summary distinguishes checks not yet run, checks in progress,
+returned passing or blocked results, and missing results. Passing prerequisites
+does not approve installation; script signing and Windows policy remain enforced.
 Use **Back / Next** for the sequential screens. Normal setup asks for a log folder
 (separate MCP/collector subfolders), safe IIS placement, the approved execution
 account and SCOM server/scope. Installation/private/state paths and a new dedicated

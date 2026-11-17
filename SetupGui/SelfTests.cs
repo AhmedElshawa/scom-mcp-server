@@ -268,6 +268,7 @@ internal static class SelfTests
         using var form = new WizardForm(AppContext.BaseDirectory, bridge);
         _ = form.Handle;
         Require(bridge.Requests.Count == 0 && form.CurrentPage == 0 && !form.CanInstall && form.CanMoveNext);
+        Require(form.PrerequisiteStatusText == "Checking has not run yet. Script signing and Windows policy remain enforced.");
         form.MovePage(1);
         Require(form.CurrentPage == 1);
         form.MovePage(-1);
@@ -279,6 +280,8 @@ internal static class SelfTests
         Require(bridge.Requests.Count == 1 && bridge.Requests[0].Action == "Bootstrap" &&
             bridge.Requests[0].Approval is null);
         Require(form.CheckColors.SequenceEqual(new[] { Color.DarkGreen, Color.Firebrick }) && !form.CanInstall);
+        Require(form.PrerequisiteStatusText.Contains("results received: setup remains blocked.") &&
+            !form.PrerequisiteStatusText.Contains("not run yet"));
         Complete(form.RunActionAsync("Prepare"));
         Require(bridge.Requests.Count == 1);
         form.SetField("workerAccount", @"DOMAIN\edited");
@@ -286,8 +289,21 @@ internal static class SelfTests
         form.RenderResponse(new BridgeResponse { Ok = true, Defaults = defaults, Checks = [] }, "Bootstrap");
         Require(!form.CanInstall && form.CheckColors.Length == 0 &&
             form.ReadPlan().WorkerAccount == @"DOMAIN\edited");
+        Require(form.PrerequisiteStatusText.Contains("NOT CHECKED: no prerequisite results were received.") &&
+            form.PrerequisiteStatusText.Contains("Setup remains blocked"));
         form.RenderResponse(new BridgeResponse { Ok = true, Checks = [new BridgeCheck { Name = "Actual probe", Passed = true }] }, "Bootstrap");
         Require(form.CanInstall && form.CanMoveNext);
+        Require(form.PrerequisiteStatusText.Contains("all checks passed. Installation still requires separate approval.") &&
+            form.PrerequisiteStatusText.EndsWith("Script signing and Windows policy remain enforced."));
+        form.RenderResponse(new BridgeResponse { Ok = false, Checks = [new BridgeCheck { Passed = true }] }, "Preflight");
+        Require(!form.CanInstall && form.PrerequisiteStatusText.Contains("setup remains blocked."));
+        bridge.Next = () =>
+        {
+            Require(!form.CanInstall && form.PrerequisiteStatusText.Contains("results are not yet available."));
+            return Task.FromResult(new BridgeResponse { Ok = true, Checks = [new BridgeCheck { Passed = true }] });
+        };
+        Complete(form.RunActionAsync("Bootstrap"));
+        Require(form.CanInstall && form.PrerequisiteStatusText.Contains("all checks passed."));
         const string discoveredManagementGroup = "44444444-4444-4444-8444-444444444444";
         form.RenderResponse(new BridgeResponse { Ok = true, ManagementGroupId = discoveredManagementGroup,
             Groups = [new GroupItem { Id = "55555555-5555-4555-8555-555555555555", DisplayName = "Approved group" }] }, "Discover");
@@ -318,7 +334,9 @@ internal static class SelfTests
             form.ReadPlan().WorkerAccount == @"DOMAIN\resumed");
         bridge.Next = () => throw new InvalidOperationException("Simulated policy failure");
         Complete(form.RunActionAsync("Bootstrap"));
-        Require(!form.CanInstall);
+        Require(!form.CanInstall && form.PrerequisiteStatusText.Contains("NOT CHECKED") &&
+            !form.PrerequisiteStatusText.Contains("all checks passed") &&
+            form.PrerequisiteStatusText.EndsWith("Script signing and Windows policy remain enforced."));
 
         using var defaultsForm = new WizardForm(AppContext.BaseDirectory, new NoCallsBridge());
         defaultsForm.SetField("workerAccount", @"DOMAIN\keep-edited");

@@ -15,6 +15,7 @@ internal sealed class WizardForm : Form
     internal bool CanManageWorkerTask => !busy && !workerPlanMode.Checked && acceptedTaskJournal is not null &&
         acceptedTaskJournal == fields["stateDirectory"].Text.Trim();
     internal string StatusText => status.Text;
+    internal string PrerequisiteStatusText => prerequisiteStatus.Text;
     internal string ConfigurationInputText => configurationInputs.Text;
     internal Func<string, bool> DiagnosticWriter { get; set; }
     private readonly Panel pages = new() { Dock = DockStyle.Fill };
@@ -22,6 +23,9 @@ internal sealed class WizardForm : Form
     private readonly List<string> pageTitles = [];
     private readonly Label heading = new() { AutoSize = true, Font = new Font(SystemFonts.DefaultFont.FontFamily, 17, FontStyle.Bold) };
     private readonly FlowLayoutPanel checkResults = new() { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+    private const string PolicyNotice = " Script signing and Windows policy remain enforced.";
+    private readonly Label prerequisiteStatus = new() { AutoSize = true, MaximumSize = new Size(800, 0),
+        Text = "Checking has not run yet." + PolicyNotice };
     private readonly ComboBox sites = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 700 };
     private readonly ComboBox certificates = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 700 };
     private readonly Label workerIdentity = new() { AutoSize = true, MaximumSize = new Size(800, 0) };
@@ -123,7 +127,7 @@ internal sealed class WizardForm : Form
         Note(welcome, "Setup checks this computer automatically. Green means a check actually passed; red items need attention. " +
             "This read-only check does not connect to SCOM, install software or request elevation.");
         welcome.Controls.Add(checkResults);
-        Note(welcome, "Checking has not run yet. Script signing and Windows policy remain enforced.");
+        welcome.Controls.Add(prerequisiteStatus);
         ActionButton(welcome, "Check again", "Bootstrap");
 
         var logs = Page("Choose log folder");
@@ -730,6 +734,7 @@ internal sealed class WizardForm : Form
         {
             actualChecksReceived = false;
             prerequisitesPassed = false;
+            prerequisiteStatus.Text = "Checking local prerequisites; results are not yet available." + PolicyNotice;
             checkResults.Controls.Clear();
             checkResults.Controls.Add(new Label { Text = "Checking local prerequisites…", AutoSize = true });
         }
@@ -885,6 +890,11 @@ internal sealed class WizardForm : Form
         var checks = response.Checks ?? [];
         actualChecksReceived = checks.Length > 0;
         prerequisitesPassed = response.Ok && actualChecksReceived && checks.All(check => check.Passed) && !response.ApprovalRequired;
+        prerequisiteStatus.Text = (prerequisitesPassed
+            ? "Prerequisite results received: all checks passed. Installation still requires separate approval."
+            : actualChecksReceived
+                ? "Prerequisite results received: setup remains blocked. Review the checks and diagnostic status."
+                : "NOT CHECKED: no prerequisite results were received. Setup remains blocked; review the diagnostic status.") + PolicyNotice;
         if (checks.Length == 0)
             checkResults.Controls.Add(new Label { Text = "NOT CHECKED — no prerequisite results were received. Review the specific diagnostic code below; the cause is not yet established.",
                 ForeColor = Color.Firebrick, AutoSize = true, MaximumSize = new Size(800, 0) });
