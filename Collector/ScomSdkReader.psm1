@@ -601,4 +601,9 @@ function Read-SCOMDirectGroupMembers {
     }
 }
 
-Export-ModuleMember -Function Read-SCOMObjectIdPages, Read-SCOMReaderPages, Read-SCOMManagementGroupScope, Read-SCOMWindowsManagementGroupScope, Resolve-SCOMApprovedGroupMembership, Read-SCOMDirectRelationshipRows, ConvertTo-SCOMObservedObject, ConvertTo-SCOMObservedAlert, Read-SCOMDirectGroupMembers
+function New-SCOMExactPropertyPolicy {
+    param([hashtable]$AllowedPropertiesByClass)
+    return [hashtable]::new($AllowedPropertiesByClass, [StringComparer]::Ordinal)
+}
+
+Export-ModuleMember -Function Read-SCOMObjectIdPages, Read-SCOMReaderPages, Read-SCOMManagementGroupScope, Read-SCOMWindowsManagementGroupScope, Resolve-SCOMApprovedGroupMembership, Read-SCOMDirectRelationshipRows, ConvertTo-SCOMObservedObject, ConvertTo-SCOMObservedAlert, Read-SCOMDirectGroupMembers, New-SCOMExactPropertyPolicy

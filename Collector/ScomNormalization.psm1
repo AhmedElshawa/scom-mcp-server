@@ -158,13 +158,14 @@ function Get-SCOMGenericScan {
     $metricSamples = 0
     $metricComplete = ($MetricMappingsByClass.Count -gt 0)
     $assessedMetricObjects = 0
+    $exactPropertyPolicy = New-SCOMExactPropertyPolicy $AllowedPropertiesByClass
     foreach ($object in $discovery.Objects) {
         if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_PROFILE_DEADLINE' }
         $classes = @($object.GetMostDerivedClasses())
         if ($classes.Count -ne 1) { throw 'SCOM_NORMALIZATION_CLASS_AMBIGUOUS' }
         $allowed = @()
-        if ($AllowedPropertiesByClass.ContainsKey([string]$classes[0].Name)) {
-            $allowed = @($AllowedPropertiesByClass[[string]$classes[0].Name])
+        if ($exactPropertyPolicy.ContainsKey([string]$classes[0].Name)) {
+            $allowed = @($exactPropertyPolicy[[string]$classes[0].Name])
         }
         $at = [DateTimeOffset]::UtcNow
         $objects.Add((ConvertTo-SCOMObservedObject -Object $object -ObservedAtUtc $at -AllowedProperties $allowed))

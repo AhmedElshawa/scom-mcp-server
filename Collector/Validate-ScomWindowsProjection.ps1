@@ -7,8 +7,11 @@ using System;
 using System.Collections.Generic;
 public class ProjectionClass {
     public string Name;
-    public ProjectionClass(string name) { Name=name; }
-    public IList<ProjectionClass> GetBaseTypes() { return new ProjectionClass[0]; }
+    public string BaseName;
+    public ProjectionClass(string name, string baseName=null) { Name=name; BaseName=baseName; }
+    public IList<ProjectionClass> GetBaseTypes() {
+        return String.IsNullOrEmpty(BaseName) ? new ProjectionClass[0] : new [] {new ProjectionClass(BaseName)};
+    }
 }
 public class ProjectionProperty { public string Name; }
 public class ProjectionValue { public object Value; }
@@ -17,9 +20,10 @@ public class ProjectionObject {
     public string DisplayName="Synthetic";
     public string HealthState="Success";
     public string Kind;
+    public string BaseKind;
     public Dictionary<string,object> Values=new Dictionary<string,object>();
-    public bool IsInstanceOf(ProjectionClass c) { return Kind==c.Name; }
-    public IList<ProjectionClass> GetMostDerivedClasses() { return new [] {new ProjectionClass(Kind)}; }
+    public bool IsInstanceOf(ProjectionClass c) { return Kind==c.Name || BaseKind==c.Name; }
+    public IList<ProjectionClass> GetMostDerivedClasses() { return new [] {new ProjectionClass(Kind,BaseKind)}; }
     public IList<ProjectionProperty> GetProperties() {
         var p=new List<ProjectionProperty>();
         foreach (var name in Values.Keys) p.Add(new ProjectionProperty {Name=name});
@@ -271,6 +275,39 @@ $scanArgs=@{
     AdditionalRelationshipClasses=@([pscustomobject]@{Name=$mapping.computerHostsOsRelationship},
         [pscustomobject]@{Name=$mapping.osHostsVolumeRelationship})
 }
+if ($BridgeMode -eq '') {
+    $os.BaseKind=$os.Kind; $os.Kind='Synthetic.ConcreteOs'
+    $volume.BaseKind=$volume.Kind; $volume.Kind='Synthetic.ConcreteVolume'
+    $root.Values['Caption']='Unrelated caption'
+    $scanArgs.AllowedPropertiesByClass=@{
+        'Synthetic.Os'=@('Caption','Version')
+        'synthetic.concreteos'=@('Caption','Version')
+        'Synthetic.Volume'=@('Size')
+    }
+    Assert-ProjectionFault { Get-SCOMGenericGroupScan @scanArgs } 'SCOM_WINDOWS_CAPTION_PROPERTY_NOT_APPROVED'
+    $mapping.PSObject.Properties.Remove('osCaptionProperty')
+    $derived=Get-SCOMGenericGroupScan @scanArgs
+    if (-not $derived.inventory.complete -or @($derived.objects | Where-Object { $_.properties.Count -ne 0 }).Count -ne 0 -or
+        $derived.windowsInventory.devices[0].osVersion -cne $os.Values['Version'] -or
+        $derived.windowsInventory.devices[0].memoryTotalMiB -ne 8192 -or
+        $derived.windowsInventory.volumes[0].sizeMiB -ne 10240 -or
+        $derived.windowsInventory.volumes[0].parentEntityId -ne $computer.Id.ToString('D')) {
+        throw 'Subclass allowlist must not strip mapped Windows fields or disclose unapproved generic fields.'
+    }
+    $mapping | Add-Member -NotePropertyName osCaptionProperty -NotePropertyValue 'Caption'
+    $scanArgs.AllowedPropertiesByClass=@{'Synthetic.ConcreteOs'=@('Caption')}
+    $derived=Get-SCOMGenericGroupScan @scanArgs
+    $observedOs=@($derived.objects | Where-Object className -CEQ $os.Kind)[0]
+    if ($observedOs.properties.Count -ne 1 -or $observedOs.properties['Caption'] -cne $os.Values['Caption'] -or
+        'Synthetic.Os' -cnotin $observedOs.baseClasses -or
+        $derived.windowsInventory.devices[0].osCaption -cne $os.Values['Caption'] -or
+        @($derived.objects | Where-Object { $_.className -cne $os.Kind -and $_.properties.Count -ne 0 }).Count -ne 0) {
+        throw 'Approved inherited caption or exact concrete-class disclosure was not preserved.'
+    }
+    $os.Kind=$os.BaseKind; $os.BaseKind=$null
+    $volume.Kind=$volume.BaseKind; $volume.BaseKind=$null
+    $scanArgs.AllowedPropertiesByClass=$projectionArgs.AllowedPropertiesByClass
+}
 if ($BridgeMode -eq 'legacy') {
     $mapping.PSObject.Properties.Remove('osCaptionProperty')
     $scanArgs.AllowedPropertiesByClass=@{}
@@ -299,6 +336,15 @@ if ($BridgeMode -in @('managementServer','unknownRole')) {
     } $roleObject $roleEdge $BridgeMode
 }
 if ($BridgeMode -in @('lab','labMissingDisk')) {
+    $os.BaseKind=$os.Kind; $os.Kind='Synthetic.ConcreteOs'
+    $volume.BaseKind=$volume.Kind; $volume.Kind='Synthetic.ConcreteVolume'
+    if ($BridgeMode -eq 'lab') {
+        $scanArgs.AllowedPropertiesByClass=@{'Synthetic.ConcreteOs'=@('Caption')}
+    }
+    else {
+        $mapping.PSObject.Properties.Remove('osCaptionProperty')
+        $scanArgs.AllowedPropertiesByClass=@{'Synthetic.Os'=@('Caption','Version')}
+    }
     $mapping | Add-Member -NotePropertyName computerClassName -NotePropertyValue $projectionArgs.ComputerClass.Name
     $mapping | Add-Member -NotePropertyName operatingSystemClassName -NotePropertyValue $projectionArgs.OperatingSystemClass.Name
     $mapping | Add-Member -NotePropertyName volumeClassName -NotePropertyValue $projectionArgs.VolumeClass.Name

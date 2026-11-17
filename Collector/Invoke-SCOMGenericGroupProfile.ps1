@@ -106,7 +106,7 @@ try {
         $scopeParameters.WholeManagementGroupApproved=$config.wholeManagementGroupApproved
         $scopeParameters.EnumerationQueryContractVerified=$config.enumerationQueryContractVerified
     }
-    $allowed = @{}
+    $allowed = [hashtable]::new([StringComparer]::Ordinal)
     foreach ($property in $config.allowedPropertiesByClass.PSObject.Properties) {
         $allowed[$property.Name] = @($property.Value)
     }

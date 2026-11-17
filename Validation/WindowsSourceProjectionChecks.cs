@@ -34,14 +34,19 @@ static class WindowsSourceProjectionChecks
                     Enabled = true, WindowsToolsEnabled = true, OfflineHostingPreview = true,
                     DatabasePath = Path.Combine(root, $"windows-source-{mode}.db"),
                     ManagementGroupId = scan.ManagementGroupId, ScopeKind = "managementGroup", PublisherObjectIds = [Publisher],
-                    AllowedPropertiesByClass = new() { ["Synthetic.Os"] = ["Caption"] },
+                    AllowedPropertiesByClass = mode == "lab" ? new() { ["Synthetic.ConcreteOs"] = ["Caption"] } :
+                        new() { ["Synthetic.Os"] = ["Caption", "Version"] },
                     WindowsMetricHosting = new()
                     {
                         ComputerClass = "Synthetic.Computer", OperatingSystemClass = "Synthetic.Os",
                         RelationshipClass = "Synthetic.ComputerHostsOs"
                     },
-                    WindowsOsCaptionProperty = "Caption"
+                    WindowsOsCaptionProperty = mode == "lab" ? "Caption" : null
                 };
+                var derivedOs = scan.Objects.Single(o => o.ClassName == "Synthetic.ConcreteOs");
+                Check(derivedOs.BaseClasses.Contains("Synthetic.Os") &&
+                    (mode == "lab" ? derivedOs.Properties.Count == 1 && derivedOs.Properties.ContainsKey("Caption") :
+                        derivedOs.Properties.Count == 0), "only an exact class approval emits the inherited property", ref count);
                 var labSourceSettings = new SourceSettings { SnapshotEnabled = false };
                 var labStore = new ReadModelStore(settingsLab, labSourceSettings, TimeProvider.System);
                 var labSource = new ReconciledCollectionSource(new Profile(scan), new(), TimeProvider.System);
@@ -62,6 +67,7 @@ static class WindowsSourceProjectionChecks
                 var preview = labDataset.Snapshot;
                 var device = preview.Devices.Single();
                 Check(preview.Status == "partial" && device.MonitoringMode == "unknown" && device.OsVersion == "10.0.20348" &&
+                    device.OsCaption == (mode == "lab" ? derivedOs.Properties["Caption"] : null) &&
                     preview.Volumes.Length == (mode == "lab" ? 1 : 0) &&
                     preview.Volumes.All(v => v.ParentEntityId == device.EntityId),
                     "lab preview is partial, attaches supplied OS/disk edges and invents no missing disk parent", ref count);

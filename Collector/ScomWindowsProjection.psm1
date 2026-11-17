@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'ScomSdkReader.psm1') -ErrorAction Stop
 
 function Get-SCOMProjectionProperty {
     param([object]$Object, [string]$Name)
@@ -40,6 +41,7 @@ function ConvertTo-SCOMWindowsInventory {
     )
 
     $captionProperty=$null
+    $exactPropertyPolicy = New-SCOMExactPropertyPolicy $AllowedPropertiesByClass
     if ($null -ne $Mapping.PSObject.Properties['osCaptionProperty'] -and $null -ne $Mapping.osCaptionProperty) {
         $captionProperty=$Mapping.osCaptionProperty
         if ($captionProperty -isnot [string] -or [string]::IsNullOrWhiteSpace($captionProperty) -or
@@ -201,8 +203,8 @@ function ConvertTo-SCOMWindowsInventory {
             if ($null -ne $captionProperty) {
                 $classes=@($os.GetMostDerivedClasses())
                 if ($classes.Count -ne 1 -or
-                    -not $AllowedPropertiesByClass.ContainsKey([string]$classes[0].Name) -or
-                    $captionProperty -cnotin @($AllowedPropertiesByClass[[string]$classes[0].Name])) {
+                    -not $exactPropertyPolicy.ContainsKey([string]$classes[0].Name) -or
+                    $captionProperty -cnotin @($exactPropertyPolicy[[string]$classes[0].Name])) {
                     throw 'SCOM_WINDOWS_CAPTION_PROPERTY_NOT_APPROVED'
                 }
                 $osCaption=Get-SCOMProjectionProperty $os $captionProperty
