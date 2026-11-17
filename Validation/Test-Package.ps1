@@ -11,7 +11,7 @@ if (-not (Test-Path -LiteralPath $root -PathType Container)) {
     throw 'Package directory does not exist.'
 }
 $required = @(
-    'README.md', 'LICENSE', 'package-manifest.json',
+    'README.md', 'LICENSE', 'package-manifest.json', 'docs\easy-indexed-upgrade.md',
     'ScomSetup.exe', 'ScomSetup.dll', 'ScomSetup.runtimeconfig.json', 'ScomSetup.deps.json',
     'coreclr.dll', 'hostfxr.dll', 'System.Windows.Forms.dll',
     'server\ScomMcp.dll', 'server\ScomMcp.deps.json', 'server\ScomMcp.runtimeconfig.json',

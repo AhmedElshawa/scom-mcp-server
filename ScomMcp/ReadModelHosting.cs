@@ -4,6 +4,14 @@ namespace ScomMcp;
 
 public static class ReadModelHosting
 {
+    public static string RejectionReason(string reason) => reason switch
+    {
+        "SESSION_EXPIRED_EMPTY_RESERVATION" or "SESSION_REPLAY_OR_EXPIRED" or
+        "COLLECTION_ALREADY_IN_PROGRESS" or "SESSION_ALREADY_CONSUMED" or
+        "SESSION_LEDGER_LIMIT" or "SESSION_INVALID" => reason,
+        _ => "INGESTION_REJECTED"
+    };
+
     public static bool IsPublisher(ClaimsPrincipal principal, AuthSettings auth, ReadModelSettings settings)
     {
         var ids = principal.FindAll("oid").Select(c => c.Value).ToArray();
@@ -82,7 +90,8 @@ public static class ReadModelHosting
         catch (QueryFault fault)
         {
             context.RequestServices.GetRequiredService<ILogger<ReadModelStore>>().LogWarning(
-                "Ingestion rejected. Code={Code} TraceId={TraceId}", fault.Code, context.TraceIdentifier);
+                "Ingestion rejected. Code={Code} Reason={Reason} TraceId={TraceId}",
+                fault.Code, RejectionReason(fault.Message), context.TraceIdentifier);
             return Results.Json(new { error = fault.Code, reason = fault.Message }, statusCode: 409);
         }
     }

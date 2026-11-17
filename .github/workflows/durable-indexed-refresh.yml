@@ -73,12 +73,14 @@ jobs:
           $null = New-Item -ItemType Directory -Path $suiteRoot
           $output = & $env:TEST_EXECUTABLE -NoProfile -File .\Operations\DurableIndexedRefresh\Run-SyntheticDurableIndexedRefreshTests.ps1 2>&1
           $suiteExitCode = $LASTEXITCODE
+          $guideOutput = & $env:TEST_EXECUTABLE -NoProfile -File .\Validation\Test-UpgradeGuide.ps1 2>&1
+          if ($LASTEXITCODE -ne 0) { $suiteExitCode = 1 }
           $result = [ordered]@{
             testedCommit = git rev-parse HEAD
             engine = $env:TEST_ENGINE
             runtime = & $env:TEST_EXECUTABLE -NoProfile -Command '$PSVersionTable.PSEdition + " " + $PSVersionTable.PSVersion'
             suiteExitCode = $suiteExitCode
-            suiteOutput = @($output | ForEach-Object { [string]$_ })
+            suiteOutput = @(@($output) + @($guideOutput) | ForEach-Object { [string]$_ })
           }
           $result | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $summaryPath -Encoding utf8
           if ($suiteExitCode -ne 0) { throw 'PowerShell task contract tests failed.' }
