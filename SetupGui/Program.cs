@@ -42,6 +42,14 @@ internal static class Program
             Application.Run(new WizardForm(AppContext.BaseDirectory, new SetupBridge(AppContext.BaseDirectory)));
             return 0;
         }
+        catch (Exception) when (args.Length == 2 && args[0] == "--self-test")
+        {
+            File.WriteAllText(Path.GetFullPath(args[1]), JsonSerializer.Serialize(new
+            {
+                ok = false, bridgeCalls = 0, failure = SelfTests.FailureLocation
+            }));
+            return 1;
+        }
         catch
         {
             // Test modes communicate failure via exit status; never dump exception/customer content.

@@ -49,11 +49,13 @@ try {
         Stop-Process -Id $process.Id
         throw 'Native wizard self-tests timed out.'
     }
-    if ($process.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $report)) {
-        throw 'Native wizard self-tests failed.'
-    }
+    if (-not (Test-Path -LiteralPath $report)) { throw 'Native wizard self-test report was not created.' }
     $tests=Get-Content -LiteralPath $report -Raw | ConvertFrom-Json
-    if (-not $tests.ok -or $tests.bridgeCalls -ne 0) { throw 'Native wizard did not pass its no-effect UI/protocol self-tests.' }
+    if ($process.ExitCode -ne 0 -or -not $tests.ok) {
+        $failure = if ($tests.failure -match '^[A-Za-z0-9_]+:\d+$') { $tests.failure } else { 'unknown assertion' }
+        throw "Native wizard self-test failed at $failure; no installation or collection was invoked."
+    }
+    if ($tests.bridgeCalls -ne 0) { throw 'Native wizard self-test invoked the production bridge.' }
     Write-Output 'PASS: packaged native wizard sequential navigation, automatic fake preflight/status colors, defaults/resume, identity handoff arguments and approval/cancellation/failure assertions; no production bridge calls or host/source effects.'
     if ($RunBridgeDiagnostic) {
         Remove-Item -LiteralPath $report

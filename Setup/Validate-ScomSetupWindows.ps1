@@ -6,6 +6,7 @@ $facts = [pscustomobject]@{
     osBuild=20348; productType=3; dotnet=$true; runtimeLines=@('Microsoft.NETCore.App 8.0.0 [synthetic]','Microsoft.AspNetCore.App 8.0.0 [synthetic]')
     iis=$true; iisServer=$true; ancm=$true; hostingBundle=$true; sdk=$true; sdkMetadata=$true; restart=$false; poolExists=$false; siteExists=$false
     osProbeFails=$false;registryProbeFails=$false;runtimeExit=0;bundleView='64';bundleName='Microsoft .NET 8.0.34 - Windows Server Hosting';bundleVersion='8.0.34.26523'
+    certificates=@()
 }
 & (Get-Module ScomSetup -All | Select-Object -First 1) {
     param($fixture)
@@ -62,6 +63,12 @@ $facts = [pscustomobject]@{
         if ($script:facts.siteExists) { [pscustomobject]@{Name='synthetic-site'} }
     }
     function script:Get-WebBinding { @() }
+    function script:Get-ChildItem {
+        param($Path)
+        if ($Path -eq 'Cert:\LocalMachine\My') { return $script:facts.certificates }
+        if ($Path -eq 'IIS:\AppPools') { return @() }
+        throw 'Unexpected synthetic catalog probe'
+    }
     function script:Get-Item {
         param($Path)
         if ($Path -like 'Cert:*') { return [pscustomobject]@{HasPrivateKey=$true;NotBefore=(Get-Date).AddDays(-1);NotAfter=(Get-Date).AddDays(1)} }
@@ -81,6 +88,30 @@ function Check-Code([string]$Code) {
     $script:count++
 }
 try {
+    $tlsCertificate=[pscustomobject]@{
+        HasPrivateKey=$true;NotBefore=(Get-Date).AddDays(-1);NotAfter=(Get-Date).AddDays(1)
+        EnhancedKeyUsageList=@([pscustomobject]@{FriendlyName='Server Authentication';ObjectId='1.3.6.1.5.5.7.3.1'})
+        Thumbprint=('A'*40);Subject='CN=synthetic.invalid';DnsNameList=@([pscustomobject]@{Unicode='synthetic.invalid'})
+    }
+    $facts.certificates=@($tlsCertificate)
+    $catalog=Get-ScomSetupLocalCatalog
+    if ($catalog.certificates.Count -ne 1 -or $catalog.certificates[0].thumbprint -cne ('A'*40) -or
+        $catalog.certificates[0].dnsNames[0] -cne 'synthetic.invalid') { throw 'Provider-shaped server-auth certificate missing from catalog' }
+    $count++
+    foreach ($case in @('unsupportedEku','noEku','noPrivateKey','expired','notYetValid')) {
+        $tlsCertificate.EnhancedKeyUsageList=@([pscustomobject]@{FriendlyName='Server Authentication';ObjectId='1.3.6.1.5.5.7.3.1'})
+        $tlsCertificate.HasPrivateKey=$true;$tlsCertificate.NotBefore=(Get-Date).AddDays(-1);$tlsCertificate.NotAfter=(Get-Date).AddDays(1)
+        switch ($case) {
+            'unsupportedEku' { $tlsCertificate.EnhancedKeyUsageList=@([pscustomobject]@{FriendlyName='Server Authentication';ObjectId='1.3.6.1.5.5.7.3.3'}) }
+            'noEku' { $tlsCertificate.EnhancedKeyUsageList=@() }
+            'noPrivateKey' { $tlsCertificate.HasPrivateKey=$false }
+            'expired' { $tlsCertificate.NotAfter=(Get-Date).AddDays(-1) }
+            'notYetValid' { $tlsCertificate.NotBefore=(Get-Date).AddDays(1) }
+        }
+        if ((Get-ScomSetupLocalCatalog).certificates.Count -ne 0) { throw "Ineligible TLS certificate accepted: $case" }
+        $count++
+    }
+    $facts.certificates=@()
     foreach ($view in @('32','64','both')) {
         $facts.bundleView=$view
         $result=Get-ScomSetupPrerequisites $plan

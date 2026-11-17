@@ -1,10 +1,13 @@
 using System.Text;
 using System.Text.Json;
+using System.Runtime.CompilerServices;
 
 namespace ScomSetup;
 
 internal static class SelfTests
 {
+    internal static string FailureLocation { get; private set; } = "";
+
     internal static void Run()
     {
         Require(Thread.CurrentThread.GetApartmentState() == ApartmentState.STA);
@@ -151,6 +154,7 @@ internal static class SelfTests
         // The form's constructor and handle creation use NoCallsBridge, so any startup action fails this test.
         TestWorkflow();
         TestSequentialBootstrap();
+        TestGuidedActionClarity();
         TestWorkerWithBlockedCatalog();
         TestBridgeFailures();
         TestSchemaDiagnostics();
@@ -263,9 +267,9 @@ internal static class SelfTests
         }));
         using var form = new WizardForm(AppContext.BaseDirectory, bridge);
         _ = form.Handle;
-        Require(bridge.Requests.Count == 0 && form.CurrentPage == 0 && !form.CanInstall && !form.CanMoveNext);
+        Require(bridge.Requests.Count == 0 && form.CurrentPage == 0 && !form.CanInstall && form.CanMoveNext);
         form.MovePage(1);
-        Require(form.CurrentPage == 0);
+        Require(form.CurrentPage == 1);
         form.MovePage(-1);
         Require(form.CurrentPage == 0);
         form.Show();
@@ -336,6 +340,101 @@ internal static class SelfTests
         Require(defaultsForm.ReadPlan().InstallPath == @"C:\fresh\install");
     }
 
+    private static void TestGuidedActionClarity()
+    {
+        string root = Path.Combine(Path.GetTempPath(), "scom-guided-ux-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var bridge = new RecordingBridge(() => Task.FromResult(new BridgeResponse()));
+            using var blockedForm = new WizardForm(AppContext.BaseDirectory, bridge);
+            _ = blockedForm.Handle;
+            Require(blockedForm.CanMoveNext && !blockedForm.CanInstall &&
+                !blockedForm.IsActionButtonEnabled("Prepare"));
+            int blockedCalls = bridge.Requests.Count;
+            blockedForm.RenderResponse(new BridgeResponse { Ok = false,
+                Checks = [new BridgeCheck { Name = "Synthetic prerequisite", Passed = false }] }, "Bootstrap");
+            Require(blockedForm.CanMoveNext && !blockedForm.CanInstall &&
+                !blockedForm.IsActionButtonEnabled("Prepare"));
+            blockedForm.MovePage(1);
+            Require(blockedForm.CurrentPage == 1 && bridge.Requests.Count == blockedCalls);
+
+            using var scopeForm = new WizardForm(AppContext.BaseDirectory, bridge);
+            _ = scopeForm.Handle;
+            scopeForm.ApplyPlan(new SetupPlan { ScopeKind = "managementGroup" });
+            scopeForm.RenderResponse(new BridgeResponse { Ok = true, Stage = "prepared",
+                Groups = [new GroupItem { Id = "11111111-1111-4111-8111-111111111111", DisplayName = "Synthetic group" }] }, "Discover");
+            Require(scopeForm.StatusText.Contains("ALL supported Windows inventory is selected") &&
+                scopeForm.StatusText.Contains("each action still needs separate approval") &&
+                scopeForm.StatusText.Contains("did not read inventory") &&
+                scopeForm.StatusText.Contains("Current stage: prepared"));
+            scopeForm.ApplyPlan(new SetupPlan { ScopeKind = "group" });
+            scopeForm.RenderResponse(new BridgeResponse { Ok = true, Stage = "prepared",
+                Groups = [new GroupItem { Id = "11111111-1111-4111-8111-111111111111", DisplayName = "Synthetic group" }] }, "Discover");
+            Require(scopeForm.StatusText.Contains("Select one existing discovered SCOM group explicitly") &&
+                scopeForm.StatusText.Contains("Current stage: prepared"));
+
+            using var form = new WizardForm(AppContext.BaseDirectory, bridge);
+            _ = form.Handle;
+            form.SetField("workerAccount", @"DOMAIN\worker");
+            form.RenderResponse(new BridgeResponse { Ok = true,
+                Checks = [new BridgeCheck { Name = "Synthetic prerequisites", Passed = true }] }, "Bootstrap");
+            Require(form.PageCount == 9 && form.IsActionButtonEnabled("Prepare") &&
+                !form.IsActionButtonEnabled("Configure") && !form.IsActionButtonEnabled("Activate"));
+
+            form.ApplyPlan(new SetupPlan { ScopeKind = "managementGroup" });
+            form.WholeScopeDecision = _ => false;
+            int bridgeCalls = bridge.Requests.Count;
+            Complete(form.RunActionAsync("Prepare"));
+            Require(bridge.Requests.Count == bridgeCalls &&
+                form.StatusText.Contains("approval for ALL supported Windows inventory") &&
+                form.StatusText.Contains("No action started"));
+
+            string identity = Path.Combine(root, "identity.json");
+            string receiver = Path.Combine(root, "receiver.json");
+            string worker = Path.Combine(root, "worker.json");
+            File.WriteAllText(identity, "{}"); File.WriteAllText(receiver, "{}"); File.WriteAllText(worker, "{}");
+            form.SetField("identityPath", identity);
+            form.SetField("receiverSettingsPath", "");
+            form.SetField("workerSettingsPath", "");
+            Require(form.ConfigurationInputText.Contains("Identity JSON: selected file exists") &&
+                form.ConfigurationInputText.Contains("Receiver JSON: MISSING") &&
+                form.ConfigurationInputText.Contains("Worker JSON: MISSING") && !form.EvidenceInputsPresent);
+            form.SetField("receiverSettingsPath", identity);
+            Require(form.ConfigurationInputText.Contains(
+                "Receiver JSON: same file as Identity JSON — choose a separate settings JSON") &&
+                !form.EvidenceInputsPresent);
+            form.SetField("receiverSettingsPath", Path.Combine(root, "not-created.json"));
+            Require(form.ConfigurationInputText.Contains("Receiver JSON: selected path does not exist") &&
+                !form.EvidenceInputsPresent);
+            form.SetField("receiverSettingsPath", "");
+            form.SetField("receiverSettingsPath", receiver);
+            form.SetField("workerSettingsPath", worker);
+            Require(form.EvidenceInputsPresent);
+
+            form.RenderResponse(new BridgeResponse { Ok = true, Stage = "prepared" }, "Prepare");
+            Require(form.IsActionButtonEnabled("Configure") && !form.IsActionButtonEnabled("Activate"));
+            form.RenderResponse(new BridgeResponse { Ok = true, Stage = "configured" }, "Configure");
+            Require(form.IsActionButtonEnabled("Activate") && !form.IsActionButtonEnabled("Publish"));
+            form.RenderResponse(new BridgeResponse { Ok = true, Stage = "activated" }, "Activate");
+            Require(form.IsActionButtonEnabled("Publish") && !form.IsActionButtonEnabled("Accept") &&
+                !form.IsActionButtonEnabled("PublishWorker"));
+
+            form.UseWorkerPlan(true);
+            form.RenderResponse(new BridgeResponse { Ok = true, Code = "SETUP_GUI_WORKER_PLAN_READY",
+                Plan = new SetupPlan { PrivatePath = @"C:\approved-worker-private" } }, "Status");
+            Require(form.IsActionButtonEnabled("Connect") && !form.IsActionButtonEnabled("PublishWorker"));
+            form.RenderResponse(new BridgeResponse { Ok = true, Code = "SETUP_GUI_WORKER_ACTION_COMPLETE" }, "Connect");
+            Require(form.IsActionButtonEnabled("PublishWorker"));
+            form.RenderResponse(new BridgeResponse { Ok = true, Stage = "published" }, "Publish");
+            Require(form.IsActionButtonEnabled("Accept"));
+
+            form.MovePage(1);
+            Require(form.CurrentPage == 1 && bridge.Requests.Count == bridgeCalls);
+        }
+        finally { Directory.Delete(root, recursive: true); }
+    }
+
     private static void Complete(Task task)
     {
         var timer = System.Diagnostics.Stopwatch.StartNew();
@@ -360,7 +459,7 @@ internal static class SelfTests
                 new BridgeCheck { Name = "Local IIS/certificate discovery", Passed = false, Remedy = "Use an authorized host session for IIS." }] });
             Complete(form.OnFirstShownAsync());
             Require(!form.CanInstall && form.CheckColors.Contains(Color.Firebrick));
-            Require(!form.CanMoveNext);
+            Require(form.CanMoveNext);
             form.SetField("privatePath", @"C:\installed-private");
             form.SetField("stateDirectory", "");
             form.UseWorkerPlan(true);
@@ -470,13 +569,13 @@ internal static class SelfTests
         form.DiagnosticWriter = code => { codes.Add(code); return true; };
         Complete(form.RunActionAsync("Bootstrap"));
         Require(form.StatusText.Contains("SETUP_GUI_INVALID_JSON") && form.StatusText.Contains(BridgeDiagnostics.LogPath) &&
-            !form.StatusText.Contains(customer) && !form.StatusText.Contains("private journal") && !form.CanMoveNext && !form.CanInstall &&
+            !form.StatusText.Contains(customer) && !form.StatusText.Contains("private journal") && form.CanMoveNext && !form.CanInstall &&
             codes.SequenceEqual(new[] { "SETUP_GUI_INVALID_JSON" }));
         bridge.Next = () => Task.FromResult(failure);
         form.DiagnosticWriter = code => { codes.Add(code); return false; };
         Complete(form.RunActionAsync("Bootstrap"));
         Require(form.StatusText.Contains("SETUP_GUI_BRIDGE_BLOCKED") && form.StatusText.Contains("write FAILED") &&
-            !form.StatusText.Contains(customer) && !form.CanMoveNext && !form.CanInstall);
+            !form.StatusText.Contains(customer) && form.CanMoveNext && !form.CanInstall);
         bridge.Next = () => throw new InvalidOperationException(customer);
         Complete(form.RunActionAsync("Bootstrap"));
         Require(form.StatusText.Contains("SETUP_GUI_UNKNOWN_FAILURE") && !form.StatusText.Contains(customer));
@@ -553,8 +652,12 @@ internal static class SelfTests
         }
     }
 
-    private static void Require(bool passed)
+    private static void Require(bool passed, [CallerMemberName] string caller = "", [CallerLineNumber] int line = 0)
     {
-        if (!passed) throw new InvalidOperationException("SETUP_GUI_SELF_TEST_FAILED");
+        if (!passed)
+        {
+            FailureLocation = $"{caller}:{line}";
+            throw new InvalidOperationException("SETUP_GUI_SELF_TEST_FAILED");
+        }
     }
 }

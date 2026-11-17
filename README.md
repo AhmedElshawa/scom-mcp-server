@@ -292,10 +292,13 @@ open **`ci-evaluation\ScomSetup.exe`**. The native Windows Forms wizard bundles 
 own x64 runtime, so it opens before the app's .NET Hosting Bundle is present.
 It starts with automatic read-only prerequisite checks (green PASS / red BLOCKED),
 then uses sequential Back/Next screens for log folder, discovered IIS placement,
-execution account and source/scope selection. Detailed overrides and real
-external evidence gates are kept in Advanced. Separately confirmed installation
-stages do not start collection or recurrence merely
-by opening. Keep all extracted files together. See the
+execution account, source/scope selection, and a visible per-file checklist for
+identity, receiver and worker JSON. “Next” is navigation only; Prepare,
+Configure, Activate, worker Connect/Publish, receipt and acceptance are separate
+actions with their own gates. A selected file is not proof that its contents or
+external evidence have been reviewed. Do not copy synthetic example configs into
+a customer deployment. Opening the wizard does not start collection or
+recurrence. Keep all extracted files together. See the
 [double-click quickstart and signing limitations](docs/guided-setup.md#double-click-quickstart).
 The evaluation executable is unsigned, not automatically customer-trusted;
 normal Windows/UAC and PowerShell signing policies still apply.
@@ -754,6 +757,11 @@ The worker does not require Microsoft Graph permissions for this transport.
 Do not grant it delegated reader access or reuse a human identity as publisher.
 
 #### 4. Provision the publisher certificate
+
+For an explicitly approved isolated lab publisher, see the
+[MCPTest certificate and Azure portal walkthrough](docs/guided-setup.md#mcptest-a-separate-publisher-certificate-and-app-step-by-step).
+It creates a separate test credential/app without changing the existing
+publisher or reader; customer-managed production enrollment remains separate.
 
 Have the certificate/security administrator issue and deploy an approved
 certificate for the worker. The implementation requires an RSA private key of at

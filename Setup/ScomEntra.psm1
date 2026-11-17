@@ -2,6 +2,26 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 Import-Module (Join-Path $PSScriptRoot 'ScomSetup.psm1')
 
+function ConvertFrom-ScomEntraKeyIdentifier {
+    param([AllowNull()][string]$Value)
+    if ([string]::IsNullOrEmpty($Value)) { throw 'ENTRA_PUBLISHER_CERTIFICATE_IDENTIFIER_INVALID' }
+    if ($Value -cmatch '^[0-9A-Fa-f]{40}$') {
+        $bytes = New-Object byte[] 20
+        for ($index = 0; $index -lt $bytes.Length; $index++) {
+            $bytes[$index] = [Convert]::ToByte($Value.Substring($index * 2, 2), 16)
+        }
+        return ,$bytes
+    }
+    if ($Value -cnotmatch '^(?:[A-Za-z0-9+/]{4}){6}[A-Za-z0-9+/]{3}=$') {
+        throw 'ENTRA_PUBLISHER_CERTIFICATE_IDENTIFIER_INVALID'
+    }
+    $bytes = [Convert]::FromBase64String($Value)
+    if ($bytes.Length -ne 20 -or [Convert]::ToBase64String($bytes) -cne $Value) {
+        throw 'ENTRA_PUBLISHER_CERTIFICATE_IDENTIFIER_INVALID'
+    }
+    return ,$bytes
+}
+
 function Invoke-ScomEntraProvisioning {
     param(
         [Parameter(Mandatory)][string]$TenantId,
@@ -125,10 +145,20 @@ function Invoke-ScomEntraProvisioning {
     foreach ($app in @($publisher,$reader)) {
         if ($app.signInAudience -cne 'AzureADMyOrg' -or $app.appId -eq $api.appId) { throw 'ENTRA_CLIENT_CONTRACT_CONFLICT' }
     }
-    $publicKeys = @($publisher.keyCredentials | Where-Object {
-        $_.type -ceq 'AsymmetricX509Cert' -and $_.usage -ceq 'Verify' -and
-        $_.customKeyIdentifier -ceq $key.customKeyIdentifier -and [DateTime]$_.endDateTime -gt (Get-Date)
-    })
+    $expectedKeyIdentifier = $Certificate.GetCertHash()
+    $expectedKeyIdentifierHex = [BitConverter]::ToString($expectedKeyIdentifier)
+    $publicKeys = @()
+    foreach ($credential in @($publisher.keyCredentials)) {
+        if ($credential.type -cne 'AsymmetricX509Cert' -or $credential.usage -cne 'Verify' -or
+            [DateTime]$credential.endDateTime -le (Get-Date)) { continue }
+        if (-not $credential.PSObject.Properties['customKeyIdentifier']) {
+            throw 'ENTRA_PUBLISHER_CERTIFICATE_IDENTIFIER_INVALID'
+        }
+        $identifier = ConvertFrom-ScomEntraKeyIdentifier $credential.customKeyIdentifier
+        if ([BitConverter]::ToString($identifier) -ceq $expectedKeyIdentifierHex) {
+            $publicKeys += $credential
+        }
+    }
     if ($publicKeys.Count -ne 1) { throw 'ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE' }
     foreach ($pair in @(@($publisher,$roles[0].id,'Role'),@($reader,$scopes[0].id,'Scope'))) {
         $permission = @($pair[0].requiredResourceAccess | Where-Object resourceAppId -EQ $api.appId |

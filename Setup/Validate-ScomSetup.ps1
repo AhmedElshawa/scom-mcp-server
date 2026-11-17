@@ -332,12 +332,34 @@ try {
     $apiId=@($script:apps.Values | Where-Object displayName -EQ 'synthetic-api')[0].id
     $publisherId=@($script:apps.Values | Where-Object displayName -EQ 'synthetic-publisher')[0].id
     $readerId=@($script:apps.Values | Where-Object displayName -EQ 'synthetic-reader')[0].id
+    $publisher=$script:apps[$publisherId]
+    $publisherCredentials=@($publisher.keyCredentials)
+    $base64Identifier=[Convert]::ToBase64String($certificate.GetCertHash())
+    $hexIdentifier=[BitConverter]::ToString($certificate.GetCertHash()).Replace('-','')
+    Check ($publisherCredentials.Count -eq 1 -and $publisherCredentials[0].customKeyIdentifier -ceq $base64Identifier)
     $arguments=@{
         TenantId='11111111-1111-4111-8111-111111111111';NamePrefix='synthetic';Certificate=$certificate;JournalPath=$journal
         Graph=$graph;Approve={$true};ApiObjectId=$apiId;PublisherObjectId=$publisherId;ReaderObjectId=$readerId
     }
     $repeat=Invoke-ScomEntraProvisioning @arguments
     Check ($script:graphWrites -eq 8 -and $repeat.resource -eq $result.resource)
+    $publisherCredentials[0].customKeyIdentifier=$hexIdentifier
+    $publisher.keyCredentials=$publisherCredentials
+    $hexRepeat=Invoke-ScomEntraProvisioning @arguments
+    Check ($script:graphWrites -eq 8 -and $hexRepeat.resource -eq $result.resource)
+    $publisherCredentials[0].customKeyIdentifier='not-a-key-identifier'
+    $publisher.keyCredentials=$publisherCredentials
+    Reject { Invoke-ScomEntraProvisioning @arguments } 'ENTRA_PUBLISHER_CERTIFICATE_IDENTIFIER_INVALID'
+    $mismatchedIdentifier=$certificate.GetCertHash()
+    $mismatchedIdentifier[0]=$mismatchedIdentifier[0] -bxor 1
+    $publisherCredentials[0].customKeyIdentifier=[Convert]::ToBase64String($mismatchedIdentifier)
+    $publisher.keyCredentials=$publisherCredentials
+    Reject { Invoke-ScomEntraProvisioning @arguments } 'ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE'
+    $publisherCredentials[0].customKeyIdentifier=$base64Identifier
+    $publisher.keyCredentials=@($publisherCredentials[0],$publisherCredentials[0])
+    Reject { Invoke-ScomEntraProvisioning @arguments } 'ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE'
+    $publisher.keyCredentials=@($publisherCredentials[0])
+    $publisher.keyCredentials[0].customKeyIdentifier=$base64Identifier
     $script:apps[$apiId].api.requestedAccessTokenVersion=1
     Reject { Invoke-ScomEntraProvisioning @arguments } 'ENTRA_EXISTING_API_CONTRACT_CONFLICT_NO_OVERWRITE'
     Check ($script:graphWrites -eq 8)

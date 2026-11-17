@@ -23,9 +23,16 @@ worker account, then the management server and approved group choice. Existing
 applications/pools are never silently reused: the proposed dedicated pool name
 avoids discovered pool names and existing application names are refused.
 
-Advanced holds proposed sibling installation/state/journal paths, module/GUID/
-HTTPS/certificate overrides, discovered certificate selection, externally
-reviewed JSON inputs, local prerequisite installer details, and explicit resume.
+The visible **Select identity and reviewed configuration** screen reports
+identity, receiver and worker JSON independently as missing, selected-but-not-
+found, or selected-and-present (backend review still required). File presence
+does not certify contents, consent, key access or source mappings. Receiver and
+worker must be distinct from each other and from `identity.json`; their browse
+dialogs start from an existing settings folder or Documents, not the identity
+file's directory. Advanced holds
+proposed sibling installation/state/journal paths, module/GUID/HTTPS/certificate
+overrides, discovered certificate selection, local prerequisite installer
+details, and explicit resume.
 Bootstrap defaults apply only once and do not replace edited fields or resumed
 plans. The GUI proposes existing `ProgramData` as the parent with new
 `ScomMcp-McpLogs` and `ScomMcp-CollectorLogs` children; both
@@ -33,9 +40,11 @@ effective paths are displayed read-only on the basic screen. Advanced can
 override them individually, and resuming preserves both exact saved paths.
 Unknown site/certificate catalogs remain unknown; they do not earn PASS.
 Only explicitly approved source discovery may fill the management-group GUID.
-Configure/activation require all three selected JSON files to exist; existence
-does not certify their contents, consent, key access or source mappings. The
-backend remains authoritative and verifies effects after exact confirmation.
+**Next (navigate only)** never stages or installs anything. Prepare, Configure,
+Activate, worker Connect/Publish, receipt recording and acceptance are separate
+actions. The UI enables later stages only after the preceding backend stage and
+local required-input checks; backend authorization and exact-effect confirmation
+remain authoritative.
 
 The worker account is forwarded to the plan/ACL backend. An explicit handoff
 button launches Windows `runas.exe /user:DOMAIN\account "<package>\ScomSetup.exe"`

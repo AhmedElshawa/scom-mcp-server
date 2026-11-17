@@ -93,7 +93,7 @@ function Get-ScomSetupLocalCatalog {
     $now=Get-Date
     $certificates=@(Get-ChildItem Cert:\LocalMachine\My | Where-Object {
         $_.HasPrivateKey -and $_.NotBefore -le $now -and $_.NotAfter -gt $now -and
-        @($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -eq '1.3.6.1.5.5.7.3.1' }).Count -gt 0
+        @($_.EnhancedKeyUsageList | Where-Object { $_.ObjectId -eq '1.3.6.1.5.5.7.3.1' }).Count -gt 0
     } | Select-Object -First 100 | ForEach-Object {
         [pscustomobject]@{thumbprint=$_.Thumbprint;displayName=([string]$_.Subject+'; expires '+$_.NotAfter.ToString('yyyy-MM-dd'))
             dnsNames=@($_.DnsNameList | ForEach-Object { [string]$_.Unicode })}

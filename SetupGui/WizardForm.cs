@@ -15,6 +15,7 @@ internal sealed class WizardForm : Form
     internal bool CanManageWorkerTask => !busy && !workerPlanMode.Checked && acceptedTaskJournal is not null &&
         acceptedTaskJournal == fields["stateDirectory"].Text.Trim();
     internal string StatusText => status.Text;
+    internal string ConfigurationInputText => configurationInputs.Text;
     internal Func<string, bool> DiagnosticWriter { get; set; }
     private readonly Panel pages = new() { Dock = DockStyle.Fill };
     private readonly List<FlowLayoutPanel> pagePanels = [];
@@ -30,6 +31,7 @@ internal sealed class WizardForm : Form
         StartPosition = FormStartPosition.CenterParent, MinimizeBox = false, MaximizeBox = false };
     private readonly TextBox logRoot = new() { Width = 700 };
     private readonly Label logPaths = new() { AutoSize = true, MaximumSize = new Size(800, 0) };
+    private readonly Label configurationInputs = new() { AutoSize = true, MaximumSize = new Size(830, 0) };
     private readonly TextBox applicationName = new() { Width = 300, Text = "scom" };
     private int pageIndex;
     private bool shownStarted;
@@ -55,8 +57,8 @@ internal sealed class WizardForm : Form
     private readonly TextBox log = new() { Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, ScrollBars = ScrollBars.Vertical };
     private readonly Label status = new() { AutoSize = true, Text = "Not started. No source connection, inventory, configuration or elevation has occurred." };
     private readonly Label stage = new() { AutoSize = true, Text = "Stage: not loaded | Pending: none" };
-    private readonly Button back = new() { Text = "Back", AutoSize = true };
-    private readonly Button next = new() { Text = "Next", AutoSize = true };
+    private readonly Button back = new() { Text = "Back (navigate only)", AutoSize = true };
+    private readonly Button next = new() { Text = "Next (navigate only)", AutoSize = true };
     private readonly Button elevate = new() { Text = "Restart as administrator", AutoSize = true };
     private readonly List<Button> taskButtons = [];
     private bool busy;
@@ -191,7 +193,8 @@ internal sealed class WizardForm : Form
         Note(scope, "Choose an existing group after separately approving a bounded discovery read. No members or inventory are collected.");
         ActionButton(scope, "Discover existing groups…", "Discover");
         scope.Controls.Add(groups); scope.Controls.Add(wholeWindows);
-        wholeWindows.CheckedChanged += (_, _) => groups.Enabled = !wholeWindows.Checked;
+        wholeWindows.CheckedChanged += (_, _) => { groups.Enabled = !wholeWindows.Checked; UpdateNavigation(); };
+        groups.SelectedIndexChanged += (_, _) => UpdateNavigation();
         Note(scope, "Windows inventory retains the observed OS version. Optional product/edition (osCaption) requires matching reviewed " +
             "property mappings (candidate: OSVersionDisplayName) and typed OS hosting; missing or unpopulated values stay unknown. No build-to-product inference.");
         groups.SelectedIndexChanged += (_, _) => { if (groups.SelectedItem is GroupItem item) loadedGroupId = item.Id; };
@@ -208,32 +211,34 @@ internal sealed class WizardForm : Form
         prerequisites.Controls.Add(restartAcknowledged);
         ActionButton(prerequisites, "Install reviewed prerequisites…", "InstallPrerequisites");
 
-        var prepare = Page("Review deployment and evidence");
+        var prepare = Page("Prepare the new deployment");
         prepare.Controls.Add(evidence);
-        Note(prepare, "Prepare stages new files only. Configure/activation stay blocked until all three externally reviewed JSON inputs are selected in Advanced. " +
-            "Setup cannot create or certify Entra consent, certificate access, intended-reader grants or source mappings.");
+        Note(prepare, "Use the Prepare button only after prerequisites and scope are reviewed. It saves the protected plan and stages new files; it does not configure Entra, activate IIS, collect inventory or publish data. " +
+            "The Next button only navigates and never performs a setup action.");
         ActionButton(prepare, "Recheck plan prerequisites", "Preflight");
         ActionButton(prepare, "Prepare new deployment…", "Prepare");
-        Field(details, "identityPath", "Nonsecret Entra identity JSON", browse: "json");
-        Field(details, "receiverSettingsPath", "Reviewed receiver settings JSON", browse: "json");
-        Field(details, "workerSettingsPath", "Reviewed worker settings JSON", browse: "json");
+
+        var configure = Page("Select identity and reviewed configuration");
+        Note(configure, "This is a separate Configure action, not navigation or Prepare. Select the nonsecret identity.json produced by the authorized Entra provisioning step, plus two separate customer-reviewed settings files: receiver JSON and worker JSON. Keep settings in a customer-restricted folder distinct from the Entra identity file. Do not select identity.json for either settings field. Package examples are schema references only; they contain synthetic identifiers and false verification flags and are not deployable customer configuration.");
+        Field(configure, "identityPath", "Nonsecret Entra identity.json (existing file)", browse: "json");
+        Field(configure, "receiverSettingsPath", "Customer-reviewed receiver settings JSON (separate file)", browse: "json");
+        Field(configure, "workerSettingsPath", "Customer-reviewed worker settings JSON (separate file)", browse: "json");
+        configure.Controls.Add(configurationInputs);
+        Note(configure, "Files being selected only satisfies the UI input check. Configure performs backend schema, scope, identity and disabled-guard validation and requires its own exact effect approval. It does not certify tenant consent, source rights or reader access.");
+        Note(configure, "Before configuration, the exact selected worker must separately connect and verify management-group/group identity from an approved worker Windows session. Open setup as that account, load the installed private plan in Advanced, then use Worker: connect below. This bounded check reads no inventory and sets no verification flags.");
         foreach (var key in new[] { "identityPath", "receiverSettingsPath", "workerSettingsPath" })
             fields[key].TextChanged += (_, _) => UpdateNavigation();
+        ActionButton(configure, "Worker: connect and verify selected scope…", "Connect");
+        ActionButton(configure, "Configure from selected files…", "Configure");
         var doneAdvanced = new Button { Text = "Done", AutoSize = true };
         doneAdvanced.Click += (_, _) => advanced.Hide();
         details.Controls.Add(doneAdvanced);
         Docs(prepare);
-        ActionButton(prepare, "Import reviewed configuration…", "Configure");
-
         var publish = Page("Activate and publish");
-        Note(publish, "Host: Activate starts only the owned HTTPS app after reviewed configuration. Worker: reopen this app as the exact approved " +
-            "worker account (normal sign-in / approved session; no impersonation), load the installed private plan via Status, then Connect explicitly. " +
-            "PublishWorker performs ONE separately approved bounded collection/publication/checkpoint attempt. No recurrence, metrics or live checks. " +
-            "Host: Publish records the receipt only; it does not query inventory or certify reader acceptance.");
-        ActionButton(publish, "Host: activate HTTPS app…", "Activate");
-        ActionButton(publish, "Worker: connect / verify scope identity…", "Connect");
+        Note(publish, "These are separate actions with separate gates: Host Activate starts only the owned HTTPS app after Configure; Worker Publish performs ONE bounded collection/publication/checkpoint attempt after an explicit Connect; Host Record receipt stores the worker-reported result only. It does not query inventory or certify reader acceptance. No recurrence, metrics or targeted-live checks are enabled.");
+        ActionButton(publish, "Host: activate configured HTTPS app…", "Activate");
         ActionButton(publish, "Worker: one bounded publication…", "PublishWorker");
-        ActionButton(publish, "Host: record worker receipt…", "Publish");
+        ActionButton(publish, "Host: record worker publication receipt…", "Publish");
 
         var acceptance = Page("Acceptance and recovery");
         Note(acceptance, "Test intended-user Studio tool discovery and committed inventory, unauthorized-user denial, and scoped coverage externally. " +
@@ -298,6 +303,14 @@ internal sealed class WizardForm : Form
                 else
                 {
                     using var dialog = new OpenFileDialog { CheckFileExists = true, Multiselect = false,
+                        InitialDirectory = browse == "json" ? GetInputBrowseDirectory(key) : AppContext.BaseDirectory,
+                        Title = key switch
+                        {
+                            "identityPath" => "Select the nonsecret Entra identity.json",
+                            "receiverSettingsPath" => "Select the separate reviewed receiver settings JSON (not identity.json)",
+                            "workerSettingsPath" => "Select the separate reviewed worker settings JSON (not identity.json)",
+                            _ => "Select a file"
+                        },
                         Filter = browse switch { "json" => "JSON files|*.json", "module" => "PowerShell module manifest|*.psd1", _ => "Windows executable|*.exe" } };
                     if (dialog.ShowDialog(this) == DialogResult.OK)
                     {
@@ -362,17 +375,110 @@ internal sealed class WizardForm : Form
     internal int CurrentPage => pageIndex;
     internal int PageCount => pagePanels.Count;
     internal bool CanInstall => actualChecksReceived && prerequisitesPassed;
-    internal bool EvidenceInputsPresent => new[] { "identityPath", "receiverSettingsPath", "workerSettingsPath" }
-        .All(key => !string.IsNullOrWhiteSpace(fields[key].Text) && File.Exists(fields[key].Text.Trim()));
+    internal bool EvidenceInputsPresent
+    {
+        get
+        {
+            var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string key in new[] { "identityPath", "receiverSettingsPath", "workerSettingsPath" })
+            {
+                string path = fields[key].Text.Trim();
+                if (!File.Exists(path) || !TryGetFullPath(path, out string fullPath) || !paths.Add(fullPath))
+                    return false;
+            }
+            return true;
+        }
+    }
+
+    private string GetInputBrowseDirectory(string key)
+    {
+        string[] candidates = key switch
+        {
+            "receiverSettingsPath" => ["receiverSettingsPath", "workerSettingsPath"],
+            "workerSettingsPath" => ["workerSettingsPath", "receiverSettingsPath"],
+            _ => [key]
+        };
+        string identityPath = fields["identityPath"].Text.Trim();
+        foreach (string candidate in candidates)
+        {
+            string path = fields[candidate].Text.Trim();
+            if (!File.Exists(path) || (key != "identityPath" && AreSamePath(path, identityPath)))
+                continue;
+            if (!TryGetFullPath(path, out string fullPath))
+                continue;
+            string? directory = Path.GetDirectoryName(fullPath);
+            if (directory is not null && Directory.Exists(directory))
+                return directory;
+        }
+        string documents = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
+        return Directory.Exists(documents) ? documents : AppContext.BaseDirectory;
+    }
+
+    private string? DuplicateConfigurationInput(string key)
+    {
+        string path = fields[key].Text.Trim();
+        if (string.IsNullOrWhiteSpace(path))
+            return null;
+        foreach (string other in new[] { "identityPath", "receiverSettingsPath", "workerSettingsPath" })
+        {
+            if (other != key && AreSamePath(path, fields[other].Text.Trim()))
+                return other switch
+                {
+                    "identityPath" => "Identity JSON",
+                    "receiverSettingsPath" => "Receiver JSON",
+                    _ => "Worker JSON"
+                };
+        }
+        return null;
+    }
+
+    private static bool AreSamePath(string first, string second) =>
+        !string.IsNullOrWhiteSpace(first) && !string.IsNullOrWhiteSpace(second) &&
+        TryGetFullPath(first, out string firstFull) && TryGetFullPath(second, out string secondFull) &&
+        StringComparer.OrdinalIgnoreCase.Equals(firstFull, secondFull);
+
+    private static bool TryGetFullPath(string path, out string fullPath)
+    {
+        try
+        {
+            fullPath = Path.GetFullPath(path);
+            return true;
+        }
+        catch (Exception error) when (error is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            fullPath = "";
+            return false;
+        }
+    }
+    private bool ConfigurationFileExists(string key) =>
+        !string.IsNullOrWhiteSpace(fields[key].Text) && File.Exists(fields[key].Text.Trim());
+
+    private string ConfigurationInputStatus(string key, string label)
+    {
+        string path = fields[key].Text.Trim();
+        string? duplicate = DuplicateConfigurationInput(key);
+        return string.IsNullOrWhiteSpace(path) ? $"{label}: MISSING — no file selected" :
+            duplicate is not null ? $"{label}: same file as {duplicate} — choose a separate settings JSON" :
+            ConfigurationFileExists(key) ? $"{label}: selected file exists; backend review still required" :
+            $"{label}: selected path does not exist";
+    }
+
+    internal bool IsActionButtonEnabled(string action) =>
+        actionButtons.TryGetValue(action, out var buttons) && buttons.Any(button => button.Enabled);
     internal bool CanMoveNext => !busy && pageIndex < pagePanels.Count - 1 && (pageIndex switch
     {
-        0 => CanInstall || workerPlanMode.Checked,
+        0 => true,
         1 => !string.IsNullOrWhiteSpace(fields["mcpLogPath"].Text) && !string.IsNullOrWhiteSpace(fields["collectorLogPath"].Text),
         2 => true,
         3 => fields["workerAccount"].Text.Contains('\\'),
         4 => wholeWindows.Checked || loadedGroupId is not null,
         _ => true
     });
+    private string ScopeSummary() => wholeWindows.Checked
+        ? "ALL supported Windows inventory (not every SCOM class); each action still needs separate approval"
+        : groups.SelectedItem is GroupItem selected
+            ? $"Selected SCOM group: {DisplayText.Clean(selected.DisplayName, 80)}"
+            : "No SCOM group selected";
 
     internal void MovePage(int direction)
     {
@@ -612,7 +718,12 @@ internal sealed class WizardForm : Form
             wholeApproved = WholeScopeDecision?.Invoke(warning) ?? MessageBox.Show(this, warning,
                 "Distinct whole-management-group scope approval", MessageBoxButtons.YesNo,
                 MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2) == DialogResult.Yes;
-            if (!wholeApproved) { status.Text = "Scope approval declined. No action started."; return; }
+            if (!wholeApproved)
+            {
+                status.Text = "No action started: approval for ALL supported Windows inventory in this management group was declined. Choose a specific discovered group, or select ALL and explicitly approve that scope. Prepare/configure/activate/publication each have separate approvals.";
+                Append("Whole-management-group scope declined; no setup action or source operation was started.");
+                return;
+            }
         }
         var request = ReadRequest(action, wholeApproved);
         if (action is "Bootstrap" or "Preflight")
@@ -751,9 +862,15 @@ internal sealed class WizardForm : Form
             foreach (var group in (response.Groups ?? []).Take(500))
                 if (Guid.TryParseExact(group.Id, "D", out var id) && id != Guid.Empty)
                     groups.Items.Add(new GroupItem { Id = id.ToString("D"), DisplayName = group.DisplayName });
-            status.Text = "Discovery complete. Select an existing group explicitly; no inventory or installation was approved.";
+            string scope = wholeWindows.Checked
+                ? "ALL supported Windows inventory is selected (not every SCOM class); each action still needs separate approval."
+                : groups.Items.OfType<GroupItem>().Any()
+                    ? "Select one existing discovered SCOM group explicitly."
+                    : "No existing SCOM group was returned; select one if available or review the broader scope separately.";
+            status.Text = $"Discovery complete. {scope} This discovery did not read inventory or perform an install action. Current stage: {deploymentStage ?? "unknown"}.";
         }
         if (action == "Connect" && response.Ok && !response.ApprovalRequired) sourceConnected = true;
+        if (action == "PublishWorker" && response.Ok && !response.ApprovalRequired) sourceConnected = false;
         if (action == "Status" && response.Ok && !response.ApprovalRequired && response.Plan is not null)
         {
             ApplyPlan(response.Plan);
@@ -867,19 +984,34 @@ internal sealed class WizardForm : Form
             foreach (var button in entry.Value)
                 button.Enabled = !busy && (entry.Key switch
                 {
-                    "Prepare" => CanInstall,
-                    "Configure" or "Activate" => CanInstall && EvidenceInputsPresent,
-                    "PublishWorker" => sourceConnected || workerPlanMode.Checked,
+                    "Prepare" => CanInstall && deploymentStage is null or "new",
+                    "Configure" => CanInstall && EvidenceInputsPresent && deploymentStage == "prepared",
+                    "Activate" => CanInstall && EvidenceInputsPresent && deploymentStage == "configured",
+                    "Connect" => workerPlanMode.Checked,
+                    "PublishWorker" => workerPlanMode.Checked && sourceConnected,
+                    "Publish" => deploymentStage == "activated",
+                    "Accept" => deploymentStage == "published",
                     _ => true
                 });
         if (fields.ContainsKey("workerSettingsPath"))
+        {
+            configurationInputs.Text = string.Join(Environment.NewLine, new[]
+            {
+                ConfigurationInputStatus("identityPath", "Identity JSON"),
+                ConfigurationInputStatus("receiverSettingsPath", "Receiver JSON"),
+                ConfigurationInputStatus("workerSettingsPath", "Worker JSON")
+            });
             evidence.Text = $"Placement: {DisplayText.Clean(fields["siteName"].Text, 80)}{DisplayText.Clean(fields["applicationPath"].Text, 80)}" +
                 $"  ·  NEW pool: {DisplayText.Clean(fields["poolName"].Text, 80)}\n" +
+                $"Scope: {ScopeSummary()}\n" +
                 $"Worker: {DisplayText.Clean(fields["workerAccount"].Text, 160)}\n" +
                 $"Prerequisites: {(CanInstall ? "passed actual checks" : "blocked / not checked")}\n" +
-                $"External identity / receiver / worker JSON: {(EvidenceInputsPresent ? "files selected; backend review still required" : "MISSING — select reviewed files in Advanced")}\n" +
-                $"Source connection: {(sourceConnected ? "explicit worker check completed; not source certification" : "not verified in this session")}\n" +
+                $"Configuration inputs: identity {(ConfigurationInputStatus("identityPath", "").Contains("selected file exists") ? "ready for review" : "missing/not found")}; " +
+                $"receiver {(ConfigurationInputStatus("receiverSettingsPath", "").Contains("selected file exists") ? "ready for review" : "missing/not found")}; " +
+                $"worker {(ConfigurationInputStatus("workerSettingsPath", "").Contains("selected file exists") ? "ready for review" : "missing/not found")}\n" +
+                $"Worker source connection: {(sourceConnected ? "explicit worker check completed; not source certification" : workerPlanMode.Checked ? "not verified; use Worker: connect on the configuration step" : "not verified in this session; requires the exact selected worker account")}\n" +
                 $"Host stage: {deploymentStage ?? "unknown"} · Live checks remain disabled; recurrence requires the separate optional task window.";
+        }
     }
     private void SetBusy(bool value)
     {
