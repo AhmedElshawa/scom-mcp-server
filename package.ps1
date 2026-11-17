@@ -48,7 +48,7 @@ $docs = Join-Path $output 'docs'
 $null = New-Item -ItemType Directory -Path (Join-Path $docs 'images')
 foreach ($name in @('indexed-deployment-runbook.md', 'deployment-issue-log.md', 'customer-evaluation.md',
     'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md',
-    'guided-setup.md', 'easy-indexed-upgrade.md')) {
+    'guided-setup.md', 'easy-indexed-upgrade.md', 'local-evaluation-signing.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\$name") -Destination $docs
 }
 foreach ($name in @('scom-reference-architecture.png', 'scom-reference-architecture.excalidraw')) {
