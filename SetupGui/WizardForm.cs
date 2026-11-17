@@ -197,11 +197,20 @@ internal sealed class WizardForm : Form
         Note(scope, "Choose an existing group after separately approving a bounded discovery read. No members or inventory are collected.");
         ActionButton(scope, "Discover existing groups…", "Discover");
         scope.Controls.Add(groups); scope.Controls.Add(wholeWindows);
-        wholeWindows.CheckedChanged += (_, _) => { groups.Enabled = !wholeWindows.Checked; UpdateNavigation(); };
-        groups.SelectedIndexChanged += (_, _) => UpdateNavigation();
+        wholeWindows.CheckedChanged += (_, _) =>
+        {
+            groups.Enabled = !wholeWindows.Checked;
+            RefreshDiscoveryScopeStatus();
+            UpdateNavigation();
+        };
+        groups.SelectedIndexChanged += (_, _) =>
+        {
+            if (groups.SelectedItem is GroupItem item) loadedGroupId = item.Id;
+            RefreshDiscoveryScopeStatus();
+            UpdateNavigation();
+        };
         Note(scope, "Windows inventory retains the observed OS version. Optional product/edition (osCaption) requires matching reviewed " +
             "property mappings (candidate: OSVersionDisplayName) and typed OS hosting; missing or unpopulated values stay unknown. No build-to-product inference.");
-        groups.SelectedIndexChanged += (_, _) => { if (groups.SelectedItem is GroupItem item) loadedGroupId = item.Id; };
         Note(scope, "Whole-management-group includes all supported Windows inventory, not every SCOM class. It requires its own separate confirmation.");
 
         var prerequisites = details;
@@ -594,6 +603,9 @@ internal sealed class WizardForm : Form
         existingPools = pools; sites.Items.Clear(); sites.Items.Add(site); sites.SelectedIndex = 0;
     }
 
+    internal void SelectGroupForTest(int index) => groups.SelectedIndex = index;
+    internal void SetWholeScopeForTest(bool selected) => wholeWindows.Checked = selected;
+
     private void SelectPlacement()
     {
         if (updating || sites.SelectedItem is not SiteOption site) return;
@@ -867,11 +879,7 @@ internal sealed class WizardForm : Form
             foreach (var group in (response.Groups ?? []).Take(500))
                 if (Guid.TryParseExact(group.Id, "D", out var id) && id != Guid.Empty)
                     groups.Items.Add(new GroupItem { Id = id.ToString("D"), DisplayName = group.DisplayName });
-            string scope = wholeWindows.Checked
-                ? "ALL supported Windows inventory is selected (not every SCOM class); each action still needs separate approval."
-                : groups.Items.OfType<GroupItem>().Any()
-                    ? "Select one existing discovered SCOM group explicitly."
-                    : "No existing SCOM group was returned; select one if available or review the broader scope separately.";
+            string scope = DiscoveryScopeSummary();
             status.Text = $"Discovery complete. {scope} This discovery did not read inventory or perform an install action. Current stage: {deploymentStage ?? "unknown"}.";
         }
         if (action == "Connect" && response.Ok && !response.ApprovalRequired) sourceConnected = true;
@@ -882,6 +890,24 @@ internal sealed class WizardForm : Form
             Append("Explicit resume loaded reviewed plan fields. Package root remains fixed to this executable.");
         }
         UpdateNavigation();
+    }
+
+    private string DiscoveryScopeSummary() => wholeWindows.Checked
+        ? "ALL supported Windows inventory is selected (not every SCOM class); each action still needs separate approval."
+        : groups.SelectedItem is GroupItem
+            ? "A discovered SCOM group is selected; each action still needs separate approval."
+            : groups.Items.OfType<GroupItem>().Any()
+                ? "Select one existing discovered SCOM group explicitly."
+                : "No existing SCOM group was returned; select one if available or review the broader scope separately.";
+
+    private void RefreshDiscoveryScopeStatus()
+    {
+        const string prefix = "Discovery complete. ";
+        const string description = " This discovery did not read inventory or perform an install action.";
+        if (!status.Text.StartsWith(prefix, StringComparison.Ordinal)) return;
+        int descriptionIndex = status.Text.IndexOf(description, prefix.Length, StringComparison.Ordinal);
+        if (descriptionIndex < 0) return;
+        status.Text = prefix + DiscoveryScopeSummary() + status.Text[descriptionIndex..];
     }
 
     private void RenderChecks(BridgeResponse response)

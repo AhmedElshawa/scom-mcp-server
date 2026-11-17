@@ -379,18 +379,28 @@ internal static class SelfTests
 
             using var scopeForm = new WizardForm(AppContext.BaseDirectory, bridge);
             _ = scopeForm.Handle;
-            scopeForm.ApplyPlan(new SetupPlan { ScopeKind = "managementGroup" });
+            const string discoveredGroupId = "11111111-1111-4111-8111-111111111111";
             scopeForm.RenderResponse(new BridgeResponse { Ok = true, Stage = "prepared",
-                Groups = [new GroupItem { Id = "11111111-1111-4111-8111-111111111111", DisplayName = "Synthetic group" }] }, "Discover");
+                Groups = [new GroupItem { Id = discoveredGroupId, DisplayName = "Synthetic group" }] }, "Discover");
+            Require(scopeForm.StatusText.Contains("Select one existing discovered SCOM group explicitly") &&
+                scopeForm.StatusText.Contains("Current stage: prepared"));
+            scopeForm.SetWholeScopeForTest(true);
             Require(scopeForm.StatusText.Contains("ALL supported Windows inventory is selected") &&
                 scopeForm.StatusText.Contains("each action still needs separate approval") &&
                 scopeForm.StatusText.Contains("did not read inventory") &&
                 scopeForm.StatusText.Contains("Current stage: prepared"));
-            scopeForm.ApplyPlan(new SetupPlan { ScopeKind = "group" });
-            scopeForm.RenderResponse(new BridgeResponse { Ok = true, Stage = "prepared",
-                Groups = [new GroupItem { Id = "11111111-1111-4111-8111-111111111111", DisplayName = "Synthetic group" }] }, "Discover");
+            scopeForm.SetWholeScopeForTest(false);
             Require(scopeForm.StatusText.Contains("Select one existing discovered SCOM group explicitly") &&
                 scopeForm.StatusText.Contains("Current stage: prepared"));
+            scopeForm.SelectGroupForTest(0);
+            Require(scopeForm.ReadPlan().GroupId == discoveredGroupId &&
+                scopeForm.StatusText.Contains("A discovered SCOM group is selected") &&
+                scopeForm.StatusText.Contains("each action still needs separate approval") &&
+                scopeForm.StatusText.Contains("Current stage: prepared"));
+            scopeForm.RenderResponse(new BridgeResponse { Ok = false, Code = "SETUP_GUI_BRIDGE_BLOCKED" }, "Prepare");
+            string unrelatedStatus = scopeForm.StatusText;
+            scopeForm.SetWholeScopeForTest(true);
+            Require(scopeForm.StatusText == unrelatedStatus);
 
             using var form = new WizardForm(AppContext.BaseDirectory, bridge);
             _ = form.Handle;
