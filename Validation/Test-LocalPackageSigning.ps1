@@ -20,13 +20,17 @@ function Reject {
 }
 try {
     Write-Output 'Signing CI: validating rejection paths before any certificate creation.'
+    $signerParameter=(Get-Command -Name $helper -ErrorAction Stop).Parameters['CertificateThumbprint']
+    if (@($signerParameter.Attributes | Where-Object {
+        $_ -is [Management.Automation.ParameterAttribute] -and $_.Mandatory
+    }).Count -ne 1) { throw 'Signing helper must require an explicit certificate thumbprint.' }
     & (Join-Path $PSScriptRoot 'Test-Package.ps1') -PackageDirectory $source
     $arguments=@{PackageDirectory=$source;DestinationDirectory=(Join-Path $root 'signed')
-        ExpectedManifestSha256=$hash;ExpectedSourceCommit=$manifest.sourceCommit}
+        ExpectedManifestSha256=$hash;ExpectedSourceCommit=$manifest.sourceCommit;CertificateThumbprint=('0'*40)}
     $bad=$arguments.Clone();$bad.ExpectedManifestSha256='0'*64;Reject $bad
     $bad=$arguments.Clone();$bad.DestinationDirectory=Join-Path $source 'nested';Reject $bad
     $bad=$arguments.Clone();$bad.DestinationDirectory=$root;Reject $bad
-    $bad=$arguments.Clone();$bad.CertificateThumbprint='0'*40;Reject $bad
+    Reject $arguments
     Write-Output 'Signing CI: missing signer rejected; validating file-set and digest tampering.'
     $changed=Join-Path $root 'changed'
     Copy-Item -LiteralPath $source -Destination $changed -Recurse

@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$DestinationDirectory,
     [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$ExpectedManifestSha256,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit,
-    [ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$CertificateThumbprint='FD229CD0460526F7A1BDE7AF70C12670C9904B59'
+    [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$CertificateThumbprint
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -82,7 +82,7 @@ foreach ($entry in $targets) {
 $cert=Get-Item -LiteralPath ('Cert:\CurrentUser\My\'+$thumb)
 $now=Get-Date
 if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt $now -or $cert.NotAfter -le $now -or
-    @($cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -ceq '1.3.6.1.5.5.7.3.3' }).Count -ne 1) {
+    @($cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId -ceq '1.3.6.1.5.5.7.3.3' }).Count -ne 1) {
     throw 'SIGN_CERTIFICATE_KEY_VALIDITY_OR_EKU_INVALID'
 }
 foreach ($storeName in @('Root','TrustedPublisher')) {

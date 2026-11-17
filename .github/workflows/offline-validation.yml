@@ -86,6 +86,9 @@ jobs:
           .\Validation\Test-Package.ps1 -PackageDirectory .\artifacts\ci-evaluation
           .\Validation\Test-PackageManifest.ps1 -PackageDirectory .\artifacts\ci-evaluation
           .\Validation\Test-PackageCheckout.ps1 -PackageDirectory .\artifacts\ci-evaluation
+          .\Validation\Test-SigningCertificate.ps1 -PackageDirectory .\artifacts\ci-evaluation
+          powershell.exe -NoProfile -File .\Validation\Test-SigningCertificate.ps1 -PackageDirectory .\artifacts\ci-evaluation
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 signing certificate validation failed.' }
           .\Validation\Test-NativeSetup.ps1 -PackageDirectory .\artifacts\ci-evaluation -RunBridgeDiagnostic
           .\Validation\Test-BootstrapSchema.ps1 -PackageDirectory .\artifacts\ci-evaluation
           .\Validation\Test-BootstrapTransport.ps1 -PackageDirectory .\artifacts\ci-evaluation

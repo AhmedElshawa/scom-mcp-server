@@ -1,11 +1,11 @@
-# Personal-lab signed evaluation derivative
+# Local signed evaluation derivative
 
 This helper uses an **existing**, currently valid Code Signing certificate and
 its private key in `CurrentUser\My`. It never exports the key, creates a
 certificate, adds trust, changes execution policy, removes zone markings,
-answers security warnings or starts setup/SCOM. The default pinned signer is
-`FD229CD0460526F7A1BDE7AF70C12670C9904B59`, the operator's separately approved
-personal-lab certificate, not a production publisher.
+answers security warnings or starts setup/SCOM. The operator must explicitly
+select the approved certificate's full thumbprint; there is no default signer.
+A thumbprint identifies a certificate but does not establish trust or approval.
 
 The operator must already have approved that exact certificate in **their own**
 CurrentUser Root and TrustedPublisher stores. This does not grant trust to
@@ -14,7 +14,7 @@ another account requires its own approved trust process.
 
 ## One local operation after review
 
-Obtain `Setup\Sign-ScomEvaluationPackage.ps1` from this PR's reviewed exact
+Obtain `Setup\Sign-ScomEvaluationPackage.ps1` from the reviewed exact
 commit, review it, and verify its separately supplied SHA-256. The helper is
 unsigned source: downloading it does not authorize running it. If needed, use
 the normal visible `Set-AuthenticodeSignature` cmdlet with the existing approved
@@ -23,29 +23,24 @@ returns `Valid` with the exact signer, then invoke its file normally. Do not
 load it with `Invoke-Expression`, remove its zone stream, bypass warnings or
 change policy.
 
-The unsigned standalone helper's SHA-256 for this revision is
-`8708A4FFCA7CD17AC007442A85EEA7659780FB01B6A7B26E2DE586E11725B359`.
-Verify this **before** signing the helper; signing intentionally changes its
-bytes. The public source and its matching exact-commit checksum must be
-reviewed before using the lab key.
+Obtain independently verified values for the exact build's unsigned helper
+SHA-256, source commit, original package-manifest SHA-256 and approved signer
+thumbprint from the reviewed build or a trusted administrator. Verify the helper
+hash **before** signing it; signing intentionally changes its bytes. Verify the
+downloaded package archive separately before extraction. A checksum verifies
+bytes against the supplied value, not publisher identity.
 
-For the already downloaded **1b6dc4c** package, the independent original manifest
-pin is:
-
-```text
-sourceCommit: 1b6dc4cd33c7cb0028b8d7e1458cefa91f3bfd93
-package-manifest.json SHA-256:
-052C5D908F9B11E516297F882512F9E5A7D7435CB2C8D342F4564B4DBBD50988
-```
-
-Invoke the normally authorized helper under the key-owning Windows account:
+Invoke the normally authorized helper under the key-owning Windows account,
+replacing every placeholder below with the independently reviewed value or
+approved path; these are not verified customer inputs:
 
 ```powershell
 .\Sign-ScomEvaluationPackage.ps1 `
-  -PackageDirectory 'C:\5\evaluation-1b6dc4cd33c7cb0028b8d7e1458cefa91f3bfd93 (1)\scom-evaluation\ci-evaluation' `
-  -DestinationDirectory 'C:\5\scom-personal-lab-signed' `
-  -ExpectedManifestSha256 '052C5D908F9B11E516297F882512F9E5A7D7435CB2C8D342F4564B4DBBD50988' `
-  -ExpectedSourceCommit '1b6dc4cd33c7cb0028b8d7e1458cefa91f3bfd93'
+  -PackageDirectory '<absolute-path-to-reviewed-original-package>' `
+  -DestinationDirectory '<absolute-path-to-new-sibling-destination>' `
+  -ExpectedManifestSha256 '<independently-verified-manifest-sha256>' `
+  -ExpectedSourceCommit '<independently-reviewed-source-commit>' `
+  -CertificateThumbprint '<explicitly-approved-certificate-thumbprint>'
 ```
 
 Choose the actual original package location and a **new sibling destination**;
