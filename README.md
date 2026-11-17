@@ -536,6 +536,11 @@ NuGet dependencies. It records the checked-out head SHA, runs the same complete
 offline harness, validates a fresh evaluation package and retains a seven-day
 commit-named artifact containing `scom-evaluation.zip` and its SHA-256 sidecar.
 The ZIP includes a per-file SHA-256 manifest and exact source commit identity.
+New evaluation packages and local signed derivatives carry both `format: 1`
+and `schemaVersion: 1`, with `certificationStatus: "notCertified"`. This makes
+their manifests compatible with the upgrade manifest check without certifying a
+deployment. Older schema-only packages remain valid for setup validation but do
+not satisfy that upgrade check.
 It is a review/evaluation build, not a production-certified installer.
 The `Durable indexed refresh synthetic tests` workflow
 additionally runs task-host contracts on Windows PowerShell 5.1 and PowerShell 7

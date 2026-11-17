@@ -31,6 +31,20 @@ try {
     $changed=Join-Path $root 'changed'
     Copy-Item -LiteralPath $source -Destination $changed -Recurse
     $bad=$arguments.Clone();$bad.PackageDirectory=$changed
+    $changedManifestPath=Join-Path $changed 'package-manifest.json'
+    $originalManifest=[IO.File]::ReadAllBytes($changedManifestPath)
+    $changedManifest=Get-Content -LiteralPath $changedManifestPath -Raw | ConvertFrom-Json
+    $changedManifest.format=2
+    [IO.File]::WriteAllText($changedManifestPath,($changedManifest | ConvertTo-Json -Depth 8),[Text.UTF8Encoding]::new($false))
+    $bad.ExpectedManifestSha256=(Get-FileHash -LiteralPath $changedManifestPath -Algorithm SHA256).Hash
+    $invalidFormatRejected=$false
+    try { & $helper @bad | Out-Null } catch {
+        if ($_.Exception.Message -cne 'SIGN_MANIFEST_IDENTITY_OR_FILE_SET_INVALID') { throw }
+        $invalidFormatRejected=$true
+    }
+    if (-not $invalidFormatRejected) { throw 'Signing accepted an incompatible manifest format.' }
+    [IO.File]::WriteAllBytes($changedManifestPath,$originalManifest)
+    $bad.ExpectedManifestSha256=$hash
     [IO.File]::WriteAllText((Join-Path $changed 'unexpected.txt'),'synthetic')
     Reject $bad
     Remove-Item -LiteralPath (Join-Path $changed 'unexpected.txt')
@@ -71,6 +85,7 @@ try {
         $derivative.localSigning.signerThumbprint -ine $cert.Thumbprint -or
         (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256).Hash -cne $hash) { throw 'Signing provenance or original preservation failed.' }
     & (Join-Path $PSScriptRoot 'Test-Package.ps1') -PackageDirectory $arguments.DestinationDirectory -ContentOnly
+    & (Join-Path $PSScriptRoot 'Test-PackageManifest.ps1') -PackageDirectory $arguments.DestinationDirectory -ContentOnly
     Reject $arguments
     Write-Output 'PASS: original manifest pins, overlap/existing outputs, missing signer/trust rejection, actual SHA256 EXE/script signing, archive revalidation, derivative provenance and original preservation. Disposable CI CurrentUser certificate/trust only.'
 } finally {

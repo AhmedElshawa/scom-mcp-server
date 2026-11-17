@@ -28,7 +28,8 @@ function Get-Digest { param([string]$Path) (Get-FileHash -LiteralPath $Path -Alg
 function Assert-Manifest {
     param([string]$Root,$Manifest)
     $files=@(Get-ChildItem -LiteralPath $Root -File -Recurse -Force)
-    if ($Manifest.schemaVersion -ne 1 -or $Manifest.sourceCommit -cne $ExpectedSourceCommit -or
+    if (($Manifest.PSObject.Properties['format'] -and $Manifest.format -ne 1) -or
+        $Manifest.schemaVersion -ne 1 -or $Manifest.sourceCommit -cne $ExpectedSourceCommit -or
         $Manifest.certificationStatus -cne 'notCertified' -or
         $Manifest.files.Count -ne ($files.Count-1)) { throw 'SIGN_MANIFEST_IDENTITY_OR_FILE_SET_INVALID' }
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -119,7 +120,7 @@ try {
     if ((Get-Digest $manifestPath) -ine $ExpectedManifestSha256) { throw 'SIGN_SOURCE_CHANGED_DURING_OPERATION' }
     Assert-Manifest $source $manifest
     $derivative=[ordered]@{
-        schemaVersion=1;sourceCommit=$manifest.sourceCommit;certificationStatus='notCertified'
+        format=1;schemaVersion=1;sourceCommit=$manifest.sourceCommit;certificationStatus='notCertified'
         localSigning=[ordered]@{
             kind='currentUserLabSignedDerivative';originalManifestSha256=$ExpectedManifestSha256.ToUpperInvariant()
             signerThumbprint=$thumb;algorithm='SHA256';timestamped=$false

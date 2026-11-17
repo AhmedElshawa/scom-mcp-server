@@ -65,7 +65,8 @@ foreach ($file in $files | Where-Object Extension -eq '.json') {
     $null = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
 }
 $manifest = Get-Content -LiteralPath (Join-Path $root 'package-manifest.json') -Raw | ConvertFrom-Json
-if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -notmatch '^[a-f0-9]{40}$' -or
+if (($manifest.PSObject.Properties['format'] -and $manifest.format -ne 1) -or
+    $manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -notmatch '^[a-f0-9]{40}$' -or
     $manifest.certificationStatus -cne 'notCertified' -or $manifest.files.Count -ne ($files.Count - 1)) {
     throw 'Package manifest identity or file count mismatch.'
 }

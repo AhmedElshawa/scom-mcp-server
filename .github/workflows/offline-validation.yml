@@ -84,6 +84,7 @@ jobs:
         run: |
           .\package.ps1 -OutputDirectory .\artifacts\ci-evaluation
           .\Validation\Test-Package.ps1 -PackageDirectory .\artifacts\ci-evaluation
+          .\Validation\Test-PackageManifest.ps1 -PackageDirectory .\artifacts\ci-evaluation
           .\Validation\Test-PackageCheckout.ps1 -PackageDirectory .\artifacts\ci-evaluation
           .\Validation\Test-NativeSetup.ps1 -PackageDirectory .\artifacts\ci-evaluation -RunBridgeDiagnostic
           .\Validation\Test-BootstrapSchema.ps1 -PackageDirectory .\artifacts\ci-evaluation

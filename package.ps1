@@ -61,6 +61,6 @@ $manifestFiles = @(Get-ChildItem -LiteralPath $output -Recurse -File | Sort-Obje
         sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
     }
 })
-$manifest = [ordered]@{schemaVersion=1; sourceCommit=$commit; certificationStatus='notCertified'; files=$manifestFiles}
+$manifest = [ordered]@{format=1; schemaVersion=1; sourceCommit=$commit; certificationStatus='notCertified'; files=$manifestFiles}
 [IO.File]::WriteAllText((Join-Path $output 'package-manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 Write-Output 'Package created. It includes the legacy collector and opt-in worker host/ingestion foundation, not a certified SCOM normalization profile.'
