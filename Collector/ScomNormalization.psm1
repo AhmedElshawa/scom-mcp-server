@@ -256,7 +256,20 @@ function Get-SCOMGenericScan {
             $graphQueries++
             $edges = Read-SCOMDirectRelationshipRows -EntityObjects $EntityObjects -SourceId ([Guid]$source.Id) `
                 -RelationshipClass $class -IncludeDerivedRelationships $false -MaxRelationships $MaxObjects
+            $targetClass = $null
+            if ($null -ne $WindowsMapping) {
+                if ($null -ne $WindowsMapping.PSObject.Properties['computerHostsVolumeRelationship'] -and
+                    [string]$class.Name -ceq $WindowsMapping.computerHostsVolumeRelationship) {
+                    $targetClass = $WindowsVolumeClass
+                }
+                elseif ([string]$class.Name -ceq $WindowsMapping.computerHostsOsRelationship) {
+                    $targetClass = $WindowsOsClass
+                }
+            }
             foreach ($edge in $edges.Relationships) {
+                # The mapped hosting relationship also targets non-volume/non-OS devices that the Windows
+                # projection never serves; they are not outside-scope inventory.
+                if ($null -ne $targetClass -and -not $edge.TargetObject.IsInstanceOf($targetClass)) { continue }
                 if (-not $served.Contains([Guid]$edge.TargetObject.Id)) { $outsideEdges=$true; continue }
                 $key = [Guid]$edge.Id
                 if ($relationships.ContainsKey($key)) { throw 'SCOM_PROFILE_RELATIONSHIP_DUPLICATE' }
