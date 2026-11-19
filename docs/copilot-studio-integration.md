@@ -30,9 +30,8 @@ authentication.
 ## 2. Agent instructions
 
 Paste [`examples/agent-instructions.md`](../examples/agent-instructions.md) into the agent's
-Instructions. Replace `scom-lab` if you chose another scope label. The lab-used text lists
-four tools; add `list_os_support_assessments` if you want lifecycle answers from the
-server's catalog rather than the model's own knowledge.
+Instructions. The text names every tool the agent uses, including `list_os_support_assessments`,
+so lifecycle answers come from the server's catalog rather than the model's own knowledge.
 
 ## 3. Test prompts
 
