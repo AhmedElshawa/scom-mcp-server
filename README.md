@@ -1,5 +1,29 @@
 # SCOM MCP Server
 
+## Download, upgrade, schedule
+
+For an **existing configured indexed installation**, use the
+[three-step deployment guide](docs/easy-indexed-upgrade.md):
+**1. Download and verify the release ZIP. 2. Paste the upgrade block into
+Administrator Windows PowerShell 5.1. 3. Create the scheduled worker task.**
+Get the ZIP and SHA256 file from the repository's
+[Releases page](https://github.com/AhmedElshawa/scom-mcp-server/releases).
+No EXE installer, signing/trust changes, database resets or new identity
+provisioning are part of this flow. New installations must complete the
+[indexed deployment prerequisites](docs/indexed-deployment-runbook.md) first.
+
+**Availability limitation:** starting each new collection deliberately makes
+indexed reads unavailable until commit (about 35 seconds in the observed lab,
+not a duration guarantee). A failed attempt can leave them unavailable until
+recovery. Repeated scheduled publications and an operator-rearmed postboot
+publication were observed, but automatic recovery after an unclean reboot was
+not: a startup attempt exited while status still showed the preboot running
+state, consistent with the persisted fail-closed gate (the exit cause was not
+independently proven). The planned cooperative-stop/reboot path remains
+untested. See the [sanitized lab evidence and operator procedure](Operations/DurableIndexedRefresh/README.md).
+This evaluation release is not continuous-availability or production
+certification.
+
 [Overview](#solution-overview) | [Key features](#key-features) | [Get started](#get-started) | [Two-server setup](#two-server-deployment-indexed-path) | [IIS and Copilot Studio](#azure-iis-and-copilot-studio-reader-setup) | [Configuration](#indexed-read-model-configuration-opt-in) | [Deployment acceptance](#deployment-acceptance-checklist) | [Security](#security-and-known-limitations)
 
 SCOM MCP Server connects System Center Operations Manager (SCOM) monitoring data
@@ -536,6 +560,11 @@ NuGet dependencies. It records the checked-out head SHA, runs the same complete
 offline harness, validates a fresh evaluation package and retains a seven-day
 commit-named artifact containing `scom-evaluation.zip` and its SHA-256 sidecar.
 The ZIP includes a per-file SHA-256 manifest and exact source commit identity.
+New evaluation packages and local signed derivatives carry both `format: 1`
+and `schemaVersion: 1`, with `certificationStatus: "notCertified"`. This makes
+their manifests compatible with the upgrade manifest check without certifying a
+deployment. Older schema-only packages remain valid for setup validation but do
+not satisfy that upgrade check.
 It is a review/evaluation build, not a production-certified installer.
 The `Durable indexed refresh synthetic tests` workflow
 additionally runs task-host contracts on Windows PowerShell 5.1 and PowerShell 7
@@ -758,10 +787,10 @@ Do not grant it delegated reader access or reuse a human identity as publisher.
 
 #### 4. Provision the publisher certificate
 
-For an explicitly approved isolated lab publisher, see the
-[MCPTest certificate and Azure portal walkthrough](docs/guided-setup.md#mcptest-a-separate-publisher-certificate-and-app-step-by-step).
-It creates a separate test credential/app without changing the existing
-publisher or reader; customer-managed production enrollment remains separate.
+For reuse guidance and an optional explicitly approved isolated lab publisher, see
+the [publisher identity and certificate walkthrough](docs/guided-setup.md#publisher-identity-and-certificate-reuse-or-create).
+An existing approved identity and certificate can be reused; creating a new
+credential/app is not required. Customer-managed production enrollment remains separate.
 
 Have the certificate/security administrator issue and deploy an approved
 certificate for the worker. The implementation requires an RSA private key of at

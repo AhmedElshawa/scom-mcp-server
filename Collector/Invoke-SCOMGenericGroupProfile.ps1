@@ -17,6 +17,11 @@ try {
         throw 'SCOM_PROFILE_PROTOCOL_INVALID'
     }
     $config = $inputData.configuration
+    $lab = $false
+    if ($null -ne $config.PSObject.Properties['hostingLabPreview']) {
+        if ($config.hostingLabPreview -isnot [bool]) { throw 'SCOM_HOSTING_LAB_CONFIGURATION_INVALID' }
+        $lab = $config.hostingLabPreview
+    }
     $inventoryKind='generic'
     if ($null -ne $config.PSObject.Properties['inventoryKind']) {
         $inventoryKind=$config.inventoryKind
@@ -28,6 +33,14 @@ try {
         Write-SCOMOperationalEvent -Log $operationalLog -Event 'profile.started'
     }
     elseif ($inventoryKind -ceq 'supportedWindows') { throw 'SCOM_PROFILE_LOGGING_REQUIRED' }
+    if ($lab -and ($inventoryKind -cne 'supportedWindows' -or $config.scopeKind -cne 'managementGroup' -or
+        $config.additionalRelationshipContractVerified -isnot [bool] -or $config.additionalRelationshipContractVerified -or
+        $config.additionalRelationshipNames -isnot [array] -or $config.additionalRelationshipNames.Count -ne 2 -or
+        @($config.metricMappingsByClass.PSObject.Properties).Count -ne 0 -or $config.includeAlertDescriptions -ne $false -or
+        $null -eq $config.windowsMapping -or
+        ($config.windowsMapping.PSObject.Properties['monitoringRoleMapping'] -and $null -ne $config.windowsMapping.monitoringRoleMapping))) {
+        throw 'SCOM_HOSTING_LAB_CONFIGURATION_INVALID'
+    }
     if ($inventoryKind -ceq 'supportedWindows' -and (
         $null -eq $config.PSObject.Properties['windowsMapping'] -or $null -eq $config.windowsMapping -or
         $config.windowsMapping.verified -isnot [bool] -or -not $config.windowsMapping.verified)) {
@@ -93,7 +106,7 @@ try {
         $scopeParameters.WholeManagementGroupApproved=$config.wholeManagementGroupApproved
         $scopeParameters.EnumerationQueryContractVerified=$config.enumerationQueryContractVerified
     }
-    $allowed = @{}
+    $allowed = [hashtable]::new([StringComparer]::Ordinal)
     foreach ($property in $config.allowedPropertiesByClass.PSObject.Properties) {
         $allowed[$property.Name] = @($property.Value)
     }
@@ -115,7 +128,7 @@ try {
         if (@($config.additionalRelationshipNames).Count -gt 16 -or
             $config.additionalRelationshipContractVerified -isnot [bool]) { throw 'SCOM_PROFILE_GRAPH_CONFIGURATION_INVALID' }
         $graphVerified = $config.additionalRelationshipContractVerified
-        if (@($config.additionalRelationshipNames).Count -gt 0 -and -not $graphVerified) {
+        if (@($config.additionalRelationshipNames).Count -gt 0 -and -not ($graphVerified -or $lab)) {
             throw 'SCOM_PROFILE_GRAPH_CONTRACT_UNVERIFIED'
         }
         foreach ($name in $config.additionalRelationshipNames) {
@@ -137,6 +150,7 @@ try {
         MetricMappingsByClass = $metrics
         AdditionalRelationshipClasses = $graphClasses
         AdditionalRelationshipContractVerified = $graphVerified
+        HostingLabPreview = $lab
         MaxGraphQueries = $maxGraphQueries
         MaxSeriesSamples = $maxSeriesSamples
         MaxMetricSamples = $maxMetricSamples

@@ -168,7 +168,7 @@ public sealed class IngestionPublisher : IDisposable
                 }
                 if (response.StatusCode is not (HttpStatusCode.RequestTimeout or HttpStatusCode.TooManyRequests or
                     HttpStatusCode.BadGateway or HttpStatusCode.ServiceUnavailable or HttpStatusCode.GatewayTimeout))
-                    throw new IngestionPublicationException("PUBLISHER_HTTP_" + (int)response.StatusCode);
+                    throw new IngestionPublicationException(await RejectionCode(response, requestDeadline.Token));
                 var retry = response.Headers.RetryAfter;
                 var serverDelay = retry?.Delta ?? (retry?.Date - DateTimeOffset.UtcNow);
                 if (serverDelay is { } requested)
@@ -187,6 +187,33 @@ public sealed class IngestionPublisher : IDisposable
             if (attempt == settings.MaxAttempts)
                 throw new IngestionPublicationException("PUBLISHER_RETRY_EXHAUSTED");
             await Task.Delay(delay, token);
+        }
+    }
+
+    private static async Task<string> RejectionCode(HttpResponseMessage response, CancellationToken token)
+    {
+        var fallback = "PUBLISHER_HTTP_" + (int)response.StatusCode;
+        if (response.StatusCode != HttpStatusCode.Conflict || response.Content.Headers.ContentLength > 4096)
+            return fallback;
+        using var buffer = new BoundedStream(4096);
+        try
+        {
+            await response.Content.CopyToAsync(buffer, token);
+            using var json = JsonDocument.Parse(buffer.ToArray());
+            SnapshotReader.RejectDuplicateProperties(json.RootElement);
+            var root = json.RootElement;
+            if (root.ValueKind != JsonValueKind.Object ||
+                !root.TryGetProperty("error", out var error) || error.ValueKind != JsonValueKind.String ||
+                error.GetString() != "INGESTION_REJECTED" ||
+                !root.TryGetProperty("reason", out var reason) || reason.ValueKind != JsonValueKind.String)
+                return fallback;
+            var allowed = ReadModelHosting.RejectionReason(reason.GetString()!);
+            return allowed == "INGESTION_REJECTED" ? fallback : "PUBLISHER_" + allowed;
+        }
+        catch (Exception error) when (error is JsonException or QueryFault or IngestionPublicationException)
+        {
+            // Invalid rejection bodies remain permanent HTTP failures, never recovery authorization.
+            return fallback;
         }
     }
 

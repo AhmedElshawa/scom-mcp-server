@@ -43,7 +43,10 @@ Invoke-ScomSetupWorkerPublication -Plan $plan -CallerName ([Security.Principal.W
     if ($LASTEXITCODE -ne 0) { throw 'SETUP_CONFIGURATION_OR_SOURCE_EVIDENCE_BLOCKED' }
 } -RunOnce {
     param($p)
-    $output = & dotnet (Join-Path $p.installPath 'server\ScomMcp.dll') --worker-once (Join-Path $p.privatePath 'worker.json')
+    # The worker writes its operational marker to stderr; Windows PowerShell 5.1 turns redirected stderr into
+    # terminating errors under 'Stop', so relax it only for this native call.
+    $ErrorActionPreference = 'Continue'
+    $output = & dotnet (Join-Path $p.installPath 'server\ScomMcp.dll') --worker-once (Join-Path $p.privatePath 'worker.json') 2>&1 | ForEach-Object { "$_" }
     [pscustomobject]@{exitCode=$LASTEXITCODE;published=[bool]($output -match 'SCOM_WORKER_PUBLISHED')}
 }
 Write-Output 'SCOM_WORKER_PUBLISHED observed after checkpoint acknowledgement. Receipt is worker-reported operational evidence, not reader acceptance or certification.'

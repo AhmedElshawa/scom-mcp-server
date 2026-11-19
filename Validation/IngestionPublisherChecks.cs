@@ -52,6 +52,27 @@ static class IngestionPublisherChecks
                 "PUBLISHER_HTTP_" + (int)code, "permanent status is not retried");
             Check(reject.Attempts == 1, "no retry or redirect for permanent response");
         }
+        foreach (var body in new[]
+        {
+            "{\"error\":\"INGESTION_REJECTED\",\"reason\":\"SESSION_EXPIRED_EMPTY_RESERVATION\"}",
+            "{\"error\":\"INGESTION_REJECTED\",\"reason\":\"SESSION_REPLAY_OR_EXPIRED\"}",
+            "{\"error\":\"INGESTION_REJECTED\",\"reason\":\"private-sensitive-marker\"}",
+            "{\"error\":\"WRONG\",\"reason\":\"SESSION_EXPIRED_EMPTY_RESERVATION\"}",
+            "{\"error\":\"INGESTION_REJECTED\",\"reason\":\"SESSION_EXPIRED_EMPTY_RESERVATION\",\"reason\":\"SESSION_EXPIRED_EMPTY_RESERVATION\"}",
+            new string('x', 5000),
+            "{!"
+        })
+        {
+            var reject = new ReplyHandler(_ => new(HttpStatusCode.Conflict) { Content = new StringContent(body) });
+            using var publisher = new IngestionPublisher(Settings(), _ => Task.FromResult("synthetic-token"), reject);
+            var expected = body == "{\"error\":\"INGESTION_REJECTED\",\"reason\":\"SESSION_EXPIRED_EMPTY_RESERVATION\"}"
+                ? "PUBLISHER_SESSION_EXPIRED_EMPTY_RESERVATION"
+                : body == "{\"error\":\"INGESTION_REJECTED\",\"reason\":\"SESSION_REPLAY_OR_EXPIRED\"}"
+                    ? "PUBLISHER_SESSION_REPLAY_OR_EXPIRED" : "PUBLISHER_HTTP_409";
+            await Fault(() => publisher.BeginAsync(Guid.NewGuid().ToString("D"), CancellationToken.None),
+                expected, "only bounded allowlisted receiver reasons are propagated");
+            Check(reject.Attempts == 1, "rejection reason parsing never retries a permanent conflict");
+        }
         var unavailable = new ReplyHandler(_ => new(HttpStatusCode.ServiceUnavailable));
         var oneAttempt = Settings();
         oneAttempt.MaxAttempts = 1;

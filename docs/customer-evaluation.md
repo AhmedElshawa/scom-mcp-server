@@ -61,6 +61,38 @@ This was a bounded deployment/package-readiness review with regression validatio
 not an exhaustive independent review of every feature-branch change or a security
 certification.
 
+### Sanitized indexed-refresh lab evidence
+
+The current repository records these operator-reported observations so they are
+not mistaken for chat-only acceptance:
+
+- The first public preview's upgrade block failed under StrictMode on a
+  non-executable scheduled-task action before IIS stop or file copy. The source
+  guard is corrected and tested for mixed ComHandler/Exec actions in Windows
+  PowerShell 5.1 and PowerShell 7. The earlier preview remains immutable; the
+  correction is not represented as an asset already present in that ZIP.
+- The operator subsequently ran the corrected full upgrade against an existing
+  configured indexed installation, confirmed private configuration, profile and
+  database preservation, and observed a new fresh agent dataset with complete
+  3/3 expected coverage.
+- A reboot without a preceding cooperative stop caused the startup task to exit
+  nonzero while protected runtime status still represented a preboot `running`
+  worker. The exact exit cause was not independently proven. After checking the
+  exact stopped task/action/identity, absence of the worker and the stale
+  preboot status, the operator explicitly rearmed and started it; the agent
+  confirmed a fresh postboot dataset at 08:03:35Z with 3/3 expected coverage.
+- This supports the persisted fail-closed gate and deliberate recovery path. It
+  does **not** demonstrate automatic reboot recovery. Clean cooperative stop
+  followed by reboot with the task left enabled is the documented planned path,
+  but has not yet been live-tested.
+
+The first preview's observed collection temporarily made readers unavailable
+between ingestion Begin and commit (about 35 seconds in the observed run, not a
+duration guarantee). A failed attempt can extend the gap until recovery. Fresh
+retained data, task liveness and worker health are separate signals. The
+[durable-refresh operator guide](../Operations/DurableIndexedRefresh/README.md)
+contains the sanitized event sequence and scoped native stop/rearm procedures.
+
 ### Upgrade constraints added by the correctness fixes
 
 The Windows worker requires Windows 10/Server 2016+ Job Object process-creation
@@ -82,8 +114,8 @@ delete state or point the receiver at the worker checkpoint to bypass startup.
 | Clean installation | An authorized operator follows only the shipped runbook on a clean supported host, recording steps, deviations and corrections. Not yet established by offline packaging checks. |
 | SCOM compatibility and scope | Exact SDK/management-pack versions, read-only identity, independently verified complete expected membership and reviewed relationship/property contracts. Do not enable verification flags by assumption. |
 | Inventory acceptance | Successful first commit and authenticated source status, pages, details and summary with matching dataset/count evidence and honest coverage. Lab success does not replace customer evidence. |
-| Continuous operation | Supervised recurring collection, subsequent datasets and membership changes, failure monitoring, freshness/cadence suitability, disk budgets and certificate rotation. |
-| Recovery and upgrade | Protected backups, controlled package replacement, checkpoint/policy compatibility and approved failure/restore rehearsal. Never delete pinned state to make checks pass. |
+| Continuous operation | Supervised recurring collection, subsequent datasets and membership changes, failure monitoring, freshness/cadence suitability, disk budgets and certificate rotation. Observed repeated publications do not establish clean logoff/reboot recovery or a continuous-availability SLA. |
+| Recovery and upgrade | Protected backups, controlled package replacement, checkpoint/policy compatibility and approved failure/restore rehearsal. Operator-driven rearm after an unclean reboot has lab evidence; automatic rearm is intentionally absent, and the planned clean-stop/reboot path remains untested. Never delete pinned state to make checks pass. |
 | Copilot Studio identity | Intended per-caller delegated authorization and denied-caller/scope behavior through the real connector. |
 | Metrics, if enabled | Timestamp semantics, rule/unit mappings, raw observation parity and approved 14-day workload/budget tests. Inventory acceptance alone is insufficient. |
 | OS lifecycle | Implemented curated Windows Server profile, not universal OS support. Validate actual captions/editions, catalog freshness/maintenance ownership, unknown/missing counts and Studio interpretation; no entitlement or patch-compliance claim. |

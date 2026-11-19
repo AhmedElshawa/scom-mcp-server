@@ -12,7 +12,7 @@ public sealed record NormalizedSourceScan(string ManagementGroupId, string Scope
     ImmutableArray<ObservedAlert> AlertObservations, DomainObservation Alerts,
     ImmutableArray<MetricSeriesScan> MetricSeries, DateTimeOffset MetricsAsOfUtc,
     WindowsInventoryBatch? WindowsInventory = null, ImmutableArray<string>? ExpectedComputerIds = null,
-    DomainObservation? MetricAssessment = null);
+    DomainObservation? MetricAssessment = null, string? InventoryKind = null);
 
 public interface IScomNormalizationProfile
 {
@@ -190,6 +190,22 @@ public sealed class ReconciledCollectionSource : IScomCollectionSource
         finally { gate.Release(); }
     }
 
+    public async Task<string?> ReplaceExpiredEmptyReservationAsync(string sessionId, CancellationToken cancellationToken)
+    {
+        await gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (checkpoint is null || reserved != sessionId || pending is not null ||
+                pendingCollection is not null || acknowledged == sessionId)
+                return null;
+            var replacement = Guid.NewGuid().ToString("D");
+            checkpoint.Save(new(priorAlerts, priorMetrics, priorScope, null, acknowledged, replacement), settingsHash);
+            reserved = replacement;
+            return replacement;
+        }
+        finally { gate.Release(); }
+    }
+
     private PreparedCollection Prepared(PendingSourceState state) =>
         new(state.SessionId, state.Manifest, Batches(state.Inventory, state.ServedAlerts, state.ServedMetrics));
 
@@ -236,6 +252,7 @@ public sealed class ReconciledCollectionSource : IScomCollectionSource
     private void ValidateScan(NormalizedSourceScan? scan)
     {
         if (scan is null || !scan.MembershipVerified || !Canonical(scan.ManagementGroupId) ||
+            scan.InventoryKind is not (null or "supportedWindows") ||
             scan.ScopeKind is not ("group" or "managementGroup") ||
             (scan.ScopeKind == "group" ? !Canonical(scan.GroupId) : scan.GroupId is not null) ||
             scan.ExpectedObjectIds.IsDefault || scan.ExpectedObjectIds.Length > settings.MaxRecords ||

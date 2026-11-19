@@ -119,7 +119,7 @@ Review these paired settings before activation:
 | Settings | Required agreement |
 |---|---|
 | Management-group ID, scope kind, group ID | Same on both sides; group ID is null only for explicitly approved `managementGroup` scope |
-| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` approve the intended fields for actual discovered class names; base-class mappings are not automatically inherited. Optional OS captions additionally require matching worker `windowsMapping.osCaptionProperty` and receiver `WindowsOsCaptionProperty`, plus reviewed `WindowsMetricHosting` for typed source provenance; see [README](../README.md). These are pinned policy changes, not an in-place database edit. |
+| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` use exact, case-sensitive most-derived class names. A base-class entry does not expose generic properties on derived objects, even if the SDK reports those properties as inherited. To expose such properties, review the actual concrete class and property and add that exact pair to both lists. The typed Windows projection reads its separately reviewed computer, OS and disk mappings from the SDK (including inherited properties reported by the SDK); a base-only generic allowlist does not remove those typed fields. Optional OS captions additionally require exact class/property approval, matching worker `windowsMapping.osCaptionProperty` and receiver `WindowsOsCaptionProperty`, plus reviewed `WindowsMetricHosting` for typed source provenance; see [README](../README.md). These are pinned policy changes, not an in-place database edit. |
 | Windows mapping | Verified properties, units, typed relationships and monitoring-role mapping; collect the corresponding hosting relationships |
 | Metrics | Start with worker `metricMappingsByClass={}` and receiver `AllowedMetricsByClass={}` until metric acceptance is separately complete |
 | Freshness | `Source` and `ReadModel` fresh/unavailable settings match |
@@ -127,6 +127,65 @@ Review these paired settings before activation:
 | Publisher endpoint | HTTPS application base URL, including any IIS application prefix; omit `/mcp` and `/ingestion` |
 | Identity resource | API Application ID URI; omit `/.default` because the worker adds it |
 | Local storage | Worker checkpoint DB and receiver DB are separate; neither is a shared network database |
+
+### Typed relationship-query stop gate
+
+The current collector reader retrieves exact named relationships for one source
+through the installed `GetRelationshipObjectsWhereSource<T>` SDK overload. That
+overload returns an `IList`; the installed contract used by this candidate does
+not accept a positive `ObjectQueryOptions.MaxResultCount`. The collector therefore
+checks its relationship budget only after the SDK has materialized the result.
+This is not a hard bound on SCOM-side work or result materialization.
+
+**Stop before configuring or publishing Windows inventory** unless the exact
+installed SCOM SDK/version has an independently reviewed supported contract for:
+
+1. Filtering by one source-object ID and the exact named typed relationship, with
+   the intended derived-relationship behavior.
+2. Server-enforced bounded retrieval (such as documented paging or a
+   max-plus-one overflow result) with reliable completeness/truncation detection.
+3. The required bound on backend/source work itself; a local result cap, timeout,
+   small observed result, signature listing or successful query does not prove it.
+
+The first-publication approval covers one local worker attempt; it does not
+waive this gate. Do not use direct `--worker-once` as an alternative: it does
+not participate in the setup publication journal and can be invoked repeatedly.
+`SourceWorkBoundVerified` is a reader result, not a worker setting or a runtime
+interlock. `additionalRelationshipContractVerified` is a separate assertion
+about the configured relationship query contract, not permission to accept
+backend load. Do not set it as a substitute for missing query evidence. A
+successful paired settings validation does not establish relationship
+completeness or a backend-work limit.
+
+The optional hosting lab preview is not a production exception to this gate.
+It pairs receiver `ReadModel.OfflineHostingPreview=true` with worker
+`profile.configuration.hostingLabPreview=true`. Use only a new isolated receiver,
+checkpoint and approved lab SCOM/SQL backend. Keep the whole-Windows scope,
+visibility, enumeration, property and unit evidence requirements. Configure only
+the exact computer-to-OS and one disk-hosting relationship; omit the monitoring-role
+mapping and keep `additionalRelationshipContractVerified` false. Monitoring roles
+remain unknown; alerts, metrics and live checks stay disabled. The local result
+limit and timeout do not bound SDK/SQL work. A separate approved worker-once
+attempt is required; no recurrence or normal acceptance. The receiver accepts at
+most one capture and always reports `status: "partial"` and
+`coverage.complete: false` on Windows inventory responses, even if the expected
+and observed device counts match. Do not reuse or delete its attempt journal or
+promote the preview to production.
+
+The documented `GetRelatedObjects` containment overload is not a replacement for
+typed OS/disk hosting edges. Do not try an unbounded relationship query to gather
+evidence, infer verification flags from SDK metadata or fixtures, or set
+`MembershipQueryContractVerified`, `ScopeVisibilityVerified`,
+`ScopeMembershipVerified` or `SourceWorkBoundVerified` true without the applicable
+independent evidence. Keep the affected checks blocked until engineering has
+implemented and tested a supported bounded reader or the required source contract
+has been established. If the installed SDK has no such supported contract, this
+is a product/source-contract blocker—not an operator configuration error.
+
+Implementation details and the existing post-materialization behavior are
+recorded in the repository's [SCOM source-reader notes](../README.md#source-adapter-certification-gate).
+This gate is independent of local prerequisites, bounded group-name discovery,
+IIS health and the operator's separately approved whole-supported-Windows scope.
 
 Do not guess class/property names, conversions or SDK methods. Reuse verified
 evidence only for its documented environment/account context. Protect dependencies
@@ -347,6 +406,21 @@ If status is malformed, stop and inspect protected state; do not edit or delete
 it to bypass the gate. Rearm does not establish that a remote/backend operation
 was cancelled or that publication succeeded; retain evidence and reconcile
 before resuming collection.
+
+An expired ingestion reservation with no local prepared payload can be recovered
+without clearing databases: deploy the reviewed matching receiver and worker
+package while the exact worker is stopped, preserving private configuration,
+protected backups, checkpoint and receiver ledger. The updated receiver must
+explicitly return `SESSION_EXPIRED_EMPTY_RESERVATION` for the same publisher's
+expired staging session with zero batches. Only then may the worker replace an
+unprepared, unacknowledged durable reservation once per attempt. Local pending
+payloads, receiver batches and ambiguous outcomes never authorize rotation;
+committed pending publications retain same-identity reconciliation. An old
+receiver's generic `PUBLISHER_HTTP_409` cannot authorize this recovery. After
+diagnosis, explicitly rearm and start once, then verify committed publication
+and a subsequent refresh with authenticated freshness checks. See the operational
+README's expired reservation procedure; never reset checkpoints or edit
+receiver/session tables to bypass a rejection.
 
 The worker's last publication timestamp and the task's `Running` state are
 separate signals. Use authenticated `get_source_status`, coverage and the

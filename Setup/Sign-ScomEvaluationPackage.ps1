@@ -4,7 +4,7 @@ param(
     [Parameter(Mandatory)][string]$DestinationDirectory,
     [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{64}$')][string]$ExpectedManifestSha256,
     [Parameter(Mandatory)][ValidatePattern('^[a-f0-9]{40}$')][string]$ExpectedSourceCommit,
-    [ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$CertificateThumbprint='FD229CD0460526F7A1BDE7AF70C12670C9904B59'
+    [Parameter(Mandatory)][ValidatePattern('^[A-Fa-f0-9]{40}$')][string]$CertificateThumbprint
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
@@ -28,7 +28,8 @@ function Get-Digest { param([string]$Path) (Get-FileHash -LiteralPath $Path -Alg
 function Assert-Manifest {
     param([string]$Root,$Manifest)
     $files=@(Get-ChildItem -LiteralPath $Root -File -Recurse -Force)
-    if ($Manifest.schemaVersion -ne 1 -or $Manifest.sourceCommit -cne $ExpectedSourceCommit -or
+    if (($Manifest.PSObject.Properties['format'] -and $Manifest.format -ne 1) -or
+        $Manifest.schemaVersion -ne 1 -or $Manifest.sourceCommit -cne $ExpectedSourceCommit -or
         $Manifest.certificationStatus -cne 'notCertified' -or
         $Manifest.files.Count -ne ($files.Count-1)) { throw 'SIGN_MANIFEST_IDENTITY_OR_FILE_SET_INVALID' }
     $seen=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
@@ -81,7 +82,7 @@ foreach ($entry in $targets) {
 $cert=Get-Item -LiteralPath ('Cert:\CurrentUser\My\'+$thumb)
 $now=Get-Date
 if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt $now -or $cert.NotAfter -le $now -or
-    @($cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId.Value -ceq '1.3.6.1.5.5.7.3.3' }).Count -ne 1) {
+    @($cert.EnhancedKeyUsageList | Where-Object { $_.ObjectId -ceq '1.3.6.1.5.5.7.3.3' }).Count -ne 1) {
     throw 'SIGN_CERTIFICATE_KEY_VALIDITY_OR_EKU_INVALID'
 }
 foreach ($storeName in @('Root','TrustedPublisher')) {
@@ -119,7 +120,7 @@ try {
     if ((Get-Digest $manifestPath) -ine $ExpectedManifestSha256) { throw 'SIGN_SOURCE_CHANGED_DURING_OPERATION' }
     Assert-Manifest $source $manifest
     $derivative=[ordered]@{
-        schemaVersion=1;sourceCommit=$manifest.sourceCommit;certificationStatus='notCertified'
+        format=1;schemaVersion=1;sourceCommit=$manifest.sourceCommit;certificationStatus='notCertified'
         localSigning=[ordered]@{
             kind='currentUserLabSignedDerivative';originalManifestSha256=$ExpectedManifestSha256.ToUpperInvariant()
             signerThumbprint=$thumb;algorithm='SHA256';timestamped=$false

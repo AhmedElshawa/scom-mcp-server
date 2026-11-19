@@ -15,6 +15,7 @@ internal sealed class WizardForm : Form
     internal bool CanManageWorkerTask => !busy && !workerPlanMode.Checked && acceptedTaskJournal is not null &&
         acceptedTaskJournal == fields["stateDirectory"].Text.Trim();
     internal string StatusText => status.Text;
+    internal string PrerequisiteStatusText => prerequisiteStatus.Text;
     internal string ConfigurationInputText => configurationInputs.Text;
     internal Func<string, bool> DiagnosticWriter { get; set; }
     private readonly Panel pages = new() { Dock = DockStyle.Fill };
@@ -22,6 +23,9 @@ internal sealed class WizardForm : Form
     private readonly List<string> pageTitles = [];
     private readonly Label heading = new() { AutoSize = true, Font = new Font(SystemFonts.DefaultFont.FontFamily, 17, FontStyle.Bold) };
     private readonly FlowLayoutPanel checkResults = new() { AutoSize = true, FlowDirection = FlowDirection.TopDown, WrapContents = false };
+    private const string PolicyNotice = " Script signing and Windows policy remain enforced.";
+    private readonly Label prerequisiteStatus = new() { AutoSize = true, MaximumSize = new Size(800, 0),
+        Text = "Checking has not run yet." + PolicyNotice };
     private readonly ComboBox sites = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 700 };
     private readonly ComboBox certificates = new() { DropDownStyle = ComboBoxStyle.DropDownList, Width = 700 };
     private readonly Label workerIdentity = new() { AutoSize = true, MaximumSize = new Size(800, 0) };
@@ -123,7 +127,7 @@ internal sealed class WizardForm : Form
         Note(welcome, "Setup checks this computer automatically. Green means a check actually passed; red items need attention. " +
             "This read-only check does not connect to SCOM, install software or request elevation.");
         welcome.Controls.Add(checkResults);
-        Note(welcome, "Checking has not run yet. Script signing and Windows policy remain enforced.");
+        welcome.Controls.Add(prerequisiteStatus);
         ActionButton(welcome, "Check again", "Bootstrap");
 
         var logs = Page("Choose log folder");
@@ -193,11 +197,20 @@ internal sealed class WizardForm : Form
         Note(scope, "Choose an existing group after separately approving a bounded discovery read. No members or inventory are collected.");
         ActionButton(scope, "Discover existing groups…", "Discover");
         scope.Controls.Add(groups); scope.Controls.Add(wholeWindows);
-        wholeWindows.CheckedChanged += (_, _) => { groups.Enabled = !wholeWindows.Checked; UpdateNavigation(); };
-        groups.SelectedIndexChanged += (_, _) => UpdateNavigation();
+        wholeWindows.CheckedChanged += (_, _) =>
+        {
+            groups.Enabled = !wholeWindows.Checked;
+            RefreshDiscoveryScopeStatus();
+            UpdateNavigation();
+        };
+        groups.SelectedIndexChanged += (_, _) =>
+        {
+            if (groups.SelectedItem is GroupItem item) loadedGroupId = item.Id;
+            RefreshDiscoveryScopeStatus();
+            UpdateNavigation();
+        };
         Note(scope, "Windows inventory retains the observed OS version. Optional product/edition (osCaption) requires matching reviewed " +
             "property mappings (candidate: OSVersionDisplayName) and typed OS hosting; missing or unpopulated values stay unknown. No build-to-product inference.");
-        groups.SelectedIndexChanged += (_, _) => { if (groups.SelectedItem is GroupItem item) loadedGroupId = item.Id; };
         Note(scope, "Whole-management-group includes all supported Windows inventory, not every SCOM class. It requires its own separate confirmation.");
 
         var prerequisites = details;
@@ -590,6 +603,9 @@ internal sealed class WizardForm : Form
         existingPools = pools; sites.Items.Clear(); sites.Items.Add(site); sites.SelectedIndex = 0;
     }
 
+    internal void SelectGroupForTest(int index) => groups.SelectedIndex = index;
+    internal void SetWholeScopeForTest(bool selected) => wholeWindows.Checked = selected;
+
     private void SelectPlacement()
     {
         if (updating || sites.SelectedItem is not SiteOption site) return;
@@ -730,6 +746,7 @@ internal sealed class WizardForm : Form
         {
             actualChecksReceived = false;
             prerequisitesPassed = false;
+            prerequisiteStatus.Text = "Checking local prerequisites; results are not yet available." + PolicyNotice;
             checkResults.Controls.Clear();
             checkResults.Controls.Add(new Label { Text = "Checking local prerequisites…", AutoSize = true });
         }
@@ -862,11 +879,7 @@ internal sealed class WizardForm : Form
             foreach (var group in (response.Groups ?? []).Take(500))
                 if (Guid.TryParseExact(group.Id, "D", out var id) && id != Guid.Empty)
                     groups.Items.Add(new GroupItem { Id = id.ToString("D"), DisplayName = group.DisplayName });
-            string scope = wholeWindows.Checked
-                ? "ALL supported Windows inventory is selected (not every SCOM class); each action still needs separate approval."
-                : groups.Items.OfType<GroupItem>().Any()
-                    ? "Select one existing discovered SCOM group explicitly."
-                    : "No existing SCOM group was returned; select one if available or review the broader scope separately.";
+            string scope = DiscoveryScopeSummary();
             status.Text = $"Discovery complete. {scope} This discovery did not read inventory or perform an install action. Current stage: {deploymentStage ?? "unknown"}.";
         }
         if (action == "Connect" && response.Ok && !response.ApprovalRequired) sourceConnected = true;
@@ -879,12 +892,35 @@ internal sealed class WizardForm : Form
         UpdateNavigation();
     }
 
+    private string DiscoveryScopeSummary() => wholeWindows.Checked
+        ? "ALL supported Windows inventory is selected (not every SCOM class); each action still needs separate approval."
+        : groups.SelectedItem is GroupItem
+            ? "A discovered SCOM group is selected; each action still needs separate approval."
+            : groups.Items.OfType<GroupItem>().Any()
+                ? "Select one existing discovered SCOM group explicitly."
+                : "No existing SCOM group was returned; select one if available or review the broader scope separately.";
+
+    private void RefreshDiscoveryScopeStatus()
+    {
+        const string prefix = "Discovery complete. ";
+        const string description = " This discovery did not read inventory or perform an install action.";
+        if (!status.Text.StartsWith(prefix, StringComparison.Ordinal)) return;
+        int descriptionIndex = status.Text.IndexOf(description, prefix.Length, StringComparison.Ordinal);
+        if (descriptionIndex < 0) return;
+        status.Text = prefix + DiscoveryScopeSummary() + status.Text[descriptionIndex..];
+    }
+
     private void RenderChecks(BridgeResponse response)
     {
         checkResults.Controls.Clear();
         var checks = response.Checks ?? [];
         actualChecksReceived = checks.Length > 0;
         prerequisitesPassed = response.Ok && actualChecksReceived && checks.All(check => check.Passed) && !response.ApprovalRequired;
+        prerequisiteStatus.Text = (prerequisitesPassed
+            ? "Prerequisite results received: all checks passed. Installation still requires separate approval."
+            : actualChecksReceived
+                ? "Prerequisite results received: setup remains blocked. Review the checks and diagnostic status."
+                : "NOT CHECKED: no prerequisite results were received. Setup remains blocked; review the diagnostic status.") + PolicyNotice;
         if (checks.Length == 0)
             checkResults.Controls.Add(new Label { Text = "NOT CHECKED — no prerequisite results were received. Review the specific diagnostic code below; the cause is not yet established.",
                 ForeColor = Color.Firebrick, AutoSize = true, MaximumSize = new Size(800, 0) });

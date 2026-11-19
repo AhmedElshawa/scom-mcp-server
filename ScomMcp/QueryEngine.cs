@@ -290,11 +290,13 @@ public sealed partial class QueryEngine(SourceSettings settings, TimeProvider cl
             : BaseLimitations.AsEnumerable();
         var limitations = baseLimitations.Concat(s.Limitations).Concat(ds.ValidationLimitations)
             .Concat(extra ?? []).Concat(fresh ? [] : new[] { "SNAPSHOT_STALE" }).Distinct().ToImmutableArray();
-        var partial = forcePartial || !fresh || s.Status == "partial" || s.Devices.Length != s.ExpectedDeviceCount ||
+        var coverageComplete = s.Devices.Length == s.ExpectedDeviceCount &&
+            !(ds.StorageMode == "indexed" && s.Limitations.Contains(ReadModelSettings.OfflineHostingPreviewReason));
+        var partial = forcePartial || !fresh || s.Status == "partial" || !coverageComplete ||
             ds.ValidationLimitations.Length != 0 || (extra?.Any() ?? false);
         return new Envelope("1.0", partial ? "partial" : "ok", "scom", s.DatasetId, s.Scope, data,
             s.CollectedAtUtc, new Freshness(age, fresh ? "fresh" : "stale"),
-            new Coverage(s.ExpectedDeviceCount, s.Devices.Length, s.Devices.Length == s.ExpectedDeviceCount, s.CollectionStartedAtUtc),
+            new Coverage(s.ExpectedDeviceCount, s.Devices.Length, coverageComplete, s.CollectionStartedAtUtc),
             limitations, s.SourceRefs, Guid.NewGuid().ToString("D"));
     }
 

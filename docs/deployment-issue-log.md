@@ -18,6 +18,7 @@ configuration payloads or certificate details.
 | Health probe recorded status 0 after a targeted recycle | The failing probe used localhost HTTP and encountered HTTP 503; it did not verify the configured HTTPS endpoint | The intended hostname-based HTTPS probe passed with normal certificate validation (200). Use the configured hostname, port and application prefix. Status 0 is not an HTTP response. Do not infer startup failure from an unrelated binding or recycle again without evidence. |
 | Publisher could not use an HTTPS application base with a path prefix | Publisher originally required the URL root | Preserve the configured application prefix and normalize the trailing slash for relative ingestion routes. HTTPS/URI restrictions and no-redirect behavior remain. Root/single/nested-path regression coverage exists. |
 | Binary package README linked to omitted deployment guides and image | Packaging copied README/license but not linked documentation assets | Package the explicit documentation/image allowlist and validate required content, local Markdown file links, example JSON and common private/runtime-state exclusions before distribution. |
+| First public preview upgrade block failed under StrictMode on a scheduled-task action without `Arguments` | Scheduled task action types are heterogeneous; ComHandler/non-executable actions need not expose the `Arguments` property | The repository guard now checks property presence before reading it and retains the worker match for Exec actions. Mixed-action regression assertions pass under Windows PowerShell 5.1 and PowerShell 7. The earlier preview ZIP/tag is unchanged; do not claim its embedded guide contains this fix until a later reviewed package is published. |
 
 ## Verified outcome and remaining boundaries
 
@@ -47,6 +48,11 @@ configuration payloads or certificate details.
 - [Customer evaluation gates](customer-evaluation.md) distinguish offline package
   verification from a clean-host installation, live customer acceptance and a
   reviewed versioned release.
+- Sanitized [durable-refresh lab and reboot evidence](../Operations/DurableIndexedRefresh/README.md)
+  records the StrictMode upgrade issue, preservation/publication observations,
+  stale preboot status, explicitly rearmed postboot recovery, and the still
+  untested planned clean-stop/reboot path. The exact startup task exit cause is
+  not independently proven.
 
 ## Independent-review corrections
 

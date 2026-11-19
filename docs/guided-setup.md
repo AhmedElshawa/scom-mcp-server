@@ -1,15 +1,20 @@
 # Guided, resumable setup (evaluation installer)
 
+Example paths, account names and commands in this guide are illustrative, not
+verified deployment inputs. Replace them with values reviewed for the actual
+environment before use; preserve existing private state and approval gates.
+
 ## Double-click quickstart
 
 Download the reviewed CI evaluation artifact. Verify the SHA-256 of the **inner
 `scom-evaluation.zip`** against a value obtained independently from the reviewed CI
 run or a trusted administrator. A matching hash verifies the downloaded bytes,
-not who published them. If the customer's administrator approves running this
-unsigned evaluation package, use the administrator-approved Windows download-trust
-procedure on that verified ZIP only, then extract **the entire
-`scom-evaluation.zip`** into a new directory. Do not recursively unblock extracted
-contents. Open the extracted `ci-evaluation` folder and double-click
+not who published them or whether Windows trusts them. Use only a distribution
+and signing route approved by the organization's software-security process. If
+the package is blocked or lacks required authorization, stop and request an
+approved build/distribution path; do not remove download markers or change policy.
+Then extract **the entire `scom-evaluation.zip`** into a new directory. Open the
+extracted `ci-evaluation` folder and double-click
 **`ScomSetup.exe`**. Keep the executable, its bundled
 runtime DLLs, `server`, `collector`, `setup` and documentation together; copying
 only the EXE is not supported. This is a genuine Windows Forms application with
@@ -21,12 +26,16 @@ Server Core uses the separate console lane below.
 The wizard opens directly to automatic **read-only prerequisite checks**, without
 host changes or SCOM connections. Each completed check is shown in green for PASS
 or red for BLOCKED, with a remedy. Unknown or failed checks are never marked green.
+The Step 1 summary distinguishes checks not yet run, checks in progress,
+returned passing or blocked results, and missing results. Passing prerequisites
+does not approve installation; script signing and Windows policy remain enforced.
 Use **Back / Next** for the sequential screens. Normal setup asks for a log folder
 (separate MCP/collector subfolders), safe IIS placement, the approved execution
 account and SCOM server/scope. Installation/private/state paths and a new dedicated
-pool are proposed; detailed overrides, certificate/HTTPS evidence, reviewed JSON
-and resume options live in **Advanced**, not a long initial form. Proposed defaults
-do not grant permission, override existing paths or certify external evidence.
+pool are proposed; detailed overrides, certificate/HTTPS evidence and resume
+options live in **Advanced**. The configuration screen shows the three reviewed
+JSON inputs separately. Proposed defaults do not grant permission, override
+existing paths or certify external evidence.
 If required, use the explicit elevation action and approve the genuine Windows
 UAC prompt yourself, then rerun the checks.
 
@@ -42,22 +51,94 @@ Windows inventory. Review the final proposal and explicitly confirm **Prepare**.
 Configuration/activation/worker/publication/acceptance remain separate gated
 actions, never automatic consequences of navigation.
 
-### Resume the current MCPTest evaluation
+### What setup checks automatically, and what the operator must do
 
-The latest customer report says Step 5's whole-management-group checkbox is
-checked. Step 6 still says “Discovery complete. Select an existing group
-explicitly; no inventory or installation was approved,” but that message does
-not reflect the selected whole-management-group mode. Step 6 reports **Stage:
-Staged**. Treat that only as the prepared/staged phase, not configured or
-activated. No inventory collection or activation is reported. The checkbox
-selects a scope; it is not itself approval for collection or installation, and
-each gated action still requires its own confirmation.
+Follow these steps in order. A displayed value, discovered asset, successful
+local check or prepared stage is not approval for the next operation.
 
-The inputs summary reports identity/receiver/worker JSON as missing; Advanced
-shows the identity path populated and receiver and worker paths blank. A
-populated path is not proof the file exists or is valid. Source connection
-remains unverified. Do not treat green prerequisite checks, completed
-discovery, or the staged state as a working deployment.
+1. **Resolve package authorization through the normal software process.** Obtain
+   the evaluation build through an approved distribution channel and use the
+   organization's required signing, trust and endpoint-security review. If
+   Windows or organizational policy blocks launch, stop and ask the responsible
+   administrator; do not suppress a warning, remove a zone marker, or change
+   policy to continue. The separate
+   [local evaluation signing procedure](local-evaluation-signing.md) is for an
+   explicitly approved personal-lab derivative only. It is not a production
+   prerequisite, publisher model or production distribution recommendation.
+2. **Run Bootstrap and review the returned local checks.** On launch, the wizard
+   reads local OS/runtime/IIS/SCOM-module metadata and discovers local IIS and
+   certificate options. These checks do not install components, connect to SCOM,
+   verify a source query contract, or collect inventory. Continue only when the
+   individual prerequisite results have actually returned and all required
+   checks pass. `NOT CHECKED`, missing results, or a blocked row means stop and
+   investigate the displayed code; do not infer a missing component or treat
+   navigation as a retry.
+3. **Handle pending reboot outside setup.** Bootstrap only detects common
+   pending-restart indicators. It does not reboot or clear them. If a restart is
+   reported, stop before installation effects, have the host owner schedule the
+   appropriate maintenance, and let that operator perform the restart. Reopen
+   the wizard and run the checks again; use the new results rather than the
+   pre-restart report.    Never clear a pending-restart indicator to pass the gate.
+
+   In one observed evaluation, nine local checks passed while a pending-reboot
+   check blocked. A read-only check later found a pending file-rename indicator;
+   after the operator performed the restart, the indicators were clear and a
+   separately approved Bootstrap run returned all ten local checks as passing.
+   This records only that local prerequisite sequence; it does not establish
+   SCOM connectivity, installation, configuration or acceptance.
+4. **Review existing identity, HTTPS and IIS assets.** Reuse existing assets
+   only after their owner and suitability are reviewed. The Entra publisher
+   certificate and the IIS HTTPS/TLS certificate have different purposes and
+   are not interchangeable. An identity file on disk does not prove its
+   contents, ownership, permissions or source authorization. A visible TLS
+   certificate does not prove chain trust, usable private-key access or an IIS
+   binding; a discovered IIS site may have no matching HTTPS binding. Verify the
+   intended DNS name, certificate and placement through the normal host-owner
+   process. Do not issue duplicate identity or certificates merely because a
+   selector is blank. The observed inspection found an existing identity file
+   and a locally eligible TLS certificate, but did not inspect identity
+   contents, prove certificate chain/key usability, or establish served HTTPS.
+5. **Supply reviewed configuration and source evidence.** The operator and
+   relevant identity/source owners must provide the real nonsecret identity file
+   and complete reviewed receiver and worker JSON. Confirm their schema,
+   intended reader grants, source mapping, authorization and evidence separately;
+   repository examples are synthetic and are not deployable inputs. Approve
+   bounded group discovery as a read-only source operation, then select and
+   approve the intended scope. Discovery does not read inventory or set source
+   verification flags. Before configuring or publishing supported Windows
+   inventory, follow the [typed relationship-query stop gate](indexed-deployment-runbook.md#typed-relationship-query-stop-gate).
+   If required files or independent source evidence are absent, stop; setup does
+   not generate them or certify claims.
+6. **Approve each consequential stage separately.** After reviewing paths,
+   scope, IIS placement, log destinations and the exact effect summary, the
+   operator separately approves Prepare/staging. Configure requires the reviewed
+   files and source gates; activation requires the configured stage and an
+   explicitly approved, conflict-free IIS/HTTPS target. A pending action or
+   ambiguous result stays subject to journal review, not blind retry. Installing
+   optional IIS features or a Hosting Bundle is another explicit operator
+   choice; the operator supplies the independently verified installer, approves
+   each host-wide effect, and reruns preflight afterward. Setup does not download
+   prerequisites or restart Windows.
+7. **Connect, publish and accept as distinct actions.** The exact worker account
+   separately verifies its selected source scope and, after reviewed configuration,
+   performs an explicitly approved one-shot publication. The host administrator
+   separately records the worker receipt. An intended reader must then verify
+   tool access, expected scope/coverage and unauthorized-user denial before the
+   operator records acceptance. These steps do not enable recurrence, metrics or
+   targeted-live checks; recurrence remains a later opt-in after acceptance.
+
+The observed evaluation reached local prerequisite success, but the reviewed
+receiver/worker inputs, source verification, scope approval, configuration,
+installation/activation and reader acceptance were not established by that
+result. Do not represent the evaluation as a completed setup.
+
+### Continue or resume a deployment
+
+Use **Status** to inspect the existing private journal before resuming. A prepared
+or staged deployment is not configured or activated; green prerequisite checks,
+group discovery and selected paths do not establish a working deployment. If a
+previous action is pending, inspect the journal and follow the recovery guidance
+instead of repeating the action blindly.
 
 1. On **Choose SCOM scope**, confirm the intended mode: select one existing
    discovered group (the narrower default), or keep **ALL supported Windows
@@ -66,17 +147,17 @@ discovery, or the staged state as a working deployment.
    class; it requires a distinct scope confirmation and is still not an
    installation or collection approval. Declining a confirmation starts no
    corresponding action.
-2. On **Prepare the new deployment**, select **Prepare new deployment**. This
-   saves the protected plan and stages new files after the separate exact effect
-   approval. Pressing **Next (navigate only)** just changes screens. Prepare does
-   not configure Entra, activate IIS or collect inventory.
+2. For a new deployment, select **Prepare new deployment** only after reviewing
+   the proposal. This saves the protected plan and stages new files after the
+   separate exact effect approval. Pressing **Next (navigate only)** just changes
+   screens. Prepare does not configure Entra, activate IIS or collect inventory.
 3. On **Select identity and reviewed configuration**, check each file status
-   separately. The identity path may remain populated; select actual reviewed
+   separately. Select the nonsecret identity file and actual reviewed
    receiver and worker JSON files only when available. The updated visible
    checklist distinguishes “no file selected”, “selected path does not exist”,
    and “selected file exists; backend review still required”. File presence is
    not validation. Receiver/worker Browse opens at an existing settings folder
-   (or Documents), not the identity file's folder, and the wizard rejects using
+   (or Documents), and the wizard rejects using
    the same JSON path for multiple roles. Store the two reviewed settings files
    separately from Entra's `identity.json`; there is no required customer path.
    Do not copy the repository examples as customer config: they use synthetic IDs
@@ -173,59 +254,31 @@ not infer a Windows marketing name from a version/build. The presence of
 `OSVersionDisplayName` in legacy repository code does not establish that the
 customer's installed MP populates it.
 
-**Trust/signing limitation:** this evaluation EXE and repository scripts do not
-carry a customer-trusted publisher signature. A self-contained EXE does not
-establish trust or override PowerShell `AllSigned`/RemoteSigned, UAC, SmartScreen,
-certificate, antivirus or unsafe-content warnings. The native GUI invokes the
-existing Windows PowerShell 5.1 scripts using normal `-File` execution with no
-policy override; customer-approved download-trust approval may be needed before
-checks/actions can run. If the customer does not approve the unsigned package or
-Windows still blocks it, stop and use the customer's normal software-approval
-process. No embedded credentials or fake signing certificate are supplied.
+**Trust/signing limitation:** the evaluation EXE and repository scripts do not
+carry a production customer-trusted publisher signature. A self-contained EXE
+does not establish trust or override PowerShell policy, UAC, SmartScreen,
+certificate, antivirus or unsafe-content controls. The native GUI invokes the
+existing Windows PowerShell 5.1 scripts normally, without a policy override. If
+Windows or organizational policy blocks launch, stop and ask the responsible
+security administrator for the approved signing or software-distribution route.
+Do not remove download markers, suppress warnings, lower/bypass policy or alter
+application-control settings. A matching archive hash proves only byte
+integrity against the supplied checksum; it is not publisher authentication.
 
-**Unsigned-download trust step:** an approved administrator may decide to remove
-the Internet-download zone marker from the verified ZIP before extraction, using
-the customer's normal reviewed download-trust procedure. For example, only after
-the archive hash has been independently verified and approval granted:
-
-```powershell
-Get-FileHash -LiteralPath 'C:\ApprovedDownload\scom-evaluation.zip' -Algorithm SHA256
-# Compare the result with the independently obtained reviewed-run hash first.
-Unblock-File -LiteralPath 'C:\ApprovedDownload\scom-evaluation.zip'
-```
-
-This is an explicit, one-archive deployment trust decision, not a signing or
-publisher-authentication step. Extract the complete archive to a **new** folder
-afterward; do not run `Unblock-File` recursively, unblock individual scripts
-automatically, lower execution policy, bypass PowerShell policy, suppress
-security prompts or alter AppLocker/WDAC/application-control settings. The wizard
-must still run and display every prerequisite check, and installation remains
-blocked until checks pass and the customer confirms each action. If the customer
-does not approve this unsigned-package procedure or security controls still
-block execution, stop; this evaluation approach does not require the customer to
-issue a signing certificate.
-
-Before retrying, inspect the extracted scripts and modules for zone markers
-from Windows PowerShell, with the current directory set to the new `ci-evaluation`
-folder:
-
-```powershell
-Get-ChildItem -LiteralPath .\setup, .\collector, .\Operations -Recurse -File -ErrorAction Stop |
-    Where-Object { $_.Extension -in '.ps1', '.psm1' } |
-    ForEach-Object {
-        Get-Item -LiteralPath $_.FullName -Stream * -ErrorAction Stop |
-            Where-Object { $_.Stream -eq 'Zone.Identifier' }
-    }
-```
-
-No output means no matching markers were found if the command completed without
-errors. If a marker remains or inspection fails, stop and ask the customer security
-process to review; do not assume success or unblock extracted files. Otherwise
-open `ScomSetup.exe` normally and inspect the actual prerequisite results.
+The separate [local evaluation signing procedure](local-evaluation-signing.md)
+describes an explicitly approved, untimestamped personal-lab derivative. Its
+certificate, trust and transfer steps are lab-specific and are **not** a
+production prerequisite or a production signing recommendation. A lab signature
+does not imply that another account or host trusts the package. No embedded
+credentials or production signing certificate are supplied.
 
 The normal PR artifact is an **unsigned evaluation package**. CI runs manifest,
 tamper and missing-signer rejection tests without creating a certificate or
-changing trust. Actual local signed-derivative integration remains a separate
+changing trust. Before packaging is accepted, validation also compares the
+packaged `ScomEntra.psm1` and `ScomSetup.Windows.psm1` bytes with the reviewed
+checkout, independent of the package's own manifest. A signed derivative changes
+those bytes, so its content-only check must be paired with separate signing
+provenance validation. Actual local signed-derivative integration remains a separate
 explicit workflow-dispatch opt-in: Windows protected-root trust can require an
 interactive prompt, which unattended CI must not auto-approve or bypass.
 Passing the package workflow does not claim that signing integration passed,
@@ -257,7 +310,7 @@ prove that a prerequisite probe ran; only returned individual checks do.
 | `SETUP_GUI_POLICY_BLOCKED` | PowerShell emitted specific policy/security markers. Have the customer security process inspect signing/zone/policy; do not bypass it. |
 | `SETUP_GUI_MODULE_LOAD_FAILED` | The entry script ran but could not import its setup module. Verify complete extraction and ask the administrator to review the applicable trust/application-control policy; this alone does not establish a policy cause or universal signature requirement. |
 | `SETUP_GUI_INVALID_JSON` / `SETUP_GUI_INVALID_SCHEMA` | Returned output was not accepted. The schema message/report includes an allowlisted `contractField`, `expectedType` and `actualType` (no values). Report those; mixed files, a missing prerequisite or a policy problem has not been established by this code alone. |
-| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy, downloaded-file zone/trust prompts, signatures and application-control policy. Even Unrestricted can warn about Internet-zone scripts; signing is not always mandatory. This does not establish a missing SDK. An administrator may separately approve the verified-archive trust step above; do not unblock extracted scripts, bypass policy or change application control. |
+| `SETUP_GUI_AUTHORIZATION_BLOCKED` | PowerShell reported `AuthorizationManager check failed` with `SecurityError` / `UnauthorizedAccess` and exited unsuccessfully without a usable response. The host can echo the stdin request as JSON before the bridge runs. Ask the administrator to review effective policy, downloaded-file zone/trust prompts, signatures and application-control policy. Even Unrestricted can warn about Internet-zone scripts; signing is not always mandatory. This does not establish a missing SDK. Use only the organization's approved software-signing/distribution process; do not unblock extracted scripts, bypass policy or change application control. |
 | `SETUP_GUI_CHILD_EXIT` / `SETUP_GUI_NO_RESPONSE` | No usable response was obtained. Collect the read-only diagnostic; no missing component is inferred. |
 | `SETUP_GUI_BOOTSTRAP_PROBE_FAILED` | Local probes could not complete. Privately inspect local component access; do not install based on this code alone. |
 
@@ -300,13 +353,12 @@ stderr/request is displayed or logged, and this classification grants no
 installation or navigation approval. The administrator must review the
 `.ps1`/`.psm1` trust and authorization chain. Unrestricted permits unsigned
 scripts but can still prompt for Internet-zone files; redirected protocol stdin
-is not an appropriate channel for answering a Windows trust prompt. Do not send prompt answers through the bridge or change policy. Do not remove
-zone markings as a diagnostic workaround. For an intended installation, an
-authorized administrator may separately approve the one-archive trust step in
-the quickstart; it is a deployment decision, not a diagnostic. Approved signing
-or another customer software-approval path may be required by local policy, but
-is not proven universally mandatory by this error. The evaluation package does
-not provide a trusted publisher signature.
+is not an appropriate channel for answering a Windows trust prompt. Do not send
+prompt answers through the bridge, remove zone markings, or change policy. For
+an intended installation, use only the signing or distribution route approved
+by the organization's software-security process; it is a deployment decision,
+not a diagnostic. The personal-lab signing procedure is not a production route.
+The evaluation package does not provide a production trusted publisher signature.
 
 Maintainers can run `Validation\Get-BootstrapTransportShape.ps1` under Windows
 PowerShell 5.1 with `-PackageDirectory` set to the extracted package. It uses
@@ -330,8 +382,7 @@ This uses normal `-File` execution, performs only local read-only checks and
 neither connects to SCOM nor installs anything. Do not change execution policy,
 unblock files as a diagnostic or bypass a Windows warning to make it run. If
 policy prevents the script from starting, the customer security process should
-review that specific error. If the administrator separately approves deployment,
-use only the verified-archive trust step in the quickstart. If JSON is returned, report the fixed `code` and the check names
+review that specific error. If JSON is returned, report the fixed `code` and the check names
 and PASS/BLOCKED values; do not share raw configuration, paths, identity details
 or credentials. Missing files require the complete reviewed package to be
 extracted, not prerequisite installation.
@@ -354,12 +405,11 @@ prompts, script-managed downloads, execution-policy changes, broad group creatio
 
 Use the complete reviewed [evaluation package](../README.md#build-and-validate),
 not a single DLL. On the customer host, open **64-bit Windows PowerShell 5.1**
-through the approved administrator mechanism. Obtain administrator approval for
-the unsigned package using the quickstart's verified-archive trust procedure if
-permitted; never bypass `AllSigned`, OS authentication or unsafe-content warnings.
-If customer policy forbids the unsigned package, stop and use its normal software
-approval process. This repository does not ship a customer-trusted signing
-certificate.
+through the approved administrator mechanism. Use the organization's approved
+signing/distribution route. If policy blocks the package, stop and request an
+approved software-distribution path; never bypass `AllSigned`, OS authentication
+or unsafe-content controls. This repository does not ship a production
+customer-trusted signing certificate.
 
 The metadata prerequisite checks recognize Windows Server 2019/2022/2025 build
 families (17763/20348/26100), .NET and ASP.NET Core 8 runtimes, a registered .NET 8
@@ -504,56 +554,36 @@ of entering fields; it does not skip approval.
 ### Recovery: local TLS certificate discovery reports missing `Value`
 
 In Windows PowerShell 5.1 the certificate provider's
-`EnhancedKeyUsageRepresentation.ObjectId` is a **string**, not an OID object
-with a `.Value` member. The original `a5105db5` catalog filter could therefore
-throw `PropertyNotFoundStrict` at `ScomSetup.Windows.psm1:96` when examining a
-certificate with an EKU. The local repair compares that string directly to the
-Server Authentication OID `1.3.6.1.5.5.7.3.1`. It still requires a private key,
-current validity and that exact EKU; a signing-only certificate is not eligible.
-This fix does not require replacing or modifying any customer certificate.
+`EnhancedKeyUsageRepresentation.ObjectId` can be a **string**, not an OID object
+with a `.Value` member. Older catalog filters can therefore throw
+`PropertyNotFoundStrict` while examining a certificate with an EKU. A corrected
+filter compares the string to the Server Authentication OID
+`1.3.6.1.5.5.7.3.1`. Discovery still requires a private key, current validity
+and that exact EKU; a signing-only certificate is not eligible. The fix does
+not require replacing or modifying a certificate.
 
-The local-only `ScomSetup-Windows-EKU-fix.zip` contains exactly one file,
-`ScomSetup.Windows.psm1`, with no changed dependencies. These hashes apply only
-to this repair and baseline:
+1. Inspect the failure; let any active operation finish before closing the GUI.
+   Preserve the current package, private journal, identity, configuration and
+   certificates; do not reinitialize state or provision replacement identities.
+2. Obtain a reviewed complete package containing the corrected
+   `setup\ScomSetup.Windows.psm1`. Verify the archive against the hash obtained
+   independently for that exact artifact and follow the organization's software
+   approval process. Do not substitute individual files into a manifest-verified
+   package or change policy or trust markers to force execution.
+3. Extract the verified package to a new approved directory. Its actual path is
+   deployment-specific, not a required example path. Before resuming an existing
+   deployment, inspect the journal and package-drift requirements; stop if an
+   action is pending or the package does not match the recorded plan. Do not
+   clear pending state or override drift checks.
+4. With approval, reopen the corrected GUI and retry the local certificate
+   catalog. For a read-only retry in an existing PowerShell process, reload the
+   exact corrected package module before invoking `Get-ScomSetupLocalCatalog`;
+   cached module code can outlive a package change. A newly launched GUI uses a
+   fresh bridge process. Do not install or activate anything during the check.
 
-| File | SHA256 |
-|---|---|
-| Repair ZIP | `33E1296A1732DC61E5856DFB8859469EC9B38F299637824E70EA4850438A1F06` |
-| Fixed module | `ECDF109CAC300994C4DC160DDC566CECB3BD2892BAF390B84CD5C4F2F7F4E288` |
-| Original CI package module (CRLF) | `E71E675FE8F602DA2DCBC0673299FB2CD3F48B52932E68B0047FBE230340CD48` |
-| Original Git module at `a5105db500b68cd7f283fd1cc7c8495c97896da0` (LF) | `D50671CDE73FEE38ADE86F26E27CC9C452873992098E1008E7DD8293B89354CE` |
-
-Close the setup GUI and any active setup operation before customer-approved
-replacement. Use the actual downloaded ZIP path (attachments may prefix `0-`),
-check `Test-Path -LiteralPath ... -PathType Leaf` before hashing, then require
-the ZIP hash above. Follow only the already-approved archive handling procedure;
-do not bypass policy or recursively unblock files. Extract to a new staging
-directory, verify exactly the one named module and its fixed hash, and stop on
-any discrepancy.
-
-In the existing
-`C:\9\evaluation-a5105db500b68cd7f283fd1cc7c8495c97896da0\reviewed-a5105db5\ci-evaluation`
-package, require `setup\ScomSetup.Windows.psm1` to match one of the two original
-hashes above. Make a uniquely named backup of that file, verify the backup hash,
-replace **only** that module, and verify its fixed hash before restarting
-`ScomSetup.exe` normally. On replacement verification failure stop and restore
-the verified backup. Preserve the earlier `ScomEntra.psm1` repair, all private
-state, identity JSON and certificates; do not rerun initialization or Entra
-provisioning. The package's original manifest is intentionally unchanged and
-will no longer attest the replaced module; retain the backup and repair
-checksums as the explicit local exception, not as a newly CI-built package.
-
-For a read-only catalog retry in an already-open PowerShell process, force-reload
-the exact package module before calling `Get-ScomSetupLocalCatalog`; cached
-module code can outlive a file replacement. A newly launched GUI uses a fresh
-bridge process. Do not select/install anything automatically during this check.
-
-Local validation confirmed the Windows PowerShell 5.1 provider property type,
-and 46 synthetic Windows checks passed, covering provider-shaped server-auth
-EKU, unsupported/no EKU, missing private key, expired and not-yet-valid
-certificates. Windows PowerShell 5.1 suite execution on the development host
-remains blocked by its unsigned-script policy; no bypass was used. Customer
-catalog/GUI recovery with this repair is **not yet verified**.
+These steps do not establish that the actual certificate is suitable or that
+the deployment is configured, activated or accepted. Verify those gates
+separately in the target environment.
 
 After prerequisites pass, interactive Prepare requests separate approval for
 read-only group discovery using the console identity. It checks the selected
@@ -730,9 +760,17 @@ Graph v1.0 contracts:
 [service principal create](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-serviceprincipals?view=graph-rest-1.0),
 [publisher role assignment](https://learn.microsoft.com/en-us/graph/api/serviceprincipal-post-approleassignments?view=graph-rest-1.0).
 
-### MCPTest: a separate publisher certificate and app, step by step
+### Publisher identity and certificate: reuse or create
 
-Use this lane when the administrator has chosen a **new isolated test publisher**
+First review whether an existing publisher registration and certificate are
+approved and suitable for this worker. Reuse them when their ownership,
+permissions, validity and private-key access meet the requirements below;
+creating a new application or certificate is **not** required for every setup.
+Do not modify an existing registration or credential without its owner's
+approval. The creation steps below are an optional lane, not a prerequisite
+for an approved existing identity.
+
+Use the creation lane when the administrator has chosen a **new isolated test publisher**
 while reusing reviewed API/reader registrations. Do not edit production publisher
 credentials, permissions or certificates. Reusing an API/reader still shares its
 authorization boundary: a new publisher credential is not a separate test tenant,
@@ -753,8 +791,11 @@ HTTPS/TLS certificate remain separate pending requirements.
    `Scom.Ingest`. Inspect the existing reader's intended delegated permission and
    ownership without changing its callbacks, secret or credentials. A screenshot
    of a scope/role alone does not establish this full compatibility contract.
-2. **Create one dedicated publisher key on MCPTest.** Run the following in elevated
-   Windows PowerShell 5.1 on the intended worker host, only after customer approval.
+2. **Reuse or create the publisher key.** If an approved certificate with an
+   accessible private key already exists on the worker, verify it and skip the
+   creation commands. Otherwise, only after customer approval, run the following
+   illustrative commands in elevated Windows PowerShell 5.1 on the worker host.
+   Replace both placeholders with approved values before running.
    Select an existing approved local directory for the public `.cer` file.
    This is a lab client-authentication certificate, **not** TLS or code signing.
    No Root/TrustedPublisher import or PowerShell trust change is needed. The
@@ -762,8 +803,8 @@ HTTPS/TLS certificate remain separate pending requirements.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$subject = 'CN=SCOM-MCPTest-Worker-Publisher'
-$publicFile = 'C:\ApprovedCerts\SCOM-MCPTest-Worker-Publisher.cer'
+$subject = '<approved-certificate-subject>'
+$publicFile = '<approved-absolute-public-certificate-path>'
 if (-not (Test-Path -LiteralPath (Split-Path -Parent $publicFile) -PathType Container)) {
     throw 'Select an existing approved public-certificate directory.'
 }
@@ -784,36 +825,39 @@ Export-Certificate -Cert $cert -FilePath $publicFile -Type CERT -NoClobber -Erro
 If creation succeeds but export fails, stop and inspect the created certificate;
 do not rerun creation blindly. Record its **full** thumbprint and expiry. A public
 certificate already present in an existing publisher app does not put its private
-key on MCPTest. Use customer-managed enrollment/renewal instead where self-signed
+key on the worker host. Use customer-managed enrollment/renewal instead where self-signed
 lab credentials are not allowed.
 
-3. **Create only the new publisher app.** In **App registrations**, first check
-   whether the exact intended test app already exists. If it does, inspect its
-   recorded object/client IDs rather than registering another. Otherwise select
-   **New registration**, name it `SCOM MCPTest Worker Publisher`, select **Accounts
-   in this organizational directory only**, leave Redirect URI empty and register.
+3. **Reuse or create the publisher app.** In **App registrations**, first check
+   whether an approved publisher app already exists. If it does, inspect its
+   recorded object/client IDs rather than registering another. Only when a new
+   app is explicitly approved, select **New registration**, use an approved name,
+   select **Accounts in this organizational directory only**, leave Redirect URI
+   empty and register.
    Record the Directory (tenant) ID, Application (client) ID and this registration's
    Object ID. Do not create a client secret or add a redirect for this app.
-4. **Upload public certificate only.** In the new publisher's **Certificates &
-   secrets > Certificates > Upload certificate**, upload the exported DER `.cer`.
+4. **Verify the public certificate.** If the approved certificate is not already
+   registered, upload only its DER `.cer` in the publisher's **Certificates &
+   secrets > Certificates > Upload certificate**, after explicit approval.
    Compare the complete portal thumbprint and validity dates with the local
    `LocalMachine\My` certificate, not just its subject or last characters. Stop on
-   mismatch. Never upload/export the private key or modify the existing publisher.
-5. **Approve only the ingestion role.** In the new publisher's **API permissions >
-   Add a permission > My APIs**, choose the reviewed API by its exact client ID,
-   select **Application permissions**, then `Scom.Ingest`. The publisher does not
-   need delegated `Scom.Read` or Microsoft Graph runtime permissions. If a default
-   Graph `User.Read` permission exists on this newly created publisher, remove that
-   default only; do not alter any existing application. An authorized tenant
-   administrator must explicitly review and **Grant admin consent** for this
-   tenant. Confirm `Scom.Ingest` shows Granted for the intended resource, and inspect
-   the corresponding Enterprise application. Adding a requested permission alone
-   is not an app-role grant. Stop if the API/role cannot be identified exactly.
-6. **Grant private-key Read to the exact worker account.** Confirm the Windows
+   mismatch. Never upload/export the private key.
+5. **Verify the ingestion role.** Confirm `Scom.Ingest` is granted for the
+   intended API and inspect the corresponding Enterprise application. If a
+   grant is missing, only with owner approval use **API permissions > Add a
+   permission > My APIs** to select the exact reviewed API and its application
+   permission `Scom.Ingest`; an authorized tenant administrator must review and
+   grant admin consent. Adding a requested permission alone is not an app-role
+   grant. The publisher does not need delegated `Scom.Read` or Microsoft Graph
+   runtime permissions. On a newly created publisher, remove the default Graph
+   `User.Read` permission if present; do not alter existing applications without
+   owner approval. Stop if the API/role cannot be identified exactly.
+6. **Verify private-key Read for the exact worker account.** Confirm the Windows
    account selected in setup; do not guess an account from the app display name.
-   On MCPTest open `certlm.msc` as the authorized administrator, then **Personal >
+   On the worker host open `certlm.msc` as the authorized administrator, then **Personal >
    Certificates**, locate the exact full thumbprint, right-click **All Tasks >
-   Manage Private Keys**, and add **Read** only for that confirmed worker account.
+   Manage Private Keys**. If access is missing, after approval add **Read** only
+   for that confirmed worker account.
    Preserve existing SYSTEM/administrator permissions; do not grant Everyone,
    Users, the IIS pool or Full Control, replace the ACL wholesale, or export the
    key. Stop if Manage Private Keys is absent or the account cannot be resolved.
@@ -824,7 +868,7 @@ lab credentials are not allowed.
 
 ```powershell
 $ErrorActionPreference = 'Stop'
-$thumbprint = '<full-40-hex-MCPTest-publisher-thumbprint>'
+$thumbprint = '<full-40-hex-publisher-thumbprint>'
 if ($thumbprint -notmatch '^[A-Fa-f0-9]{40}$') { throw 'Enter the exact recorded thumbprint.' }
 $cert = Get-Item -LiteralPath "Cert:\LocalMachine\My\$thumbprint" -ErrorAction Stop
 if (-not $cert.HasPrivateKey -or $cert.NotBefore -gt (Get-Date) -or $cert.NotAfter -le (Get-Date)) {
@@ -853,16 +897,18 @@ This proves only local key use under that account, not Entra token issuance,
 tenant consent, SCOM visibility, receiver authorization or successful publication.
 Retain the existing separately approved connection/publication/acceptance gates.
 
-8. **Generate the validated nonsecret identity file.** The following IDs have
-   different meanings; never substitute display names or swap object/client IDs.
+8. **Use the validated nonsecret identity file.** An existing reviewed file can
+   be used if it matches the approved identities and certificate; generate one
+   only when needed. The following IDs have different meanings; never substitute
+   display names or swap object/client IDs.
 
 | Value | Correct source / use |
 |---|---|
 | Tenant ID | Intended tenant's Directory ID |
 | API client ID | API App registration's Application ID; forms `api://<API-client-ID>` |
 | API/reader/publisher registration Object IDs | App registrations > Overview; script reuse inputs `-ApiObjectId`, `-ReaderObjectId`, `-PublisherObjectId` |
-| Publisher client ID | New test publisher's Application ID; worker token client |
-| Publisher service-principal Object ID | Enterprise applications > exact test publisher > Overview; output `publisherObjectId` for receiver authorization, **not** `-PublisherObjectId` input |
+| Publisher client ID | Approved publisher's Application ID; worker token client |
+| Publisher service-principal Object ID | Enterprise applications > exact publisher > Overview; output `publisherObjectId` for receiver authorization, **not** `-PublisherObjectId` input |
 | Certificate thumbprint | Full matching local/portal public certificate thumbprint; worker private key stays local |
 
 Use an authorized provisioning workstation/session with the existing approved
@@ -873,15 +919,15 @@ three reviewed registration Object IDs to avoid creating more apps:
 
 ```powershell
 .\setup\Provision-ScomEntra.ps1 -TenantId '<approved-tenant-guid>' `
-    -NamePrefix 'SCOM-MCPTest' -PublicCertificatePath 'C:\ApprovedCerts\SCOM-MCPTest-Worker-Publisher.cer' `
-    -StateDirectory 'C:\ApprovedState\ScomEntra-MCPTest' `
+    -NamePrefix '<approved-name-prefix>' -PublicCertificatePath '<approved-public-DER-cer-path>' `
+    -StateDirectory '<approved-private-state-directory>' `
     -ApiObjectId '<existing-api-registration-object-guid>' `
-    -PublisherObjectId '<new-MCPTest-publisher-registration-object-guid>' `
+    -PublisherObjectId '<approved-publisher-registration-object-guid>' `
     -ReaderObjectId '<existing-reader-registration-object-guid>'
 ```
 
-Omit `-GrantPublisherRole` here because the administrator explicitly granted it
-in the portal. The script reads API/client/certificate contracts, service
+Omit `-GrantPublisherRole` here when the role has already been granted. The
+script reads API/client/certificate contracts, service
 principals and the actual role assignment before producing identity output;
 incompatible reuse blocks instead of patching existing apps. Inspect all prompts:
 if it proposes an unexpected create, cancel and review the IDs/service principals.
@@ -904,105 +950,20 @@ certificate hash. Malformed identifiers, a different thumbprint, an expired
 credential or more than one matching credential still fail closed. See the
 [Microsoft Graph `keyCredential` definition](https://learn.microsoft.com/en-us/graph/api/resources/keycredential?view=graph-rest-1.0).
 
-For `ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE` after the
-publisher app and public certificate already exist, use only a reviewed package
-containing this comparison fix. On the authorized provisioning workstation:
+For `ENTRA_EXISTING_PUBLISHER_CERTIFICATE_CONFLICT_NO_KEY_OVERWRITE`, stop and
+independently verify the exact publisher, certificate and credential validity.
+Use a reviewed, verified package containing the comparison fix; do not overwrite
+credentials, change execution policy or remove trust markers to force a retry.
+Replacing a module on disk does not update a module already loaded in a PowerShell
+process; confirm that the approved package's module is the one actually loaded.
+Preserve the existing state directory and public certificate. Inspect any journal
+read-only and stop if `pending` is non-null. Do not reinitialize state or create
+another app or credential to work around the error.
 
-1. Use the actual full path of the downloaded repair ZIP; the chat attachment
-   download may prefix the filename (for example, `0-`). Do not hash a guessed
-   path. Verify the file exists before reading it, then check its published hash:
-
-```powershell
-$zipPath = '<actual-full-path-to-downloaded-ScomEntra-keyidentifier-fix.zip>'
-if (-not (Test-Path -LiteralPath $zipPath -PathType Leaf)) { throw 'Repair ZIP not found; check the actual downloaded filename and path.' }
-if ((Get-FileHash -LiteralPath $zipPath -Algorithm SHA256).Hash -cne
-    '2D8B6194B74C141FD480D5F03B2D1EAD0012B1060144D4B850F90C15D45C1B96') {
-    throw 'Repair ZIP hash mismatch; do not extract or run it.'
-}
-```
-
-2. Extract only after that check to a new, empty staging directory. Confirm it
-   contains only `ScomEntra.psm1` and that the module hash is
-   `B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE`.
-   If using the package archive's trusted-download procedure, apply only its
-   explicitly approved archive-only handling; do not recursively unblock files
-   or change execution policy.
-
-```powershell
-$stagingPath = Join-Path $env:TEMP 'ScomEntra-keyidentifier-fix'
-if (Test-Path -LiteralPath $stagingPath) { throw 'Staging directory already exists; choose a new empty directory.' }
-Expand-Archive -LiteralPath $zipPath -DestinationPath $stagingPath -ErrorAction Stop
-$stagedFiles = @(Get-ChildItem -LiteralPath $stagingPath -File -Recurse)
-if ($stagedFiles.Count -ne 1 -or $stagedFiles[0].Name -cne 'ScomEntra.psm1') {
-    throw 'Repair ZIP did not extract as exactly one ScomEntra.psm1; do not install it.'
-}
-$fixedModulePath = $stagedFiles[0].FullName
-if ((Get-FileHash -LiteralPath $fixedModulePath -Algorithm SHA256).Hash -cne
-    'B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE') {
-    throw 'Fixed module hash mismatch; do not install it.'
-}
-```
-3. Keep the existing state directory and already-exported public DER `.cer`.
-   In the confirmed customer retry, the original error occurred before
-   `entra-journal.json` existed. Do **not** rerun first-run state initialization,
-   replace/export the certificate, or create another app or credential. The
-   corrected provisioner creates its journal in the existing state directory.
-4. Before replacement, confirm the package root and module path, then require
-   the existing package module to match the published baseline bytes. The
-   Git-source copy differs from the CI ZIP only by line endings, so either exact
-   hash is acceptable:
-
-```powershell
-$packageRoot = 'C:\9\evaluation-a5105db500b68cd7f283fd1cc7c8495c97896da0\reviewed-a5105db5\ci-evaluation'
-$modulePath = Join-Path $packageRoot 'setup\ScomEntra.psm1'
-if (-not (Test-Path -LiteralPath $modulePath -PathType Leaf)) { throw 'Expected package module not found.' }
-$originalHash = (Get-FileHash -LiteralPath $modulePath -Algorithm SHA256).Hash.ToUpperInvariant()
-if ($originalHash -cnotin @(
-    '1ADCFBBA3079E73B6E2F1E6D842EA25600D661ACB8D6B37325322F73F544CA66',
-    '02737EBEC52DDA04349FD1DCD2E04C1754D16066780877E541CE7F087EC0AC8A'
-)) { throw 'Package module is not a verified baseline; stop without replacing it.' }
-if (-not (Test-Path -LiteralPath $fixedModulePath -PathType Leaf) -or
-    (Get-FileHash -LiteralPath $fixedModulePath -Algorithm SHA256).Hash -cne
-    'B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE') {
-    throw 'Fixed module missing or hash mismatch; stop.'
-}
-$backupPath = "$modulePath.before-keyidentifier-fix-$(Get-Date -Format yyyyMMdd-HHmmss).bak"
-Copy-Item -LiteralPath $modulePath -Destination $backupPath -ErrorAction Stop
-if ((Get-FileHash -LiteralPath $backupPath -Algorithm SHA256).Hash.ToUpperInvariant() -cne $originalHash) {
-    throw 'Backup verification failed; do not replace the package module.'
-}
-Copy-Item -LiteralPath $fixedModulePath -Destination $modulePath -Force -ErrorAction Stop
-if ((Get-FileHash -LiteralPath $modulePath -Algorithm SHA256).Hash -cne
-    'B582AA5F2A7CFAFA2A4BC996A471F30112FBDC5960736890C0E697E395F427BE') {
-    Copy-Item -LiteralPath $backupPath -Destination $modulePath -Force -ErrorAction Stop
-    throw 'Replacement verification failed; original module restored from the verified backup.'
-}
-```
-
-5. In the **same authenticated PowerShell process**, unload the old in-memory
-   module and import the exact replaced file. Replacing a file on disk does not
-   update module code already loaded in that process. Verify the active command
-   comes from this path and its definition calls the new identifier decoder:
-
-```powershell
-Remove-Module -Name ScomEntra -Force -ErrorAction SilentlyContinue
-Import-Module -Name $modulePath -Force -ErrorAction Stop
-$command = Get-Command Invoke-ScomEntraProvisioning -ErrorAction Stop
-if ($command.Module.Path -ne $modulePath -or
-    $command.Definition -notmatch 'ConvertFrom-ScomEntraKeyIdentifier') {
-    throw 'Corrected provisioning function is not loaded from the replaced package module.'
-}
-```
-
-6. Retry only after confirming the state and active module. In the confirmed
-   customer case there was no journal before this retry; preserve the existing
-   state directory and certificate. If a journal has appeared, inspect it
-   read-only and stop if `pending` is non-null. Use the same tenant, state
-   directory, public `.cer`, and
-   reviewed API, publisher and reader **app-registration Object IDs** used for
-   the existing resources.
-   Do not include `-GrantPublisherRole` when the role is already granted. Cancel
-   unexpected create/grant prompts. Rerun the guarded provisioner:
+After review, use the same tenant, state directory, public `.cer`, and reviewed
+API, publisher and reader **app-registration Object IDs** for the existing
+resources. Cancel unexpected create/grant prompts. The guarded retry uses the
+following placeholders:
 
 ```powershell
 .\setup\Provision-ScomEntra.ps1 -TenantId '<same-approved-tenant-guid>' `
@@ -1022,18 +983,8 @@ incompatible API/client contract, malformed/mismatched identifier, or pending
 journal is a stop condition. This recovery does not require changing the tenant,
 certificate, Graph permissions, customer machine or trust policy.
 
-**Verified customer outcome:** the local repair passed hash verification, the
-original module was backed up, and the customer force-reloaded the exact package
-module after confirming its exported provisioning function contained
-`ConvertFrom-ScomEntraKeyIdentifier`. The identity-only retry then saved the
-nonsecret identity successfully, without repeating state initialization or
-certificate export. Configure the Studio-generated Web callback, protected
-OAuth credential and scoped delegated reader consent separately; this success
-does not attest those gates or deploy/configure DNS, firewall, TLS or a live
-collector.
-
-No existing reader callback/credential, production publisher key, DNS record or
-TLS binding is changed by these instructions. The approved host name, HTTPS
+Identity generation does not establish reader consent or deploy/configure DNS,
+firewall, TLS or a live collector. The approved host name, HTTPS
 certificate/private-key access for IIS, reader consent and end-to-end acceptance
 remain independent gates.
 

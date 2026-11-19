@@ -28,6 +28,8 @@ public static class Hosting
         if (readModel.WindowsToolsEnabled && (!readModel.Enabled || source.SnapshotEnabled ||
             source.FreshMinutes != readModel.FreshMinutes || source.UnavailableMinutes != readModel.UnavailableMinutes))
             throw new InvalidOperationException("Indexed Windows tools require read model enabled, legacy snapshots disabled and matching freshness settings.");
+        if (readModel.OfflineHostingPreview && targetedLive.Enabled)
+            throw new InvalidOperationException("Offline hosting preview cannot enable targeted live checks.");
         services.AddSingleton(auth);
         services.AddSingleton(source);
         services.AddSingleton(lifecycle);

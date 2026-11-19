@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)]
-    [string]$PackageDirectory
+    [string]$PackageDirectory,
+    [switch]$ContentOnly
 )
 
 $ErrorActionPreference = 'Stop'
@@ -10,7 +11,7 @@ if (-not (Test-Path -LiteralPath $root -PathType Container)) {
     throw 'Package directory does not exist.'
 }
 $required = @(
-    'README.md', 'LICENSE', 'package-manifest.json',
+    'README.md', 'LICENSE', 'package-manifest.json', 'docs\easy-indexed-upgrade.md',
     'ScomSetup.exe', 'ScomSetup.dll', 'ScomSetup.runtimeconfig.json', 'ScomSetup.deps.json',
     'coreclr.dll', 'hostfxr.dll', 'System.Windows.Forms.dll',
     'server\ScomMcp.dll', 'server\ScomMcp.deps.json', 'server\ScomMcp.runtimeconfig.json',
@@ -34,7 +35,8 @@ $required = @(
     'docs\enterprise-readiness-roadmap.md',
     'docs\os-lifecycle-assessment.md',
     'docs\targeted-live-verification.md',
-    'docs\guided-setup.md', 'setup\ScomSetup.psm1', 'setup\ScomSetup.Windows.psm1', 'setup\ScomEntra.psm1',
+    'docs\guided-setup.md', 'docs\local-evaluation-signing.md',
+    'setup\ScomSetup.psm1', 'setup\ScomSetup.Windows.psm1', 'setup\ScomEntra.psm1',
     'setup\Start-ScomSetup.ps1', 'setup\Start-ScomWorkerSetup.ps1', 'setup\Provision-ScomEntra.ps1',
     'setup\Initialize-ScomSetupState.ps1',
     'setup\Install-ScomPrerequisites.ps1', 'setup\ScomPrerequisiteInstall.psm1',
@@ -64,7 +66,8 @@ foreach ($file in $files | Where-Object Extension -eq '.json') {
     $null = Get-Content -LiteralPath $file.FullName -Raw | ConvertFrom-Json -ErrorAction Stop
 }
 $manifest = Get-Content -LiteralPath (Join-Path $root 'package-manifest.json') -Raw | ConvertFrom-Json
-if ($manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -notmatch '^[a-f0-9]{40}$' -or
+if (($manifest.PSObject.Properties['format'] -and $manifest.format -ne 1) -or
+    $manifest.schemaVersion -ne 1 -or $manifest.sourceCommit -notmatch '^[a-f0-9]{40}$' -or
     $manifest.certificationStatus -cne 'notCertified' -or $manifest.files.Count -ne ($files.Count - 1)) {
     throw 'Package manifest identity or file count mismatch.'
 }
@@ -79,6 +82,17 @@ foreach ($entry in $manifest.files) {
         throw 'Package manifest file digest mismatch.'
     }
 }
+if (-not $ContentOnly) {
+    foreach ($name in @('ScomEntra.psm1', 'ScomSetup.Windows.psm1')) {
+        $checkout = Join-Path (Join-Path $PSScriptRoot '..\Setup') $name
+        $packaged = Join-Path (Join-Path $root 'setup') $name
+        if (-not (Test-Path -LiteralPath $checkout -PathType Leaf) -or
+            (Get-FileHash -LiteralPath $checkout -Algorithm SHA256).Hash -cne
+            (Get-FileHash -LiteralPath $packaged -Algorithm SHA256).Hash) {
+            throw "Package setup module does not match the reviewed checkout: $name"
+        }
+    }
+}
 foreach ($file in $files | Where-Object Extension -eq '.md') {
     $text = Get-Content -LiteralPath $file.FullName -Raw
     foreach ($match in [regex]::Matches($text, '\]\(([^)]+)\)')) {
@@ -91,5 +105,10 @@ foreach ($file in $files | Where-Object Extension -eq '.md') {
             throw 'Package documentation contains a broken or outside-package file link.'
         }
     }
+}
+if ($ContentOnly) {
+    Write-Output 'Content-only validation: checkout byte comparison was not performed. Validate provenance separately.'
+} else {
+    Write-Output 'PASS: both repaired setup modules match the current checkout bytes.'
 }
 Write-Output "Package content checks passed: $($required.Count) required files, JSON parsing, documentation links and runtime-state exclusions. No application or source connection started."

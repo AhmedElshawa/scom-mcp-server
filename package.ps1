@@ -47,7 +47,8 @@ foreach ($name in @('README.md', 'LICENSE')) {
 $docs = Join-Path $output 'docs'
 $null = New-Item -ItemType Directory -Path (Join-Path $docs 'images')
 foreach ($name in @('indexed-deployment-runbook.md', 'deployment-issue-log.md', 'customer-evaluation.md',
-    'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md', 'guided-setup.md')) {
+    'enterprise-readiness-roadmap.md', 'os-lifecycle-assessment.md', 'targeted-live-verification.md',
+    'guided-setup.md', 'easy-indexed-upgrade.md', 'local-evaluation-signing.md')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "docs\$name") -Destination $docs
 }
 foreach ($name in @('scom-reference-architecture.png', 'scom-reference-architecture.excalidraw')) {
@@ -61,6 +62,6 @@ $manifestFiles = @(Get-ChildItem -LiteralPath $output -Recurse -File | Sort-Obje
         sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
     }
 })
-$manifest = [ordered]@{schemaVersion=1; sourceCommit=$commit; certificationStatus='notCertified'; files=$manifestFiles}
+$manifest = [ordered]@{format=1; schemaVersion=1; sourceCommit=$commit; certificationStatus='notCertified'; files=$manifestFiles}
 [IO.File]::WriteAllText((Join-Path $output 'package-manifest.json'), ($manifest | ConvertTo-Json -Depth 6), [Text.UTF8Encoding]::new($false))
 Write-Output 'Package created. It includes the legacy collector and opt-in worker host/ingestion foundation, not a certified SCOM normalization profile.'

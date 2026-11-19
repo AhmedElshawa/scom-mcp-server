@@ -123,6 +123,109 @@ catch { if ($_.Exception.Message -ne 'SCOM_PROFILE_MEMBERSHIP_CHANGED_DURING_SCA
 $args.ScopeVisibilityVerified=$false
 try { Get-SCOMGenericGroupScan @args | Out-Null; throw 'Unverified scope accepted.' }
 catch { if ($_.Exception.Message -ne 'SCOM_PROFILE_SCOPE_UNVERIFIED') { throw } }
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+public class HostingFixtureClass {
+    public string Name;
+    public HostingFixtureClass(string name) { Name = name; }
+    public IList<HostingFixtureClass> GetBaseTypes() { return new HostingFixtureClass[0]; }
+}
+public class HostingFixtureProperty { public string Name; }
+public class HostingFixtureValue { public object Value; }
+public class HostingFixtureObject {
+    public Guid Id = Guid.NewGuid();
+    public string DisplayName = "Synthetic";
+    public string HealthState = "Success";
+    public string Kind;
+    public Dictionary<string,object> Values = new Dictionary<string,object>();
+    public bool IsInstanceOf(HostingFixtureClass c) { return Kind == c.Name; }
+    public IList<HostingFixtureClass> GetMostDerivedClasses() { return new [] { new HostingFixtureClass(Kind) }; }
+    public IList<HostingFixtureProperty> GetProperties() {
+        var p = new List<HostingFixtureProperty>();
+        foreach (var name in Values.Keys) p.Add(new HostingFixtureProperty { Name = name });
+        return p;
+    }
+    public HostingFixtureValue this[HostingFixtureProperty p] { get { return new HostingFixtureValue { Value = Values[p.Name] }; } }
+}
+'@
+$fixtureRoot = New-Object HostingFixtureObject; $fixtureRoot.Kind = 'Synthetic.Group'
+$fixtureComputer = New-Object HostingFixtureObject; $fixtureComputer.Kind = 'Synthetic.Computer'
+$fixtureOs = New-Object HostingFixtureObject; $fixtureOs.Kind = 'Synthetic.Os'
+$fixtureVolume = New-Object HostingFixtureObject; $fixtureVolume.Kind = 'Synthetic.Volume'
+$fixtureDevice = New-Object HostingFixtureObject; $fixtureDevice.Kind = 'Synthetic.NonVolumeDevice'
+$fixtureComputer.Values['DnsName'] = 'synthetic.invalid'
+$fixtureComputer.Values['Cpu'] = 4
+$fixtureOs.Values['Version'] = 'Synthetic version'
+$fixtureOs.Values['Memory'] = 8388608
+$fixtureVolume.Values['Name'] = 'C:'
+$fixtureVolume.Values['FileSystem'] = 'NTFS'
+$fixtureVolume.Values['Size'] = 10737418240
+$hostingMapping = [pscustomobject]@{
+    verified=$true; agentMonitoringVerified=$true
+    hostnameProperty='DnsName'; osVersionProperty='Version'; memoryProperty='Memory'
+    processorCountProperty='Cpu'; volumeNameProperty='Name'; fileSystemProperty='FileSystem'; volumeSizeProperty='Size'
+    memoryToMiB=(1.0/1024); volumeSizeToMiB=(1.0/1048576)
+    computerHostsOsRelationship='Synthetic.ComputerHostsOs'; computerHostsVolumeRelationship='Synthetic.ComputerHostsDevice'
+}
+& $module {
+    param($root, $computer, $os, $volume, $device)
+    $script:FixtureRoot = $root
+    $script:FixtureRows = @($root, $computer, $os, $volume)
+    $script:FixtureTargets = @{
+        'Synthetic.ComputerHostsOs' = @($os)
+        'Synthetic.ComputerHostsDevice' = @($volume, $device)
+    }
+    function script:Resolve-SCOMApprovedGroupMembership {
+        param($ReadDirectMembers)
+        & $ReadDirectMembers $script:FixtureRoot.Id 1001 | Out-Null
+        [pscustomobject]@{ ExpectedObjectIds=@($script:FixtureRows.Id); GroupIds=@($script:FixtureRoot.Id) }
+    }
+    function script:Read-SCOMDirectGroupMembers {
+        [pscustomobject]@{ Relationships=@($script:FixtureRows | Where-Object Id -NE $script:FixtureRoot.Id | ForEach-Object {
+            [pscustomobject]@{ Id=[Guid]::NewGuid(); SourceObject=$script:FixtureRoot; TargetObject=$_ }
+        }) }
+    }
+    function script:Read-SCOMObjectIdPages {
+        [pscustomobject]@{ Objects=$script:FixtureRows; DiscoveryComplete=$true }
+    }
+    function script:Read-SCOMDirectRelationshipRows {
+        param($SourceId, $RelationshipClass)
+        $source = @($script:FixtureRows | Where-Object Id -EQ $SourceId)[0]
+        $rows = @()
+        if ($source.Kind -ceq 'Synthetic.Computer') {
+            $rows = @($script:FixtureTargets[$RelationshipClass.Name] | ForEach-Object {
+                [pscustomobject]@{ Id=[Guid]::NewGuid(); SourceObject=$source; TargetObject=$_ }
+            })
+        }
+        [pscustomobject]@{ Relationships=$rows }
+    }
+} $fixtureRoot $fixtureComputer $fixtureOs $fixtureVolume $fixtureDevice
+$hostingArgs = @{
+    EntityObjects=@{}
+    ManagementGroupId=[Guid]'11111111-1111-4111-8111-111111111111'
+    GroupId=$fixtureRoot.Id
+    GroupClass=(New-Object HostingFixtureClass 'Synthetic.Group')
+    MembershipRelationshipClass=[pscustomobject]@{Name='Microsoft.SystemCenter.InstanceGroupContainsEntities'}
+    ScopeVisibilityVerified=$true
+    MembershipQueryContractVerified=$true
+    Request=$request
+    ReadActiveAlerts={ param($object) @() }
+    ReadAlertById={ param($id) @() }
+    WindowsMapping=$hostingMapping
+    WindowsComputerClass=(New-Object HostingFixtureClass 'Synthetic.Computer')
+    WindowsOsClass=(New-Object HostingFixtureClass 'Synthetic.Os')
+    WindowsVolumeClass=(New-Object HostingFixtureClass 'Synthetic.Volume')
+    AdditionalRelationshipContractVerified=$true
+    AdditionalRelationshipClasses=@([pscustomobject]@{Name=$hostingMapping.computerHostsOsRelationship},
+        [pscustomobject]@{Name=$hostingMapping.computerHostsVolumeRelationship})
+}
+$hosting = Get-SCOMGenericGroupScan @hostingArgs
+if (-not $hosting.inventory.complete -or $null -ne $hosting.inventory.reason -or
+    $hosting.windowsInventory.devices.Count -ne 1 -or $hosting.windowsInventory.volumes.Count -ne 1 -or
+    $hosting.windowsInventory.volumes[0].parentEntityId -ne $fixtureComputer.Id.ToString('D')) {
+    throw 'Non-volume logical-device hosting target made Windows inventory partial.'
+}
 $tokens=$null; $errors=$null
 $ast = [Management.Automation.Language.Parser]::ParseFile(
     (Join-Path $PSScriptRoot 'Invoke-SCOMGenericGroupProfile.ps1'), [ref]$tokens, [ref]$errors)
@@ -136,4 +239,4 @@ if ($metricConfiguration.Count -ne 1 -or
     $metricConfiguration[0].Extent.Text -match '\$graphClasses|\$maxSeriesSamples|\$maxMetricSamples') {
     throw 'Optional metric mapping must not gate graph or budget configuration.'
 }
-Write-Output 'Generic SCOM profile validation passed: 13 synthetic cases; scoped graph/alerts/metrics, query budget, outside-edge partial coverage and verification gates. Entrypoint parsed only.'
+Write-Output 'Generic SCOM profile validation passed: 14 synthetic cases; scoped graph/alerts/metrics, query budget, outside-edge partial coverage, non-volume hosting targets and verification gates. Entrypoint parsed only.'
