@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "tenantId": "<TENANT_ID>",
+  "tokenVersion": 2,
+  "apiClientId": "<API_APP_ID>",
+  "resource": "api://<API_APP_ID>",
+  "requiredScope": "Scom.Read",
+  "ingestionRole": "Scom.Ingest",
+  "publisherClientId": "<PUBLISHER_APP_ID>",
+  "publisherObjectId": "<PUBLISHER_SP_OBJECT_ID>",
+  "readerClientId": "<READER_APP_ID>",
+  "certificateThumbprint": "<CERT_THUMBPRINT>"
+}

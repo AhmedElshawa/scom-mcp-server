@@ -1,0 +1,68 @@
+{
+  "OperationalLogging": {
+    "Directory": "C:\\ProgramData\\SCOMMCP\\Logs",
+    "MaxFileBytes": 1048576,
+    "RetainedFiles": 5
+  },
+  "Auth": {
+    "TenantId": "<TENANT_ID>",
+    "Audiences": ["<API_AUDIENCE>"],
+    "RequiredScope": "Scom.Read",
+    "Callers": [
+      {
+        "ObjectId": "<READER_USER_OBJECT_ID>",
+        "Scopes": ["scom-lab"]
+      }
+    ]
+  },
+  "Source": {
+    "SnapshotEnabled": false,
+    "FreshMinutes": 75,
+    "UnavailableMinutes": 180,
+    "CursorLifetimeSeconds": 300
+  },
+  "Lifecycle": {
+    "ApproachingSupportDays": 365,
+    "MaxCatalogAgeDays": 90
+  },
+  "TargetedLive": { "Enabled": false },
+  "ReadModel": {
+    "Enabled": true,
+    "WindowsToolsEnabled": true,
+    "WindowsMetricHosting": {
+      "ComputerClass": "Microsoft.Windows.Computer",
+      "OperatingSystemClass": "Microsoft.Windows.OperatingSystem",
+      "RelationshipClass": "Microsoft.Windows.ComputerHostsOperatingSystem"
+    },
+    "WindowsOsCaptionProperty": "OSVersionDisplayName",
+    "DatabasePath": "C:\\ProgramData\\SCOMMCP\\read-model.db",
+    "ManagementGroupId": "<MG_ID>",
+    "ScopeKind": "group",
+    "GroupId": "<GROUP_ID>",
+    "PublisherObjectIds": ["<PUBLISHER_SP_OBJECT_ID>"],
+    "IngestionRole": "Scom.Ingest",
+    "AllowedPropertiesByClass": {
+      "Microsoft.Windows.Server.10.0.Full.Computer": ["PrincipalName", "LogicalProcessors"],
+      "Microsoft.Windows.Server.10.0.Full.OperatingSystem": ["OSVersion", "OSVersionDisplayName", "PhysicalMemory"],
+      "Microsoft.Windows.Server.10.0.LogicalDisk": ["DeviceID", "FileSystem", "SizeInMBs"]
+    },
+    "AllowedMetricsByClass": {},
+    "IncludeAlertDescriptions": false,
+    "MaxBatchBytes": 1048576,
+    "MaxDatasetBytes": 16777216,
+    "MaxRecords": 100000,
+    "MaxDatabaseBytes": 134217728,
+    "FreshMinutes": 75,
+    "UnavailableMinutes": 180,
+    "SessionMinutes": 30,
+    "RequestBodyTimeoutSeconds": 30
+  },
+  "Logging": {
+    "LogLevel": {
+      "Default": "Warning",
+      "ScomMcp.ReadModelStore": "Information",
+      "Microsoft.AspNetCore": "Warning"
+    }
+  },
+  "AllowedHosts": "<FQDN>"
+}

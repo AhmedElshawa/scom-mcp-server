@@ -53,7 +53,7 @@ Indexed Windows inventory can retain a separate nullable `osCaption`, sourced
 only through a reviewed worker `windowsMapping.osCaptionProperty`, worker and
 receiver property allowlists for the actual OS class, and receiver
 `ReadModel.WindowsOsCaptionProperty` plus typed `WindowsMetricHosting`.
-See the [configuration and historical source evidence](../README.md).
+See the [configuration and historical source evidence](technical-reference.md).
 The assessment prefers `osCaption`; when it is null it preserves exact matching
 of legacy `osVersion` captions. An unmapped non-null caption never falls back to
 another value. Numeric versions such as `10.0.20348` and `10.0.26100` alone remain
