@@ -57,6 +57,25 @@ pinned in the database. Procedure:
 Cadence-only edits (`schedule.interval`) do not change the pinned policy, but still change the
 worker config hash: record the change in your journal and restart the worker.
 
+## Lifecycle catalog and connector tool list
+
+The OS lifecycle catalog (`windows-server-fixed-2026-11-02.1`, verified 2026-11-02) is
+**compiled into `ScomMcp.dll`**. There is no separate catalog file to load. It changes only when
+you install a newer build. `Lifecycle.MaxCatalogAgeDays` (default 90) makes the tool report
+`CATALOG_STALE_OR_NOT_YET_VERIFIED` once the catalog is older than that, so plan to install a
+newer build before then. `list_os_support_assessments` is registered by the receiver build itself
+and appears in the server's tool list without extra configuration; it assesses only devices whose
+captions are in the read model.
+
+If the agent cannot see the tool:
+
+1. Confirm the installed build contains it (the tool name is present in `ScomMcp.dll`).
+2. In Copilot Studio, **Tools** > the connector > **Refresh**; Copilot Studio caches the tool list
+   at connector creation and refresh.
+3. Add `list_os_support_assessments` to the agent's tools and to its instructions
+   ([agent-instructions.md](../examples/agent-instructions.md)).
+4. Ask a lifecycle question and confirm in the activity map that the tool was called.
+
 ## Recovery
 
 | Symptom | Action |

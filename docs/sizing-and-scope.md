@@ -30,6 +30,14 @@ computers. Above that, raise them deliberately and re-validate; see
 Lab evidence: a 3-computer group completed at a 5-minute cadence with fresh, complete 3/3
 coverage. The hourly default and larger sizes have **not** been run in the lab.
 
+## Memory unit (UNCONFIRMED)
+
+The `memoryToMiB` factor in the worker example (`0.0009765625`) has an **UNCONFIRMED unit**:
+the lab treated the `PhysicalMemory` value as KB, while the property metadata described MB.
+It has not been checked against a server with known RAM, so do not use memory figures derived
+from it for sizing until you have confirmed the unit. See
+[worker.example.md](../examples/worker.example.md).
+
 ## Future work
 
 A set-based reader that collects many objects per SDK call would cut the per-object cost.
