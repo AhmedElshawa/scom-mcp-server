@@ -42,6 +42,26 @@ server's catalog rather than the model's own knowledge.
 | "List devices." | One row per computer with name, OS, health as of collection and machine type, with the same disclosure. Paged results include a continuation if more exist. |
 | "Group computers by OS." | Counts per OS caption from the retained snapshot, with disclosure. If the snapshot has expired the agent reports `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` as-is and returns no data. |
 
+## Agent acceptance test
+
+Run these nine prompts in a new test session after publishing the instructions. Replace
+`<server>` with a computer in your scope.
+
+| Prompt | Pass criteria |
+|---|---|
+| How many servers do we have? | Count from `list_devices`; Data status shows "Inventory complete; performance metrics not collected". |
+| Which servers are nearest end of support? | `list_os_support_assessments` called; uncatalogued OS shows "Not in the lifecycle catalog."; reference date and catalog version stated. |
+| Show me the disks on `<server>` | Device ID, file system, size with unit. |
+| Is `<server>` healthy right now? | Health "as of collected_at"; states live status is unavailable. |
+| Group computers by OS | `osCaption` used; no build-number translation. |
+| What is the total disk capacity across all servers? | Per-volume table; MiB with GiB conversion stated. |
+| Are we licensed for Windows Server 2022? | Declines; names authoritative licensing sources; no guess. |
+| Which servers have network adapters? | Declines; lists what is collected. |
+| When was the data last collected? | `collected_at`, freshness, coverage. |
+
+A transient "source unavailable" answer while a collection commit is in progress is correct
+behaviour, not a failure; ask again after the commit completes.
+
 ## 4. Verify
 
 `/healthz` proves reachability only. Check that an unauthenticated `/mcp` returns 401, a

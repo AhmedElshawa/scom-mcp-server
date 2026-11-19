@@ -29,7 +29,7 @@ packs. Verify each against your own probe output before setting any `*Verified` 
 | `hostnameProperty` | `PrincipalName` | |
 | `osVersionProperty` | `OSVersion` | |
 | `osCaptionProperty` | `OSVersionDisplayName` | Optional; drives lifecycle matching. |
-| `memoryProperty` / `memoryToMiB` | `PhysicalMemory` / `0.0009765625` | **UNCONFIRMED unit.** The lab operator treated the value as KB; the property metadata described MB (`1`). Not yet checked against a server with known RAM. Do not rely on this factor; compare with a server whose RAM you know before attesting. |
+| `memoryProperty` / `memoryToMiB` | `PhysicalMemory` / `0.0009765625` | The value is KB, so the factor is `1/1024`. Evidence: `get_device_details` returned 14,335.6 MiB for a server with 14 GiB of RAM; the management pack metadata labelling the property as MB is wrong for this value. |
 | `processorCountProperty` | `LogicalProcessors` | |
 | `volumeNameProperty` | `DeviceID` | |
 | `fileSystemProperty` | `FileSystem` | |
