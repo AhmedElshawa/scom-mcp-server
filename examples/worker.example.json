@@ -1,0 +1,102 @@
+{
+  "operationalLogging": {
+    "directory": "C:\\ProgramData\\ScomAiWorker\\logs",
+    "maxFileBytes": 1048576,
+    "retainedFiles": 5
+  },
+  "liveChecks": {
+    "enabled": false,
+    "queryContractVerified": false,
+    "pollSeconds": 2
+  },
+  "checkpointPath": "C:\\ProgramData\\ScomAiWorker\\state\\worker.db",
+  "maxCheckpointBytes": 33554432,
+  "profile": {
+    "executablePath": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+    "scriptPath": "C:\\ProgramData\\ScomAiWorker\\profiles\\Invoke-SCOMGenericGroupProfile.ps1",
+    "scriptSha256": "<SCRIPT_SHA256>",
+    "configuration": {
+      "operationsManagerModule": "C:\\Program Files\\Microsoft System Center\\Operations Manager\\Powershell\\OperationsManager\\OperationsManager.psd1",
+      "managementServer": "<MGMT_SERVER_FQDN>",
+      "managementGroupId": "<MG_ID>",
+      "scopeKind": "group",
+      "groupId": "<GROUP_ID>",
+      "scopeVisibilityVerified": false,
+      "membershipQueryContractVerified": false,
+      "wholeManagementGroupApproved": false,
+      "enumerationQueryContractVerified": false,
+      "allowedPropertiesByClass": {
+        "Microsoft.Windows.Server.10.0.Full.Computer": ["PrincipalName", "LogicalProcessors"],
+        "Microsoft.Windows.Server.10.0.Full.OperatingSystem": ["OSVersion", "OSVersionDisplayName", "PhysicalMemory"],
+        "Microsoft.Windows.Server.10.0.LogicalDisk": ["DeviceID", "FileSystem", "SizeInMBs"]
+      },
+      "metricMappingsByClass": {},
+      "additionalRelationshipNames": [
+        "Microsoft.Windows.ComputerHostsOperatingSystem",
+        "Microsoft.Windows.ComputerHostsLogicalDevice"
+      ],
+      "additionalRelationshipContractVerified": false,
+      "windowsMapping": {
+        "verified": false,
+        "agentMonitoringVerified": false,
+        "computerClassName": "Microsoft.Windows.Computer",
+        "operatingSystemClassName": "Microsoft.Windows.OperatingSystem",
+        "volumeClassName": "Microsoft.Windows.Server.LogicalDisk",
+        "computerHostsOsRelationship": "Microsoft.Windows.ComputerHostsOperatingSystem",
+        "computerHostsVolumeRelationship": "Microsoft.Windows.ComputerHostsLogicalDevice",
+        "hostnameProperty": "PrincipalName",
+        "osVersionProperty": "OSVersion",
+        "osCaptionProperty": "OSVersionDisplayName",
+        "memoryProperty": "PhysicalMemory",
+        "memoryToMiB": 0.0009765625,
+        "processorCountProperty": "LogicalProcessors",
+        "volumeNameProperty": "DeviceID",
+        "fileSystemProperty": "FileSystem",
+        "volumeSizeProperty": "SizeInMBs",
+        "volumeSizeToMiB": 1
+      },
+      "maxGraphQueries": 10000,
+      "includeAlertDescriptions": false,
+      "maxObjects": 1000,
+      "maxGroups": 100,
+      "maxAlerts": 10000,
+      "maxSeriesSamples": 10000,
+      "maxMetricSamples": 50000,
+      "pageSize": 50,
+      "deadlineSeconds": 900
+    },
+    "maxInputBytes": 65536,
+    "maxOutputBytes": 16777216,
+    "deadlineSeconds": 900
+  },
+  "identity": {
+    "tenantId": "<TENANT_ID>",
+    "clientId": "<PUBLISHER_APP_ID>",
+    "resource": "api://<API_APP_ID>",
+    "certificateThumbprint": "<CERT_THUMBPRINT>"
+  },
+  "publisher": {
+    "endpoint": "https://<FQDN>",
+    "maxBatchBytes": 1048576,
+    "maxDatasetBytes": 16777216,
+    "maxRecords": 100000,
+    "maxAttempts": 3,
+    "requestTimeoutSeconds": 30,
+    "publicationTimeoutSeconds": 1200
+  },
+  "reconciliation": {
+    "maxRecords": 100000,
+    "batchRecords": 100,
+    "maxAlerts": 10000,
+    "maxSeriesSamples": 10000,
+    "maxMetricSamples": 50000,
+    "resolvedAlertRetention": "7.00:00:00"
+  },
+  "schedule": {
+    "interval": "01:00:00",
+    "attemptDeadline": "00:35:00",
+    "failureBackoff": "00:01:00",
+    "maxFailureBackoff": "00:30:00",
+    "maxConsecutiveDeferredAttempts": 5
+  }
+}

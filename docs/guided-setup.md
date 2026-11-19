@@ -248,7 +248,7 @@ For a customer-approved `OSVersionDisplayName` property, configure worker
 property allowlists for each actual most-derived OS class and the existing
 reviewed `WindowsMetricHosting` relationship. Configure rejects mismatched paired
 caption mappings/allowlists/hosting. It never silently enables or invents them.
-See the [source contract and candidate MP evidence](../README.md).
+See the [source contract and candidate MP evidence](technical-reference.md).
 Missing, blank or unconfigured captions remain **unknown/null**; the package does
 not infer a Windows marketing name from a version/build. The presence of
 `OSVersionDisplayName` in legacy repository code does not establish that the
@@ -403,7 +403,7 @@ prompts, script-managed downloads, execution-policy changes, broad group creatio
 
 ## Before starting
 
-Use the complete reviewed [evaluation package](../README.md#build-and-validate),
+Use the complete reviewed [evaluation package](technical-reference.md#build-and-validate),
 not a single DLL. On the customer host, open **64-bit Windows PowerShell 5.1**
 through the approved administrator mechanism. Use the organization's approved
 signing/distribution route. If policy blocks the package, stop and request an
@@ -439,7 +439,7 @@ guaranteed fix for a separate failed runtime-detection check.
 
 Use serviced versions approved for your OS/SCOM combination. See
 [Microsoft IIS prerequisites](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-8.0)
-and the [existing two-server deployment guidance](../README.md#two-server-deployment-indexed-path).
+and the [existing two-server deployment guidance](technical-reference.md#two-server-deployment-indexed-path).
 SCOM SDK/Operations console installation, firewall/DNS, public HTTPS reachability,
 certificate enrollment/private-key permissions and source contract/mapping review
 remain customer responsibilities. Do not guess SDK signatures or source flags.
@@ -750,7 +750,7 @@ source rights or private-key access**.
 
 For the reader, separately configure the **Studio-generated Web callback URI**,
 protected OAuth client credential and scoped delegated consent using the
-[reader setup](../README.md#azure-iis-and-copilot-studio-reader-setup). No secret is
+[reader setup](technical-reference.md#azure-iis-and-copilot-studio-reader-setup). No secret is
 created/exported by this script. Do not invent redirect URIs or use an
 administrator/shared reader connection.
 
@@ -1060,7 +1060,7 @@ The host lane only checks/records the matching worker receipt; it does **not**
 execute another source run. The receipt is worker-reported evidence, not
 cryptographic attestation or proof that Studio can read inventory.
 Using individual-user authentication, follow
-[reader/data acceptance](../README.md#azure-iis-and-copilot-studio-reader-setup):
+[reader/data acceptance](technical-reference.md#azure-iis-and-copilot-studio-reader-setup):
 tool discovery, source status, intended inventory/coverage, unauthorized-user
 denial, pagination and stale/partial behavior. Then explicitly attest that evidence:
 

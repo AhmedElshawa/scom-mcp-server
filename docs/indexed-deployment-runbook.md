@@ -44,7 +44,7 @@ whole-management-group approval into another environment.
 
 ## 2. Prepare the MCP server
 
-Follow [build and packaging](../README.md#build-and-validate) on an approved build
+Follow [build and packaging](technical-reference.md#build-and-validate) on an approved build
 host. Stage the **complete** packaged server output and collector dependencies in
 protected locations on the MCP server, not over a running application.
 
@@ -61,7 +61,7 @@ The application and worker require compatible, serviced .NET 8 and ASP.NET Core 
 runtimes. IIS also requires the appropriate Hosting Bundle. The worker requires
 Windows PowerShell 5.1 and a compatible OperationsManager module/SDK. Install
 **Operations console only** from approved SCOM media on this host if needed.
-See [host prerequisites](../README.md#two-server-deployment-indexed-path).
+See [host prerequisites](technical-reference.md#two-server-deployment-indexed-path).
 
 **Completion check:** the chosen MCP host has all prerequisites and package
 files. A copy left on another host does not count; do not run it or delete it as
@@ -75,8 +75,8 @@ part of this procedure.
 | Worker certificate to ingestion API | Publish datasets | Existing machine certificate, private-key access, Entra credential and application-role assignment |
 | Delegated user to MCP | Read authorized retained data | Valid reader OAuth configuration and immutable user authorization |
 
-Use [publisher identity setup](../README.md#publisher-identity-setup-entra-and-windows)
-and [reader OAuth setup](../README.md#azure-iis-and-copilot-studio-reader-setup).
+Use [publisher identity setup](technical-reference.md#publisher-identity-setup-entra-and-windows)
+and [reader OAuth setup](technical-reference.md#azure-iis-and-copilot-studio-reader-setup).
 Do not recreate working identities merely because data is unavailable.
 Do not put Windows passwords, OAuth secrets, tokens or private keys in commands,
 configuration examples, diagnostics or source control.
@@ -92,7 +92,7 @@ New-SCOMManagementGroupConnection -ComputerName 'scom01.example.com' -ErrorActio
 
 The FQDN is a placeholder. This connection check does not prove complete scope
 visibility. Metadata reports and preflight scripts do not publish inventory.
-Follow the [acceptance checklist](../README.md#deployment-acceptance-checklist)
+Follow the [acceptance checklist](technical-reference.md#deployment-acceptance-checklist)
 for source-specific evidence; leave unverified gates false.
 
 ## 4. Prepare two complete private configurations
@@ -119,7 +119,7 @@ Review these paired settings before activation:
 | Settings | Required agreement |
 |---|---|
 | Management-group ID, scope kind, group ID | Same on both sides; group ID is null only for explicitly approved `managementGroup` scope |
-| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` use exact, case-sensitive most-derived class names. A base-class entry does not expose generic properties on derived objects, even if the SDK reports those properties as inherited. To expose such properties, review the actual concrete class and property and add that exact pair to both lists. The typed Windows projection reads its separately reviewed computer, OS and disk mappings from the SDK (including inherited properties reported by the SDK); a base-only generic allowlist does not remove those typed fields. Optional OS captions additionally require exact class/property approval, matching worker `windowsMapping.osCaptionProperty` and receiver `WindowsOsCaptionProperty`, plus reviewed `WindowsMetricHosting` for typed source provenance; see [README](../README.md). These are pinned policy changes, not an in-place database edit. |
+| Property exposure | Worker `allowedPropertiesByClass` and receiver `AllowedPropertiesByClass` use exact, case-sensitive most-derived class names. A base-class entry does not expose generic properties on derived objects, even if the SDK reports those properties as inherited. To expose such properties, review the actual concrete class and property and add that exact pair to both lists. The typed Windows projection reads its separately reviewed computer, OS and disk mappings from the SDK (including inherited properties reported by the SDK); a base-only generic allowlist does not remove those typed fields. Optional OS captions additionally require exact class/property approval, matching worker `windowsMapping.osCaptionProperty` and receiver `WindowsOsCaptionProperty`, plus reviewed `WindowsMetricHosting` for typed source provenance; see [README](technical-reference.md). These are pinned policy changes, not an in-place database edit. |
 | Windows mapping | Verified properties, units, typed relationships and monitoring-role mapping; collect the corresponding hosting relationships |
 | Metrics | Start with worker `metricMappingsByClass={}` and receiver `AllowedMetricsByClass={}` until metric acceptance is separately complete |
 | Freshness | `Source` and `ReadModel` fresh/unavailable settings match |
@@ -183,7 +183,7 @@ has been established. If the installed SDK has no such supported contract, this
 is a product/source-contract blocker—not an operator configuration error.
 
 Implementation details and the existing post-materialization behavior are
-recorded in the repository's [SCOM source-reader notes](../README.md#source-adapter-certification-gate).
+recorded in the repository's [SCOM source-reader notes](technical-reference.md#source-adapter-certification-gate).
 This gate is independent of local prerequisites, bounded group-name discovery,
 IIS health and the operator's separately approved whole-supported-Windows scope.
 

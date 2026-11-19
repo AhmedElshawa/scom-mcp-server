@@ -1,0 +1,86 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Build, validate, attest and publish release
+    runs-on: windows-2022
+    timeout-minutes: 40
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+      DOTNET_NOLOGO: '1'
+      DOTNET_SKIP_FIRST_TIME_EXPERIENCE: '1'
+    steps:
+      - name: Checkout the tagged commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Install pinned .NET SDK
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: '8.0.427'
+
+      - name: Pin SDK selection
+        run: |
+          $ErrorActionPreference = 'Stop'
+          '{"sdk":{"version":"8.0.427","rollForward":"disable","allowPrerelease":false}}' |
+            Set-Content -LiteralPath global.json -Encoding utf8NoBOM
+          if ((dotnet --version) -ne '8.0.427') { throw 'Unexpected SDK selection.' }
+
+      - name: Restore locked dependencies
+        run: |
+          dotnet restore .\Validation\Validation.csproj --locked-mode --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Locked restore failed.' }
+          dotnet restore .\SetupGui\ScomSetup.csproj --runtime win-x64 --locked-mode --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Native setup locked restore failed.' }
+          dotnet restore .\ScomMcp\ScomMcp.csproj --locked-mode --verbosity minimal
+          if ($LASTEXITCODE -ne 0) { throw 'Server locked restore failed.' }
+
+      - name: Build release package, ZIP, SHA-256 and SBOM
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v[0-9A-Za-z][0-9A-Za-z._+-]{0,62}$') { throw 'Unsupported tag name.' }
+          .\package.ps1 -OutputDirectory ".\artifacts\scom-mcp-$tag" -Release -Version $tag
+          .\Validation\Test-Package.ps1 -PackageDirectory ".\artifacts\scom-mcp-$tag"
+          .\Validation\Test-PackageManifest.ps1 -PackageDirectory ".\artifacts\scom-mcp-$tag"
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging changed tracked source.' }
+          Get-ChildItem .\artifacts -File | Format-Table Name, Length
+
+      - name: Attest build provenance of the release ZIP
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: artifacts/scom-mcp-${{ github.ref_name }}.zip
+
+      - name: Publish GitHub release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $base = ".\artifacts\scom-mcp-$env:TAG"
+          gh release create $env:TAG "$base.zip" "$base.zip.sha256" "$base.sbom.cdx.json" `
+            --repo '${{ github.repository }}' --title $env:TAG --verify-tag `
+            --notes 'Unsigned community release. Verify the SHA-256 and the build provenance attestation (gh attestation verify). See SECURITY.md and docs/limitations.md.'
+          if ($LASTEXITCODE -ne 0) { throw 'Release creation failed.' }

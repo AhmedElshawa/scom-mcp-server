@@ -1,0 +1,19 @@
+name: Feature request
+description: Suggest an improvement
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem to solve
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Note any impact on the read-only guarantee or on SCOM load.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
