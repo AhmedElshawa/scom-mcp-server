@@ -70,6 +70,10 @@ public sealed class ReadModelStore
         if (settings.WindowsToolsEnabled) scope = Wire.Encode(new { schema = 2, policy = scope, windowsTools = true });
         if (settings.WindowsMetricHosting is { } hostingPolicy)
             scope = Wire.Encode(new { schema = 3, policy = scope, windowsMetricHosting = hostingPolicy });
+        if (settings.WindowsOsCaptionProperty is { } captionPolicy)
+            scope = Wire.Encode(new { schema = 4, policy = scope, windowsOsCaptionProperty = captionPolicy });
+        if (settings.OfflineHostingPreview)
+            scope = Wire.Encode(new { schema = 5, policy = scope, offlineHostingPreview = true });
         var exists = File.Exists(settings.DatabasePath);
         if (exists)
         {
@@ -238,6 +242,9 @@ public sealed class ReadModelStore
                 tx.Commit();
                 return sessionId;
             }
+            if (settings.OfflineHostingPreview)
+                Require(Convert.ToInt64(Scalar(db, tx, "SELECT count(*) FROM runs WHERE state='committed'")) == 0,
+                    "OFFLINE_HOSTING_PREVIEW_ALREADY_CAPTURED");
             var active = Scalar(db, tx, "SELECT count(*) FROM runs WHERE state='staging' AND expires > $now",
                 ("$now", clock.GetUtcNow().ToString("O")));
             Require(Convert.ToInt64(active) == 0, "COLLECTION_ALREADY_IN_PROGRESS");
@@ -373,6 +380,9 @@ public sealed class ReadModelStore
                 }
             }
             Validate(manifest, objects, relationships, alerts, metrics);
+            if (settings.OfflineHostingPreview)
+                Require(devices.All(device => device.MonitoringMode == "unknown"),
+                    "OFFLINE_HOSTING_PREVIEW_MONITORING_ROLE_UNVERIFIED");
             Dataset? windowsDataset = null;
             if (settings.WindowsToolsEnabled)
                 windowsDataset = BuildWindowsDataset(sessionId, manifest, objects, relationships, metrics, devices, volumes);
@@ -547,18 +557,35 @@ public sealed class ReadModelStore
         var volumeIds = volumes.Select(v => v.EntityId).ToHashSet(StringComparer.Ordinal);
         Require(!manifest.Inventory.Complete || deviceIds.SetEquals(expected), "WINDOWS_COMPLETE_INVENTORY_MISMATCH");
         var osParents = new Dictionary<string, string>(StringComparer.Ordinal);
+        var computerOperatingSystems = new Dictionary<string, string>(StringComparer.Ordinal);
         if (settings.WindowsMetricHosting is { } hosting)
         {
-            var computerChildren = new HashSet<string>(StringComparer.Ordinal);
             foreach (var edge in relationships.Where(e => e.ClassName == hosting.RelationshipClass))
             {
                 Require(deviceIds.Contains(edge.SourceId) && served.TryGetValue(edge.SourceId, out var computer) &&
                     IsClass(computer, hosting.ComputerClass) && served.TryGetValue(edge.TargetId, out var os) &&
                     IsClass(os, hosting.OperatingSystemClass) && !deviceIds.Contains(edge.TargetId) &&
                     !volumeIds.Contains(edge.TargetId), "WINDOWS_METRIC_HOSTING_INVALID");
-                Require(computerChildren.Add(edge.SourceId) && osParents.TryAdd(edge.TargetId, edge.SourceId),
+                Require(computerOperatingSystems.TryAdd(edge.SourceId, edge.TargetId) && osParents.TryAdd(edge.TargetId, edge.SourceId),
                     "WINDOWS_METRIC_HOSTING_AMBIGUOUS");
             }
+        }
+        foreach (var device in devices)
+        {
+            string? observedCaption = null;
+            if (settings.WindowsOsCaptionProperty is { } property)
+            {
+                if (computerOperatingSystems.TryGetValue(device.EntityId, out var osId))
+                {
+                    var os = served[osId];
+                    Require(settings.AllowedPropertiesByClass.TryGetValue(os.ClassName, out var allowed) &&
+                        allowed.Contains(property, StringComparer.Ordinal) && os.Properties.ContainsKey(property),
+                        "WINDOWS_OS_CAPTION_PROPERTY_NOT_APPROVED");
+                    var raw = os.Properties[property];
+                    observedCaption = string.IsNullOrWhiteSpace(raw) ? null : raw;
+                }
+            }
+            Require(device.OsCaption == observedCaption, "WINDOWS_OS_CAPTION_SOURCE_MISMATCH");
         }
         var samples = new List<Sample>();
         foreach (var metric in metrics)
@@ -577,6 +604,7 @@ public sealed class ReadModelStore
         if (!manifest.Inventory.Complete) limits.Add("INVENTORY_DOMAIN_INCOMPLETE");
         if (!manifest.Alerts.Complete) limits.Add("ALERT_DOMAIN_INCOMPLETE");
         if (!manifest.Metrics.Complete) limits.Add("METRIC_DOMAIN_INCOMPLETE");
+        if (settings.OfflineHostingPreview) limits.Add(ReadModelSettings.OfflineHostingPreviewReason);
         var snapshot = new Snapshot("1.0", id, "scom",
             manifest.Inventory.Complete && manifest.Alerts.Complete && manifest.Metrics.Complete ? "ok" : "partial",
             new(settings.ManagementGroupId, "configured-source"), new(Wire.ScopeId, "approved-scope"),
@@ -600,6 +628,12 @@ public sealed class ReadModelStore
         var expected = m.ExpectedObjectIds.ToHashSet(StringComparer.Ordinal);
         Require(expected.Count == m.ExpectedObjectIds.Length, "MEMBERSHIP_DUPLICATE");
         Domain(m.Inventory); Domain(m.Alerts); Domain(m.Metrics);
+        if (settings.OfflineHostingPreview)
+            Require(!m.Inventory.Complete && m.Inventory.Reason == ReadModelSettings.OfflineHostingPreviewReason &&
+                !m.Alerts.Complete && !m.Metrics.Complete && alerts.Count == 0 && metrics.Count == 0,
+                "OFFLINE_HOSTING_PREVIEW_MUST_REPORT_UNVERIFIED_COVERAGE");
+        else
+            Require(m.Inventory.Reason != ReadModelSettings.OfflineHostingPreviewReason, "OFFLINE_HOSTING_PREVIEW_POLICY_REQUIRED");
         Time(m.AlertHistoryStartUtc);
         Require(m.AlertHistoryStartUtc <= m.Alerts.AsOfUtc, "ALERT_HISTORY_INVALID");
         foreach (var o in objects)

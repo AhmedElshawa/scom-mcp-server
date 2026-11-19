@@ -17,7 +17,7 @@ public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine
         Execute(scopeId, (ds, _, _) => engine.SourceStatus(ds), cancellationToken);
 
     [McpServerTool(Name = "get_inventory_summary", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Complete filtered distinct SCOM COMPUTER count, never volumes or enterprise total. Optional filters are exact case-insensitive matches: entityKind computer/networkDevice (network unsupported), osFamily windows/linux/unknown, osVersion exact caption, health healthy/warning/critical/unknown, virtualization physical/virtual/unknown, groupId exact group. Null omits a filter; unknown fields are never zero.")]
+    [Description("Complete filtered distinct SCOM COMPUTER count, never volumes or enterprise total. Optional filters are exact case-insensitive matches: entityKind computer/networkDevice (network unsupported), osFamily windows/linux/unknown, osVersion exact observed value (not osCaption), health healthy/warning/critical/unknown, virtualization physical/virtual/unknown, groupId exact group. Separate osCaption breakdown is observed product/edition, never build inference. Null omits a filter; unknown fields are never zero.")]
     public Task<CallToolResult> Inventory(string? scopeId = null, string? entityKind = null,
         string? osFamily = null, string? osVersion = null, string? health = null, string? virtualization = null,
         string? groupId = null, CancellationToken cancellationToken = default) =>
@@ -35,7 +35,7 @@ public sealed class ScomReadOnlyTools(ISnapshotReader reader, QueryEngine engine
             () => { new InventoryFilter(entityKind, osFamily, osVersion, health, virtualization, groupId).Normalize(); QueryEngine.ValidatePageSize(pageSize); });
 
     [McpServerTool(Name = "get_device_details", ReadOnly = true, Destructive = false, Idempotent = true, OpenWorld = false)]
-    [Description("Source-backed authorized computer GUID details and its volumes/provenance. Missing or unauthorized entities both return NOT_FOUND. Unavailable attributes remain null.")]
+    [Description("Source-backed authorized computer GUID details and its volumes/provenance. osCaption is the optional observed OS product/edition, separate from osVersion; never infer a product from a build. Missing or unauthorized entities both return NOT_FOUND. Unavailable attributes remain null.")]
     public Task<CallToolResult> Details(string entityId, string? scopeId = null, CancellationToken cancellationToken = default) =>
         Execute(scopeId, (ds, _, _) => engine.Details(ds, entityId), cancellationToken, () => Guard.Entity(entityId));
 

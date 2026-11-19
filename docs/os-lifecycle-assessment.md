@@ -49,6 +49,23 @@ the result as `unsupported` by this assessment profile; that does not assert tha
 their vendor has ended support. Other OS inventory is not changed. Windows tools
 still do not ingest universal Linux/custom-OS inventory.
 
+Indexed Windows inventory can retain a separate nullable `osCaption`, sourced
+only through a reviewed worker `windowsMapping.osCaptionProperty`, worker and
+receiver property allowlists for the actual OS class, and receiver
+`ReadModel.WindowsOsCaptionProperty` plus typed `WindowsMetricHosting`.
+See the [configuration and historical source evidence](../README.md).
+The assessment prefers `osCaption`; when it is null it preserves exact matching
+of legacy `osVersion` captions. An unmapped non-null caption never falls back to
+another value. Numeric versions such as `10.0.20348` and `10.0.26100` alone remain
+unknown. Legacy combined values such as `product (build)` are not parsed.
+The inventory version field and its filters are unchanged.
+
+An observed product/edition can enable this existing lifecycle profile; it does
+not identify licenses used or assigned, purchase/contract expiration or license
+entitlement. Such facts require a separately approved authoritative licensing,
+SAM or CMDB source. This inventory feature does not ingest license entitlements
+or product keys.
+
 ## Dates, phases and ESU
 
 `asOfDate` is the server clock's current **Pacific calendar date**, using the
@@ -137,7 +154,8 @@ end-of-support, or ESU availability with entitlement.
 Offline tests cover every mapped edition, date boundaries, threshold inclusivity,
 unknown captions/editions/channels, missing attributes, stale/future catalog,
 ESU separation, complete counts, paging bindings and legacy/indexed authenticated
-HTTP access. The six existing tool contracts are unchanged.
+HTTP access. The six existing tools retain their arguments and behavior; device rows gain
+nullable `osCaption` and inventory summaries gain an `osCaption` breakdown.
 
 This is implemented evidence-backed assessment, not accepted customer deployment.
 Clean-host/source-caption/customer-scope/Studio-answer acceptance and recurring

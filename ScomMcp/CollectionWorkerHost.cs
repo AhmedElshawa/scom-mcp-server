@@ -1,11 +1,13 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Diagnostics;
 
 namespace ScomMcp;
 
 public sealed class CollectionWorkerHostSettings
 {
+    public OperationalLoggingSettings OperationalLogging { get; set; } = new();
     public string CheckpointPath { get; set; } = "";
     public int MaxCheckpointBytes { get; set; } = 32 * 1024 * 1024;
     public PowerShellProfileSettings Profile { get; set; } = new();
@@ -21,7 +23,8 @@ public static class CollectionWorkerHost
     public static async Task<int> RunAsync(string configurationPath, bool once, CancellationToken cancellationToken,
         string? runtimeStateDirectory = null)
     {
-        using var logging = LoggerFactory.Create(builder => builder.AddSimpleConsole(options => options.SingleLine = true));
+        using var logging = LoggerFactory.Create(builder =>
+            builder.ClearProviders().AddProvider(new SafeWorkerConsoleLoggerProvider()));
         var logger = logging.CreateLogger("ScomCollectionWorker");
         WorkerRuntimeState? runtimeState = null;
         CancellationTokenSource? runtimeShutdown = null;
@@ -35,7 +38,6 @@ public static class CollectionWorkerHost
                 if (once)
                     throw new InvalidOperationException("Runtime state hosting is available only in long-running worker mode.");
                 runtimeState = new WorkerRuntimeState(runtimeStateDirectory);
-                logging.AddProvider(new BoundedWorkerFileLoggerProvider(runtimeStateDirectory));
                 runtimeShutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 workerCancellationToken = runtimeShutdown.Token;
                 stopRequestWatcher = runtimeState.WatchStopRequestsAsync(runtimeShutdown, workerCancellationToken);
@@ -64,11 +66,17 @@ public static class CollectionWorkerHost
             var settings = document.RootElement.Deserialize<CollectionWorkerHostSettings>(Wire.Json) ??
                 throw new InvalidOperationException("Worker configuration is empty.");
             loadingConfiguration = false;
+            logging.AddProvider(new OperationalFileLoggerProvider(settings.OperationalLogging,
+                OperationalComponent.Worker));
+            OperationalLog.Write(logger, OperationalEvent.Started, OperationalOutcome.Succeeded);
             settings.Reconciliation.Validate();
             settings.Schedule.Validate();
             settings.Publisher.Validate();
             settings.Identity.Validate();
             settings.LiveChecks.Validate();
+            var hostingLab = SetupConfigurationValidation.HostingLabPreviewEnabled(settings.Profile.Configuration);
+            if (hostingLab && (!once || settings.LiveChecks.Enabled))
+                throw new InvalidOperationException("Hosting lab preview requires worker-once with live checks disabled.");
             if (once && settings.LiveChecks.Enabled)
                 throw new InvalidOperationException("Live checks require the explicitly enabled long-running worker, not worker-once.");
             var profile = new PowerShellNormalizationProfile(settings.Profile);
@@ -80,6 +88,8 @@ public static class CollectionWorkerHost
                 settings.Publisher.Endpoint, settings.Identity.TenantId, settings.Identity.ClientId,
                 settings.Identity.Resource
             }))));
+            if (hostingLab && File.Exists(settings.CheckpointPath))
+                throw new InvalidOperationException("Hosting lab preview requires a new checkpoint.");
             using var checkpoint = new SourceCheckpointStore(settings.CheckpointPath, policy, settings.MaxCheckpointBytes);
             using var identity = new CertificatePublisherToken(settings.Identity);
             using var publisher = new IngestionPublisher(settings.Publisher, identity.AcquireAsync);
@@ -87,8 +97,20 @@ public static class CollectionWorkerHost
             var worker = new CollectionWorker(source, publisher);
             if (once)
             {
-                await worker.RunOnceAsync(workerCancellationToken);
-                logger.LogInformation("Worker attempt published. Event={Event}", "SCOM_WORKER_PUBLISHED");
+                if (hostingLab)
+                {
+                    using var attempt = new FileStream(settings.CheckpointPath + ".hosting-preview-attempt",
+                        FileMode.CreateNew, FileAccess.Write, FileShare.None);
+                    attempt.WriteByte(1);
+                    attempt.Flush(flushToDisk: true);
+                }
+                var start = Stopwatch.GetTimestamp();
+                var outcome = await worker.RunOnceAsync(workerCancellationToken);
+                OperationalLog.Write(logger, OperationalEvent.CollectionCompleted,
+                    outcome == CollectionAttemptOutcome.Published ? OperationalOutcome.Succeeded : OperationalOutcome.Deferred,
+                    OperationalLog.ElapsedMilliseconds(start));
+                if (outcome == CollectionAttemptOutcome.Published)
+                    logger.LogInformation("Worker attempt published. Event={Event}", "SCOM_WORKER_PUBLISHED");
             }
             else
             {
@@ -96,6 +118,7 @@ public static class CollectionWorkerHost
                 var consecutiveDeferredAttempts = 0;
                 async Task<CollectionAttemptOutcome> Collect(CancellationToken ct)
                 {
+                    var start = Stopwatch.GetTimestamp();
                     await sourceGate.WaitAsync(ct);
                     try
                     {
@@ -104,6 +127,9 @@ public static class CollectionWorkerHost
                             ? consecutiveDeferredAttempts + 1
                             : 0;
                         runtimeState?.RecordAttempt(outcome, consecutiveDeferredAttempts);
+                        OperationalLog.Write(logger, OperationalEvent.CollectionCompleted,
+                            outcome == CollectionAttemptOutcome.Published ? OperationalOutcome.Succeeded : OperationalOutcome.Deferred,
+                            OperationalLog.ElapsedMilliseconds(start));
                         return outcome;
                     }
                     finally { sourceGate.Release(); }
@@ -153,6 +179,7 @@ public static class CollectionWorkerHost
                     }
                 }
             }
+            OperationalLog.Write(logger, OperationalEvent.Stopped, OperationalOutcome.Succeeded);
             return 0;
         }
         catch (OperationCanceledException) when (runtimeState?.StopRequestInvalid == true)

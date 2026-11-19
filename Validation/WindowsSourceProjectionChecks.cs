@@ -1,6 +1,7 @@
 using System.Collections.Immutable;
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
 using ScomMcp;
 
 static class WindowsSourceProjectionChecks
@@ -10,7 +11,8 @@ static class WindowsSourceProjectionChecks
     public static async Task Run(string root)
     {
         var count = 0;
-        foreach (var mode in new[] { "complete", "direct", "partial", "managementServer", "unknownRole" })
+        foreach (var mode in new[] { "complete", "direct", "partial", "managementServer", "unknownRole",
+            "legacy", "missingCaption", "blankCaption", "unmappedCaption", "buildOnly", "lab", "labMissingDisk" })
         {
             var start = new ProcessStartInfo("pwsh")
             {
@@ -25,6 +27,76 @@ static class WindowsSourceProjectionChecks
                 TimeSpan.FromSeconds(60), CancellationToken.None);
             Check(scan.WindowsInventory is not null && scan.ExpectedComputerIds is { Length: 1 },
                 "SDK projection deserializes explicit expected membership", ref count);
+            if (mode is "lab" or "labMissingDisk")
+            {
+                var settingsLab = new ReadModelSettings
+                {
+                    Enabled = true, WindowsToolsEnabled = true, OfflineHostingPreview = true,
+                    DatabasePath = Path.Combine(root, $"windows-source-{mode}.db"),
+                    ManagementGroupId = scan.ManagementGroupId, ScopeKind = "managementGroup", PublisherObjectIds = [Publisher],
+                    AllowedPropertiesByClass = mode == "lab" ? new() { ["Synthetic.ConcreteOs"] = ["Caption"] } :
+                        new() { ["Synthetic.Os"] = ["Caption", "Version"] },
+                    WindowsMetricHosting = new()
+                    {
+                        ComputerClass = "Synthetic.Computer", OperatingSystemClass = "Synthetic.Os",
+                        RelationshipClass = "Synthetic.ComputerHostsOs"
+                    },
+                    WindowsOsCaptionProperty = mode == "lab" ? "Caption" : null
+                };
+                var derivedOs = scan.Objects.Single(o => o.ClassName == "Synthetic.ConcreteOs");
+                Check(derivedOs.BaseClasses.Contains("Synthetic.Os") &&
+                    (mode == "lab" ? derivedOs.Properties.Count == 1 && derivedOs.Properties.ContainsKey("Caption") :
+                        derivedOs.Properties.Count == 0), "only an exact class approval emits the inherited property", ref count);
+                var labSourceSettings = new SourceSettings { SnapshotEnabled = false };
+                var labStore = new ReadModelStore(settingsLab, labSourceSettings, TimeProvider.System);
+                var labSource = new ReconciledCollectionSource(new Profile(scan), new(), TimeProvider.System);
+                var candidate = await labSource.PrepareAsync(CancellationToken.None);
+                labStore.Begin(Publisher, candidate.SessionId);
+                var index = 0;
+                await foreach (var batch in candidate.Batches)
+                    labStore.Append(Publisher, candidate.SessionId, index++, Encoding.UTF8.GetBytes(Wire.Encode(batch)));
+                try
+                {
+                    var falselyComplete = candidate.Manifest with { Inventory = new(scan.Inventory.AsOfUtc, true, null) };
+                    labStore.Commit(Publisher, candidate.SessionId, Encoding.UTF8.GetBytes(Wire.Encode(falselyComplete)));
+                    throw new InvalidOperationException("False completeness accepted.");
+                }
+                catch (QueryFault fault) when (fault.Message == "OFFLINE_HOSTING_PREVIEW_MUST_REPORT_UNVERIFIED_COVERAGE") { count++; }
+                labStore.Commit(Publisher, candidate.SessionId, Encoding.UTF8.GetBytes(Wire.Encode(candidate.Manifest)));
+                var labDataset = labStore.ReadWindowsDataset();
+                var preview = labDataset.Snapshot;
+                var device = preview.Devices.Single();
+                Check(preview.Status == "partial" && device.MonitoringMode == "unknown" && device.OsVersion == "10.0.20348" &&
+                    device.OsCaption == (mode == "lab" ? derivedOs.Properties["Caption"] : null) &&
+                    preview.Volumes.Length == (mode == "lab" ? 1 : 0) &&
+                    preview.Volumes.All(v => v.ParentEntityId == device.EntityId),
+                    "lab preview is partial, attaches supplied OS/disk edges and invents no missing disk parent", ref count);
+                var engineLab = new QueryEngine(labSourceSettings, TimeProvider.System,
+                    new CursorCodec(TimeProvider.System, labSourceSettings));
+                using var response = JsonDocument.Parse(Wire.Encode(engineLab.SourceStatus(labDataset)));
+                var coverage = response.RootElement.GetProperty("coverage");
+                Check(coverage.GetProperty("expectedDeviceCount").GetInt32() == 1 &&
+                    coverage.GetProperty("uniqueDeviceCount").GetInt32() == 1 &&
+                    !coverage.GetProperty("complete").GetBoolean() &&
+                    response.RootElement.GetProperty("status").GetString() == "partial" &&
+                    response.RootElement.GetProperty("limitations").EnumerateArray().Any(
+                        limit => limit.GetString() == "SCOM_OFFLINE_HOSTING_PREVIEW_SOURCE_UNVERIFIED"),
+                    "lab source-status JSON reports unverified coverage even when device counts match", ref count);
+                try
+                {
+                    labStore.Begin(Publisher, Guid.NewGuid().ToString("D"));
+                    throw new InvalidOperationException("Second lab capture accepted.");
+                }
+                catch (QueryFault fault) when (fault.Message == "OFFLINE_HOSTING_PREVIEW_ALREADY_CAPTURED") { count++; }
+                settingsLab.OfflineHostingPreview = false;
+                try
+                {
+                    _ = new ReadModelStore(settingsLab, new() { SnapshotEnabled = false }, TimeProvider.System);
+                    throw new Exception("Preview database reused by a normal receiver.");
+                }
+                catch (InvalidOperationException) { count++; }
+                continue;
+            }
             var metricId = Guid.NewGuid().ToString("D");
             var os = scan.Objects.Single(o => o.ClassName == "Synthetic.Os");
             var at = scan.MetricsAsOfUtc;
@@ -44,6 +116,8 @@ static class WindowsSourceProjectionChecks
                     ComputerClass = "Synthetic.Computer", OperatingSystemClass = "Synthetic.Os",
                     RelationshipClass = "Synthetic.ComputerHostsOs"
                 },
+                WindowsOsCaptionProperty = mode == "legacy" ? null : "Caption",
+                AllowedPropertiesByClass = mode == "legacy" ? new() : new() { ["Synthetic.Os"] = ["Caption"] },
                 AllowedMetricsByClass = new() { ["Synthetic.Os"] = new() { ["cpuPercent"] = "percent" } }
             };
             var sourceSettings = new SourceSettings { SnapshotEnabled = false };
@@ -62,6 +136,23 @@ static class WindowsSourceProjectionChecks
             if (mode != "partial")
             {
                 var device = dataset.Snapshot.Devices.Single();
+                var expectedCaption = mode switch
+                {
+                    "legacy" or "missingCaption" or "blankCaption" => null,
+                    "unmappedCaption" => "Windows Server 2022 Datacenter: Azure Edition",
+                    "buildOnly" => "10.0.26100",
+                    _ => "Microsoft Windows Server 2022 Datacenter"
+                };
+                Check(device.OsCaption == expectedCaption &&
+                    device.OsVersion == (mode == "buildOnly" ? "10.0.26100" : "10.0.20348"),
+                    "caption stays independently observed; missing caption never derives from build", ref count);
+                var reopened = new ReadModelStore(settings, sourceSettings, TimeProvider.System).ReadWindowsDataset();
+                Check(reopened.Snapshot.Devices.Single().OsCaption == expectedCaption &&
+                    reopened.Fingerprint == dataset.Fingerprint, "caption persists through database reopen", ref count);
+                var assessment = OsLifecycleCatalog.Assess(device, new(2026, 11, 5), true, 365);
+                Check(assessment.Assessment == (mode is "legacy" or "missingCaption" or "blankCaption" or
+                    "unmappedCaption" or "buildOnly" ? "unknown" : "extended"),
+                    "only exact observed captions enable existing lifecycle classification", ref count);
                 var expectedMode = mode == "unknownRole" ? "unknown" :
                     mode == "managementServer" ? "managementServer" : "agent";
                 Check(device.MonitoringMode == expectedMode &&
@@ -73,11 +164,24 @@ static class WindowsSourceProjectionChecks
                     dataset.Snapshot.Samples.Single().Value == 12,
                     "OS observations project to typed computer without changing raw arithmetic", ref count);
                 var caller = new Caller("synthetic", ImmutableHashSet.Create(Wire.ScopeId));
+                var engine = new QueryEngine(sourceSettings, TimeProvider.System, new CursorCodec(TimeProvider.System, sourceSettings));
+                var details = JsonSerializer.SerializeToElement(engine.Details(dataset, device.EntityId).Data, Wire.Json);
+                var page = JsonSerializer.SerializeToElement(engine.ListDevices(dataset, caller, Wire.ScopeId, new(), 20, null).Data, Wire.Json);
+                Check(details.GetProperty("device").GetProperty("osCaption").GetString() == expectedCaption &&
+                    page.GetProperty("rows")[0].GetProperty("osCaption").GetString() == expectedCaption,
+                    "read tools expose the persisted nullable caption", ref count);
                 Check(store.Page(caller, "metrics", null, 50, null).TotalCount == 1,
                     "generic metric retains original OS observation", ref count);
                 Check(store.Page(caller, "metrics", os.Id, 50, null).TotalCount == 1 &&
                     store.Page(caller, "metrics", device.EntityId, 50, null).TotalCount == 0,
                     "compatibility projection does not rewrite generic observation parent", ref count);
+                if (mode == "complete")
+                {
+                    var httpRoot = Directory.CreateDirectory(Path.Combine(root, "caption-http")).FullName;
+                    await ReadModelChecks.Http(httpRoot, new(scan.Objects, scan.Relationships, [],
+                        scan.MetricSeries.SelectMany(s => s.Observations).ToImmutableArray(), scan.WindowsInventory),
+                        prepared.Manifest, windowsTools: true, settingsOverride: settings);
+                }
                 var changed = new ReadModelSettings
                 {
                     Enabled = true, WindowsToolsEnabled = true, DatabasePath = settings.DatabasePath,
@@ -85,6 +189,11 @@ static class WindowsSourceProjectionChecks
                     PublisherObjectIds = [Publisher], AllowedMetricsByClass = settings.AllowedMetricsByClass
                 };
                 try { _ = new ReadModelStore(changed, sourceSettings, TimeProvider.System); throw new Exception("Hosting policy change reused database."); }
+                catch (InvalidOperationException) { count++; }
+                changed.WindowsMetricHosting = settings.WindowsMetricHosting;
+                changed.AllowedPropertiesByClass = settings.AllowedPropertiesByClass;
+                changed.WindowsOsCaptionProperty = mode == "legacy" ? "Caption" : null;
+                try { _ = new ReadModelStore(changed, sourceSettings, TimeProvider.System); throw new Exception("Caption policy change reused database."); }
                 catch (InvalidOperationException) { count++; }
                 var invalidSession = Guid.NewGuid().ToString("D");
                 store.Begin(Publisher, invalidSession);
@@ -110,6 +219,27 @@ static class WindowsSourceProjectionChecks
                 catch (QueryFault error) when (error.Message == "WINDOWS_METRIC_HOSTING_AMBIGUOUS") { count++; }
                 try { _ = store.ReadWindowsDataset(); throw new InvalidOperationException("Invalid hosting served previous dataset."); }
                 catch (QueryFault error) when (error.Code == "SOURCE_UNAVAILABLE") { count++; }
+                store.Fail(Publisher, invalidSession);
+                var forgedSession = Guid.NewGuid().ToString("D");
+                store.Begin(Publisher, forgedSession);
+                var forgedSequence = 0;
+                await foreach (var batch in prepared.Batches)
+                {
+                    var forged = batch.WindowsInventory is { } windows
+                        ? batch with { WindowsInventory = windows with
+                        {
+                            Devices = windows.Devices.Select(d => d with
+                            { OsCaption = "Microsoft Windows Server 2025 Datacenter" }).ToImmutableArray()
+                        } } : batch;
+                    store.Append(Publisher, forgedSession, forgedSequence++, Encoding.UTF8.GetBytes(Wire.Encode(forged)));
+                }
+                try
+                {
+                    store.Commit(Publisher, forgedSession, Encoding.UTF8.GetBytes(Wire.Encode(prepared.Manifest)));
+                    throw new InvalidOperationException("Unobserved or unconfigured caption activated.");
+                }
+                catch (QueryFault error) when (error.Message == "WINDOWS_OS_CAPTION_SOURCE_MISMATCH") { count++; }
+                store.Fail(Publisher, forgedSession);
             }
             else
             {
@@ -118,7 +248,7 @@ static class WindowsSourceProjectionChecks
                     "missing expected computer never manufactures a parent or metric", ref count);
             }
         }
-        Console.WriteLine($"PASS: {count} Windows source bridge/ingestion assertions; typed hosting and independent coverage.");
+        Console.WriteLine($"PASS: {count} Windows source bridge/ingestion assertions; observed captions, persistence, lifecycle and typed hosting.");
     }
 
     private static void Check(bool value, string message, ref int count)

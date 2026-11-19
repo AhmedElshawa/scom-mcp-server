@@ -31,7 +31,8 @@ namespace Microsoft.EnterpriseManagement.Monitoring {
         public string DisplayName {get {return "Synthetic";}}
         public string HealthState {get {return "Success";}}
         public bool InRoot=true;
-        public bool IsInstanceOf(ManagementPackClass c) {return InRoot && c.Name=="System.Entity";}
+        public string Kind="Synthetic.Object";
+        public bool IsInstanceOf(ManagementPackClass c) {return InRoot && (c.Name=="System.Entity" || c.Name==Kind);}
         public IList<ManagementPackClass> GetMostDerivedClasses() {
             return new [] {new ManagementPackClass {Name="Synthetic.Object"}};
         }
@@ -47,10 +48,13 @@ namespace Microsoft.EnterpriseManagement.Monitoring {
         public int IdCalls;
         public int RequestedLimit;
         public int PageCalls;
+        public List<string> RequestedClasses=new List<string>();
+        public List<int> RequestedLimits=new List<int>();
         public IObjectReader<T> GetObjectReader<T>(ManagementPackClass c,ObjectQueryOptions o) {
             Calls++;RequestedLimit=o.MaxResultCount;
+            RequestedClasses.Add(c.Name);RequestedLimits.Add(o.MaxResultCount);
             var values=new List<T>();
-            foreach(var r in Rows) values.Add((T)(object)r);
+            foreach(var r in Rows) if(c.Name=="System.Entity" || r.IsInstanceOf(c)) values.Add((T)(object)r);
             return new ScopeReader<T>(values,this);
         }
         public IObjectReader<T> GetObjectReader<T>(ICollection<Guid> ids,ObjectQueryOptions o) {
@@ -69,6 +73,7 @@ namespace Microsoft.EnterpriseManagement.Monitoring {
         public int Count {get {reads++;return rows.Count+(manager.Mode=="changed" && reads>1?1:0);}}
         public IList<T> GetRange(int offset,int take) {
             manager.PageCalls++;
+            if(manager.Mode=="slow") System.Threading.Thread.Sleep(1100);
             if(manager.Mode=="short") return new List<T>();
             return rows.GetRange(offset,take);
         }

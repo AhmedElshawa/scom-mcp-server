@@ -24,9 +24,17 @@ public sealed class ReadModelSettings
     public int SessionMinutes { get; set; } = 30;
     public int RequestBodyTimeoutSeconds { get; set; } = 30;
     public bool WindowsToolsEnabled { get; set; }
+    public bool OfflineHostingPreview { get; set; }
     public WindowsMetricHostingSettings? WindowsMetricHosting { get; set; }
+    public string? WindowsOsCaptionProperty { get; set; }
     public void Validate()
     {
+        // JSON null can bind to an empty string on supported configuration providers.
+        if (WindowsOsCaptionProperty == "") WindowsOsCaptionProperty = null;
+        if (WindowsOsCaptionProperty is { } captionProperty &&
+            (WindowsMetricHosting is null || string.IsNullOrWhiteSpace(captionProperty) ||
+                captionProperty.Length > 128 || captionProperty.IndexOfAny(['*', '?', '[', ']']) >= 0))
+            throw new InvalidOperationException("WindowsOsCaptionProperty requires an exact property name and reviewed WindowsMetricHosting.");
         if (WindowsMetricHosting is { } hosting)
         {
             if (!WindowsToolsEnabled || new[] { hosting.ComputerClass, hosting.OperatingSystemClass, hosting.RelationshipClass }
@@ -37,6 +45,9 @@ public sealed class ReadModelSettings
         }
         if (WindowsToolsEnabled && !Enabled)
             throw new InvalidOperationException("Indexed Windows tools require the read model to be enabled.");
+        if (OfflineHostingPreview && (!Enabled || !WindowsToolsEnabled || ScopeKind != "managementGroup" ||
+            IncludeAlertDescriptions || AllowedMetricsByClass is null || AllowedMetricsByClass.Count != 0))
+            throw new InvalidOperationException("An offline hosting preview requires an isolated Windows read model for whole-management-group scope with alerts and metrics disabled.");
         if (!Enabled) return;
         // The .NET 8 JSON configuration provider binds JSON null to an empty string.
         if (ScopeKind == "managementGroup" && GroupId == "") GroupId = null;
@@ -83,6 +94,8 @@ public sealed class ReadModelSettings
             if (rejected) invalid.Add(name);
         }
     }
+
+    internal const string OfflineHostingPreviewReason = "SCOM_OFFLINE_HOSTING_PREVIEW_SOURCE_UNVERIFIED";
 
     public sealed class WindowsMetricHostingSettings
     {

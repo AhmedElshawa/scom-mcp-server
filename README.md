@@ -309,6 +309,40 @@ resolve it. In indexed mode, missing, failed, uncommitted or expired source data
 also remains unavailable. Do not fabricate fixtures or disable validation to
 make the agent return inventory.
 
+## Guided installation
+
+For the double-click experience, extract the complete reviewed evaluation ZIP and
+open **`ci-evaluation\ScomSetup.exe`**. The native Windows Forms wizard bundles its
+own x64 runtime, so it opens before the app's .NET Hosting Bundle is present.
+It starts with automatic read-only prerequisite checks (green PASS / red BLOCKED),
+then uses sequential Back/Next screens for log folder, discovered IIS placement,
+execution account, source/scope selection, and a visible per-file checklist for
+identity, receiver and worker JSON. “Next” is navigation only; Prepare,
+Configure, Activate, worker Connect/Publish, receipt and acceptance are separate
+actions with their own gates. A selected file is not proof that its contents or
+external evidence have been reviewed. Do not copy synthetic example configs into
+a customer deployment. Opening the wizard does not start collection or
+recurrence. Keep all extracted files together. See the
+[double-click quickstart and signing limitations](docs/guided-setup.md#double-click-quickstart).
+The evaluation executable is unsigned, not automatically customer-trusted;
+normal Windows/UAC and PowerShell signing policies still apply.
+
+For a new opt-in indexed installation, use the
+[resumable console setup](docs/guided-setup.md). It separates host prerequisites,
+bounded existing-group discovery/selection and staging, authorized customer Entra provisioning,
+configuration/IIS activation, explicit one-shot publication and intended-user
+acceptance. No Azure infrastructure is created when an existing host suffices.
+The evaluation wizard offers separately approved explicit IIS feature and official
+signed local .NET 8 Hosting Bundle installation (no installer downloads). It does not infer source verification,
+overwrite existing applications or enable recurrence/metrics/live checks.
+`Preflight` is the read-only default and blockers stop before deployment journal
+or installation writes. The customer chooses a new dedicated IIS pool and
+site/application placement, separate local NTFS MCP/collector log destinations,
+and either an existing group or separately confirmed whole-management-group
+**supported Windows inventory** (never every SCOM class). Structured operational
+logs have restrictive identity-specific ACLs and bounded rotation. The complete
+package also includes the separately opt-in durable-refresh operations.
+
 ## Azure IIS and Copilot Studio reader setup
 
 This procedure configures HTTPS hosting and delegated MCP access. It does **not**
@@ -322,6 +356,11 @@ replace them in private deployment configuration only.
 Have the platform administrator provision a supported Windows Server host with
 IIS and the current approved .NET 8 **Hosting Bundle** (including the ASP.NET Core
 Module for IIS). A standalone runtime alone does not provide IIS integration.
+For example, Microsoft offers the [Windows Hosting Bundle 8.0.34](https://dotnet.microsoft.com/en-us/download/dotnet/thank-you/runtime-aspnetcore-8.0.34-windows-hosting-bundle-installer);
+check the [.NET 8 downloads page](https://dotnet.microsoft.com/en-us/download/dotnet/8.0)
+for the latest customer-approved servicing version. Install it after IIS, with
+customer approval and Microsoft signature verification; existing SDKs or runtimes
+need not be uninstalled. The example is not a minimum or a latest-forever claim.
 Follow [Microsoft's IIS hosting instructions](https://learn.microsoft.com/en-us/aspnet/core/host-and-deploy/iis/?view=aspnetcore-8.0)
 for prerequisites, installation order and any required service restart.
 
@@ -519,7 +558,15 @@ PR/push CI uses `Offline Windows validation` (`.github\workflows\offline-validat
 on `windows-2022`, pins SDK `8.0.427` and action commit hashes, and restores locked
 NuGet dependencies. It records the checked-out head SHA, runs the same complete
 offline harness, validates a fresh evaluation package and retains a seven-day
-commit-named artifact. The `Durable indexed refresh synthetic tests` workflow
+commit-named artifact containing `scom-evaluation.zip` and its SHA-256 sidecar.
+The ZIP includes a per-file SHA-256 manifest and exact source commit identity.
+New evaluation packages and local signed derivatives carry both `format: 1`
+and `schemaVersion: 1`, with `certificationStatus: "notCertified"`. This makes
+their manifests compatible with the upgrade manifest check without certifying a
+deployment. Older schema-only packages remain valid for setup validation but do
+not satisfy that upgrade check.
+It is a review/evaluation build, not a production-certified installer.
+The `Durable indexed refresh synthetic tests` workflow
 additionally runs task-host contracts on Windows PowerShell 5.1 and PowerShell 7
 and validates checkpoint restart, serialized cycles, process-child cleanup,
 status and bounded logs. Neither workflow registers a task or uses customer
@@ -579,7 +626,17 @@ If packaging fails, do not deploy the incomplete output. The script refuses to
 reuse an existing output directory; preserve it for inspection and choose a new,
 explicit `-OutputDirectory` for a subsequent attempt rather than mixing builds.
 
-### Downloaded scripts and execution policy
+### Downloaded packages/scripts and execution policy
+
+The CI evaluation artifact is unsigned. Before using it on a customer host,
+verify the **inner** `scom-evaluation.zip` SHA-256 against the independently
+obtained digest for that exact reviewed run. A matching digest verifies integrity,
+not publisher identity. If the customer's authorized administrator approves this
+unsigned package, they may use the approved download-trust procedure on the
+verified archive only, then extract the entire archive into a new directory and
+launch `ci-evaluation\ScomSetup.exe`. The wizard still enforces its normal
+PowerShell and host checks. This is not permission to change execution policy,
+bypass warnings or alter application control.
 
 If PowerShell reports that `package.ps1` is not digitally signed, inspect policy:
 
@@ -597,7 +654,7 @@ Get-Item -LiteralPath .\package.ps1 -Stream Zone.Identifier -ErrorAction Silentl
 ```
 
 Only after reviewing the script and confirming that organizational policy permits
-trusting this download, remove the marker from that one file and retry:
+trusting this development script, remove the marker from that one file and retry:
 
 ```powershell
 Unblock-File -LiteralPath .\package.ps1
@@ -606,11 +663,14 @@ Unblock-File -LiteralPath .\package.ps1
 
 `Unblock-File` removes the file's download marker; it does not sign the code or
 change execution policy. Do not recursively unblock the repository/package.
-If policy requires signatures, or the organization does not permit unblocking,
-obtain approved code signing instead. Validation and collector scripts/modules
-may independently require review/signing on their execution hosts; a successful
-package build does not sign or approve them. Stop on further policy errors rather
-than weakening protections.
+Do not use this development-script example to unblock files in the evaluation
+package. For the evaluation package, any approved zone-marker removal applies to
+the verified inner `scom-evaluation.zip` before full extraction, as described above; never unblock
+extracted package files individually or recursively. If the organization forbids
+unsigned downloads or its application-control policy still blocks the package,
+stop and follow its normal software-approval path. Validation and collector
+scripts/modules remain subject to the customer's policy; successful artifact
+verification does not sign or approve them.
 
 ## Indexed read-model configuration (opt-in)
 
@@ -726,6 +786,11 @@ The worker does not require Microsoft Graph permissions for this transport.
 Do not grant it delegated reader access or reuse a human identity as publisher.
 
 #### 4. Provision the publisher certificate
+
+For reuse guidance and an optional explicitly approved isolated lab publisher, see
+the [publisher identity and certificate walkthrough](docs/guided-setup.md#publisher-identity-and-certificate-reuse-or-create).
+An existing approved identity and certificate can be reused; creating a new
+credential/app is not required. Customer-managed production enrollment remains separate.
 
 Have the certificate/security administrator issue and deploy an approved
 certificate for the worker. The implementation requires an RSA private key of at
@@ -1152,6 +1217,53 @@ only after validating MP property applicability and units. By default,
 `agentMonitoringVerified` must also be true after verifying every approved
 computer is agent-managed. Do not use that gate for a mixed scope containing
 management servers or agentless computers.
+
+Optional `windowsMapping.osCaptionProperty` adds a separate observed `osCaption`
+to indexed Windows inventory without changing `osVersion` or its exact-match
+filter. Omit it or use null to keep old mappings working. The caption property
+must be explicitly allowlisted in worker `allowedPropertiesByClass` for each
+actual most-derived OS class; base-class allowlists are not inherited. Missing or
+blank values stay null, and non-string/over-256-character values reject the scan.
+Nothing translates a build number into a release or edition.
+
+The original collector at commit `42af4d0` reads `OSVersionDisplayName` and
+`OSVersion` from `Microsoft.Windows.Server.10.0.OperatingSystem`, combining them
+in the legacy `osVersion` value. This is repository evidence for a **candidate**
+caption property, not evidence that a customer's installed MP discovers it.
+After authorized MP/property review, merge the following fields into the
+existing private configurations (preserve other approved properties):
+
+```json
+{
+  "windowsMapping": { "osCaptionProperty": "OSVersionDisplayName" },
+  "allowedPropertiesByClass": {
+    "Microsoft.Windows.Server.10.0.OperatingSystem": ["OSVersionDisplayName"]
+  }
+}
+```
+
+On the receiver, set `ReadModel.WindowsOsCaptionProperty` to the same exact name,
+add it to `ReadModel.AllowedPropertiesByClass` for each actual OS class, and
+configure the existing `ReadModel.WindowsMetricHosting` with the reviewed
+computer/OS classes and computer-to-OS relationship. Caption provenance reuses
+that typed hosting evidence; this does not change metric selection or arithmetic.
+Activation rejects captions that differ from the hosted OS object's approved
+property, or any non-null caption while the receiver's caption mapping is disabled.
+Both caption mapping and allowlists are pinned database policy. Changing either
+requires the existing approved policy-change/reinitialization procedure with
+protected backups and a fresh collection; do not delete or silently repurpose
+the current database. No SQL schema migration is needed: the additive field is
+stored in the existing indexed Windows snapshot JSON payload.
+
+`list_devices` and `get_device_details` expose nullable `osCaption`;
+`get_inventory_summary` adds an `osCaption` breakdown with an explicit unknown
+bucket. Existing `osVersion` values/filters remain unchanged. The existing
+`list_os_support_assessments` uses the observed caption first, retaining exact
+legacy `osVersion` caption matching when the new field is null. It never strips
+build suffixes or guesses editions. Product support lifecycle is **not** license
+usage, entitlement, contract expiry or ESU enrollment. Those require an
+authoritative licensing/SAM/CMDB source; no product keys or license records are
+collected by this feature.
 
 For mixed scopes, optional `windowsMapping.monitoringRoleMapping` replaces the
 agent-only assertion with SDK class identity and exact typed application hosting:

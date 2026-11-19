@@ -1,4 +1,5 @@
 Set-StrictMode -Version Latest
+Import-Module (Join-Path $PSScriptRoot 'ScomSdkReader.psm1') -ErrorAction Stop
 
 function Get-SCOMProjectionProperty {
     param([object]$Object, [string]$Name)
@@ -33,10 +34,21 @@ function ConvertTo-SCOMWindowsInventory {
         [Parameter(Mandatory)] [object]$OperatingSystemClass,
         [Parameter(Mandatory)] [object]$VolumeClass,
         [Parameter(Mandatory)] [object]$Mapping,
+        [hashtable]$AllowedPropertiesByClass = @{},
         [object]$AgentClass = $null,
-        [object]$ManagementServerClass = $null
+        [object]$ManagementServerClass = $null,
+        [switch]$OfflineHostingPreview
     )
 
+    $captionProperty=$null
+    $exactPropertyPolicy = New-SCOMExactPropertyPolicy $AllowedPropertiesByClass
+    if ($null -ne $Mapping.PSObject.Properties['osCaptionProperty'] -and $null -ne $Mapping.osCaptionProperty) {
+        $captionProperty=$Mapping.osCaptionProperty
+        if ($captionProperty -isnot [string] -or [string]::IsNullOrWhiteSpace($captionProperty) -or
+            $captionProperty.Length -gt 128 -or $captionProperty -match '[*?\[\]]') {
+            throw 'SCOM_WINDOWS_CAPTION_MAPPING_INVALID'
+        }
+    }
     $roleMapping=$null
     if ($null -ne $Mapping.PSObject.Properties['monitoringRoleMapping']) {
         $roleMapping=$Mapping.monitoringRoleMapping
@@ -44,7 +56,12 @@ function ConvertTo-SCOMWindowsInventory {
     if ($Mapping.verified -isnot [bool] -or -not $Mapping.verified) {
         throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
     }
-    if ($null -eq $roleMapping) {
+    if ($OfflineHostingPreview) {
+        if ($null -ne $roleMapping -or $null -ne $AgentClass -or $null -ne $ManagementServerClass) {
+            throw 'SCOM_WINDOWS_OFFLINE_PREVIEW_ROLE_CONFIGURATION'
+        }
+    }
+    elseif ($null -eq $roleMapping) {
         if ($Mapping.agentMonitoringVerified -isnot [bool] -or -not $Mapping.agentMonitoringVerified) {
             throw 'SCOM_WINDOWS_MAPPING_UNVERIFIED'
         }
@@ -167,9 +184,12 @@ function ConvertTo-SCOMWindowsInventory {
         $hostname=Get-SCOMProjectionProperty $object $Mapping.hostnameProperty
         if ($hostname -isnot [string] -or [string]::IsNullOrWhiteSpace($hostname) -or $hostname.Length -gt 256 -or
             $hostname -match '\s|\*') { throw 'SCOM_WINDOWS_HOSTNAME_INVALID' }
-        $osVersion=$null; $memory=$null; $processors=$null
+        $osVersion=$null; $osCaption=$null; $memory=$null; $processors=$null
         $monitoringMode='agent'
-        if ($null -ne $roleMapping) {
+        if ($OfflineHostingPreview) {
+            $monitoringMode='unknown'
+        }
+        elseif ($null -ne $roleMapping) {
             $monitoringMode='unknown'
             if ($computerRoles.ContainsKey($id)) { $monitoringMode=$computerRoles[$id] }
             else { $partial=$true }
@@ -179,6 +199,19 @@ function ConvertTo-SCOMWindowsInventory {
             $osVersion=Get-SCOMProjectionProperty $os $Mapping.osVersionProperty
             if ($null -ne $osVersion -and ($osVersion -isnot [string] -or $osVersion.Length -gt 256)) {
                 throw 'SCOM_WINDOWS_OS_VERSION_INVALID'
+            }
+            if ($null -ne $captionProperty) {
+                $classes=@($os.GetMostDerivedClasses())
+                if ($classes.Count -ne 1 -or
+                    -not $exactPropertyPolicy.ContainsKey([string]$classes[0].Name) -or
+                    $captionProperty -cnotin @($exactPropertyPolicy[[string]$classes[0].Name])) {
+                    throw 'SCOM_WINDOWS_CAPTION_PROPERTY_NOT_APPROVED'
+                }
+                $osCaption=Get-SCOMProjectionProperty $os $captionProperty
+                if ($null -ne $osCaption -and ($osCaption -isnot [string] -or $osCaption.Length -gt 256)) {
+                    throw 'SCOM_WINDOWS_OS_CAPTION_INVALID'
+                }
+                if ([string]::IsNullOrWhiteSpace($osCaption)) { $osCaption=$null }
             }
             $memory=Get-SCOMProjectionNumber $os $Mapping.memoryProperty ([double]$Mapping.memoryToMiB)
         }
@@ -190,7 +223,7 @@ function ConvertTo-SCOMWindowsInventory {
         }
         $devices.Add([pscustomobject]@{
             entityId=$id.ToString('D'); sourceObjectId=$id.ToString('D'); hostname=$hostname
-            entityKind='computer'; osFamily='windows'; osVersion=$osVersion
+            entityKind='computer'; osFamily='windows'; osVersion=$osVersion; osCaption=$osCaption
             health=$observed[$id].health; rawHealth=[string]$object.HealthState
             virtualization='unknown'; monitoringMode=$monitoringMode; memoryTotalMiB=$memory
             processorCount=$processors; discoveredAtUtc=$null; groupIds=@('scom-lab')
@@ -220,7 +253,16 @@ function ConvertTo-SCOMWindowsInventory {
             $partial=$true
         }
     }
-    [pscustomobject]@{ Inventory=@{devices=$devices.ToArray();volumes=$volumes.ToArray()}; Complete=(-not $partial) }
+    $result = @{
+        Inventory=@{devices=$devices.ToArray();volumes=$volumes.ToArray()}
+        Complete=(-not $partial -and -not $OfflineHostingPreview)
+    }
+    if ($OfflineHostingPreview) {
+        $result.PreviewOnly=$true
+        $result.SourceWorkBoundVerified=$false
+        $result.Reason='SCOM_OFFLINE_HOSTING_PREVIEW_SOURCE_UNVERIFIED'
+    }
+    [pscustomobject]$result
 }
 
 Export-ModuleMember -Function ConvertTo-SCOMWindowsInventory

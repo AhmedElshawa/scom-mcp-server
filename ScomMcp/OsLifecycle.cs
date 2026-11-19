@@ -50,14 +50,15 @@ public static class OsLifecycleCatalog
 
     public static OsLifecycleRow Assess(Device device, DateOnly asOf, bool catalogFresh, int threshold)
     {
+        var observedCaption = device.OsCaption ?? device.OsVersion;
         OsLifecycleRow Unknown(string assessment, string reason) => new(device.EntityId, device.Hostname,
-            device.OsVersion, assessment, reason, null, null, null, null, null, null, null, null,
+            observedCaption, assessment, reason, null, null, null, null, null, null, null, null,
             "notAssessed", []);
         if (device.OsFamily != "windows")
             return Unknown("unsupported", "OS_FAMILY_OUTSIDE_WINDOWS_SERVER_PROFILE");
-        if (string.IsNullOrWhiteSpace(device.OsVersion))
+        if (string.IsNullOrWhiteSpace(observedCaption))
             return Unknown("unknown", "OS_CAPTION_MISSING");
-        var caption = device.OsVersion.Trim();
+        var caption = observedCaption.Trim();
         foreach (var product in Products)
         foreach (var edition in product.Editions)
         {
@@ -69,7 +70,7 @@ public static class OsLifecycleCatalog
             var phase = !usable ? "unknown" : asOf <= product.MainstreamEnd ? "mainstream" :
                 asOf <= product.ExtendedEnd ? "extended" : "ended";
             var days = usable ? product.ExtendedEnd.DayNumber - asOf.DayNumber : (int?)null;
-            return new(device.EntityId, device.Hostname, device.OsVersion, phase,
+            return new(device.EntityId, device.Hostname, observedCaption, phase,
                 !catalogFresh ? "CATALOG_STALE_OR_NOT_YET_VERIFIED" :
                 asOf < product.Start ? "PRODUCT_NOT_RELEASED_AS_OF_DATE" : "EXACT_PRODUCT_EDITION_CAPTION",
                 product.Product, edition, "fixed", product.MainstreamEnd, product.ExtendedEnd, days,
