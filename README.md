@@ -1,5 +1,7 @@
 # SCOM MCP for Copilot Studio
 
+[![Release](https://img.shields.io/github/v/release/AhmedElshawa/scom-mcp-server?include_prereleases&label=release)](https://github.com/AhmedElshawa/scom-mcp-server/releases/latest) ![Status: lab-validated, unsigned community release](https://img.shields.io/badge/status-lab--validated%20%C2%B7%20unsigned-orange)
+
 Ask Copilot Studio natural-language questions about your System Center Operations Manager
 (SCOM) inventory (what computers exist, which OS they run, how much disk they have, which are nearing
 end of support) and get answers from a retained snapshot, with **zero query-time load on SCOM**.
@@ -66,23 +68,55 @@ Prerequisites box:
 7. Connect Copilot Studio: [copilot-studio-integration](docs/copilot-studio-integration.md) and [agent instructions](examples/agent-instructions.md).
 8. Register recurrence and operate: [operations](docs/operations.md); problems: [troubleshooting](docs/troubleshooting.md).
 
-Reference: [MCP server spec](docs/mcp-server-spec.md) · [configuration reference](docs/configuration-reference.md) · [full legacy technical reference](docs/technical-reference.md).
-
 ## 6. Status
 
-Lab-validated on a 3-server Windows Server 2022 lab, 18–19 Nov 2026. Unsigned community
-release. See [limitations](docs/limitations.md).
+Lab-validated on a 3-server Windows Server 2022/2025 lab, 18–19 Nov 2026. Unsigned community
+release, not production-certified. Current release:
+[v0.1.0-lab](https://github.com/AhmedElshawa/scom-mcp-server/releases/tag/v0.1.0-lab).
+See [limitations](docs/limitations.md).
 
 ## 7. Screenshots
 
 Redacted screenshots of the agent answering and the setup wizard are pending; the capture
 list and naming are in [docs/screenshots/README.md](docs/screenshots/README.md).
 
+## Documentation
+
+| Document | Purpose |
+|---|---|
+| [architecture](docs/architecture.md) | Components, data flow and identities |
+| [install-cli](docs/install-cli.md) | Validated step-by-step install runbook |
+| [install-wizard](docs/install-wizard.md) | Evaluation GUI walkthrough |
+| [entra-setup](docs/entra-setup.md) | The three Entra app registrations |
+| [network-and-ports](docs/network-and-ports.md) | Ports, firewall/NSG rules, TLS and IIS binding |
+| [service-accounts](docs/service-accounts.md) | Worker and IIS identities and the rights they need |
+| [copilot-studio-integration](docs/copilot-studio-integration.md) | Connector, connection, agent instructions, acceptance test |
+| [mcp-server-spec](docs/mcp-server-spec.md) | Endpoints, tools, schemas, auth, limits, error codes |
+| [configuration-reference](docs/configuration-reference.md) | Every receiver and worker setting |
+| [operations](docs/operations.md) | Recurrence, logs, policy changes, lifecycle catalog, recovery |
+| [sizing-and-scope](docs/sizing-and-scope.md) | Group vs whole-management-group scope and call model |
+| [troubleshooting](docs/troubleshooting.md) | Error codes, causes and fixes |
+| [security](docs/security.md) | Threat model and what is and is not collected |
+| [limitations](docs/limitations.md) | SDK contract limits and stale/partial semantics |
+| [os-lifecycle-assessment](docs/os-lifecycle-assessment.md) | How OS support-lifecycle assessment works |
+| [guided-setup](docs/guided-setup.md) | Resumable setup flow behind the wizard |
+| [indexed-deployment-runbook](docs/indexed-deployment-runbook.md) | Indexed-collection deployment details |
+| [easy-indexed-upgrade](docs/easy-indexed-upgrade.md) | Three-step indexed evaluation deployment |
+| [targeted-live-verification](docs/targeted-live-verification.md) | Optional targeted current-state verification |
+| [local-evaluation-signing](docs/local-evaluation-signing.md) | Local signed evaluation derivative |
+| [customer-evaluation](docs/customer-evaluation.md) | Release preparation and acceptance checklist |
+| [enterprise-readiness-roadmap](docs/enterprise-readiness-roadmap.md) | Gaps and plans toward enterprise use |
+| [deployment-issue-log](docs/deployment-issue-log.md) | Deployment issues and fixes found in the lab |
+| [technical-reference](docs/technical-reference.md) | Full legacy technical reference |
+
+**Support and limitations:** read [limitations](docs/limitations.md) and [security](docs/security.md)
+before deploying; report problems through [GitHub issues](https://github.com/AhmedElshawa/scom-mcp-server/issues).
+
 ## Releases
 
 Tagged releases attach a ZIP, a SHA256 file and an SBOM, with build provenance attestation
 (see [CHANGELOG](CHANGELOG.md), [SECURITY](SECURITY.md)). Verify with
-`gh attestation verify <zip> --repo <OWNER>/<REPO>`.
+`gh attestation verify <zip> --repo AhmedElshawa/scom-mcp-server`.
 
 ## Contributing and license
 
