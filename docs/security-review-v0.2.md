@@ -23,7 +23,7 @@ Microsoft.AspNetCore.Authentication.JwtBearer 8.0.31, Microsoft.Data.Sqlite 8.0.
 
 ### 1.1 CodeQL first run
 
-CODEQL_RESULT_PLACEHOLDER
+First run (PR #14, `security-extended` queries, `build-mode: none`): the `CodeQL (csharp)` job completed successfully and the code-scanning API reported **0 open alerts** [tool]. Note that `build-mode: none` analyses C# sources without compiling, so this is weaker evidence than a build-traced run.
 
 ## 2. Summary of findings
 
