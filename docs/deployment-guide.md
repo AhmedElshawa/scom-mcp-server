@@ -23,6 +23,8 @@ order, and open the linked page when you need detail.
 - [Step 4. Create the publisher certificate](#step-4-create-the-publisher-certificate)
 - [Step 5. Create the three Entra app registrations](#step-5-create-the-three-entra-app-registrations)
 - [Step 6. Write the configuration files](#step-6-write-the-configuration-files)
+  - [6e. Attest the source evidence](#6e-attest-the-source-evidence)
+  - [6f. Confirm windowsMapping for your management packs](#6f-confirm-windowsmapping-for-your-management-packs)
 - [Step 7. Run setup: Prepare to Host Publish](#step-7-run-setup-prepare-to-host-publish)
 - [Step 8. Connect Copilot Studio](#step-8-connect-copilot-studio)
 - [Step 9. Acceptance checks and Accept](#step-9-acceptance-checks-and-accept)
@@ -172,8 +174,14 @@ At this point you should have: `<pkg>` with `setup\Start-ScomSetup.ps1` inside i
    management group is possible but validated on 3 servers only
    ([sizing-and-scope](sizing-and-scope.md)).
 
-**Record these values:** `<WORKER_ACCOUNT>`, `<MGMT_SERVER_FQDN>`, `<MG_ID>`, `<GROUP_ID>`,
-`<OM_MODULE_PATH>`.
+At this point you should have these values written down (from Step 3):
+
+1. `<WORKER_ACCOUNT>`, a domain account in the SCOM Read-Only Operator role with Allow log
+   on locally and Log on as a batch job on the collector host
+2. `<MGMT_SERVER_FQDN>`
+3. `<MG_ID>` (a GUID)
+4. `<GROUP_ID>` (a GUID; for group scope)
+5. `<OM_MODULE_PATH>` (ends in `OperationsManager.psd1`)
 
 ## Step 4. Create the publisher certificate
 
@@ -201,37 +209,63 @@ Keys). Notes on reuse, renewal and enterprise-CA alternatives:
 > **Warning:** Upload only the public `.cer` to Entra. Never export or upload a private key
 > or PFX. The certificate expires after one year; plan renewal.
 
-**Record these values:** `<CERT_THUMBPRINT>`, `<PUBLISHER_CER_PATH>`.
+At this point you should have (from Step 4):
+
+1. `<CERT_THUMBPRINT>`: a 40-hex thumbprint of a certificate in `Cert:\LocalMachine\My` with
+   a non-exportable private key that `<WORKER_ACCOUNT>` can read
+2. `<PUBLISHER_CER_PATH>`: the public `C:\ScomMcp\scom-mcp-publisher.cer` (no private key)
 
 ## Step 5. Create the three Entra app registrations
 
 Choose one route; both produce the same result.
 
 - **Route A (script, recommended).** From `<pkg>`, as an administrator signed in to
-  Microsoft Graph PowerShell:
+  Microsoft Graph PowerShell. Sign in first (install `Microsoft.Graph.Authentication` if
+  prompted). The signed-in account needs a role that can create app registrations and grant
+  admin consent to a non-Microsoft-Graph API: Application Administrator, Cloud Application
+  Administrator, Privileged Role Administrator or Global Administrator:
 
   ```powershell
+  Connect-MgGraph -TenantId <TENANT_ID> -Scopes 'Application.ReadWrite.All','AppRoleAssignment.ReadWrite.All'
   .\setup\Provision-ScomEntra.ps1 -TenantId <TENANT_ID> -NamePrefix scom-mcp `
     -PublicCertificatePath <PUBLISHER_CER_PATH> `
     -StateDirectory C:\ScomMcp\config -GrantPublisherRole
   ```
 
-  Use `<PUBLISHER_CER_PATH>` (from Step 4). It creates or verifies all three registrations
-  and writes a nonsecret `identity.json` into `C:\ScomMcp\config`; open that file to read the
-  app IDs. Details and prerequisites: [entra-setup, Route A](entra-setup.md#route-a-script).
+  Use `<PUBLISHER_CER_PATH>` (from Step 4). `<TENANT_ID>` is on Entra admin center >
+  Overview. The script creates or verifies all three registrations, sets
+  `requestedAccessTokenVersion` to `2` on the API app, and writes a nonsecret
+  `identity.json` into `C:\ScomMcp\config`; open that file to read the app IDs. Details and
+  prerequisites: [entra-setup, Route A](entra-setup.md#route-a-script).
 - **Route B (portal).** Follow [entra-setup, Route B](entra-setup.md#route-b-portal).
   Upload the `.cer` from `<PUBLISHER_CER_PATH>` (from Step 4) to the publisher app.
+  **You must also set `requestedAccessTokenVersion` to `2` on the API app:** Entra admin
+  center > App registrations > the API app > Manifest > set
+  `"requestedAccessTokenVersion": 2` (under `api` in the Microsoft Graph app manifest; the
+  older AAD Graph manifest shows it as `accessTokenAcceptedVersion`) > Save. With the
+  default the token's `aud` is `api://<API_APP_ID>` instead of the GUID `<API_APP_ID>` that
+  `Auth.Audiences` expects, so every call returns 401.
 
 Either way you also need to:
 
 1. **Create the reader client secret** through your approved credential process. Keep it
    for Step 8; do not write it to a file.
 2. **Record the publisher's Enterprise application Object ID** (the service principal, not
-   the app registration):
+   the app registration). In the same Graph session:
    `(Get-MgServicePrincipal -Filter "appId eq '<PUBLISHER_APP_ID>'").Id`
+   (reading service principals may also need the `Application.Read.All` scope; or read it
+   in Entra > Enterprise applications > the publisher > Object ID).
 3. **Record the Object ID of each user** allowed to ask questions (Entra > Users).
-4. **Grant admin consent** for the publisher's `Scom.Ingest` app role. The reader's
-   delegated `Scom.Read` is consented as your tenant policy requires.
+4. **Grant admin consent for the reader app.** The `Scom.Read` scope is admin-only, so
+   consent is required once for the tenant. Click path, signed in with one of the roles
+   above: Entra admin center >
+   **Entra ID** > **App registrations** > **All applications** > the reader app
+   (`<READER_APP_ID>`) > **API permissions** > confirm `Scom.Read` (Delegated) is listed
+   (use **Add a permission** > **My APIs** > the API > **Delegated permissions** > `Scom.Read`
+   if it is not) > **Grant admin consent for `<your tenant>`** > **Yes**. The Status column must
+   show **Granted for `<your tenant>`**.
+5. **Confirm the publisher's consent** the same way: the publisher app > API permissions >
+   `Scom.Ingest` (Application) must show **Granted for `<your tenant>`**.
 
 📷 *Screenshots pending: `entra-setup-api-expose.png`, `entra-setup-api-approles.png`,
 `entra-setup-publisher-cert.png`, `entra-setup-publisher-permissions.png`,
@@ -299,15 +333,16 @@ Start from [`worker.example.json`](../examples/worker.example.json); field notes
 | `profile.configuration.managementServer`, `managementGroupId`, `groupId` | `<MGMT_SERVER_FQDN>`, `<MG_ID>`, `<GROUP_ID>` (from Step 3) |
 | `profile.configuration.operationsManagerModule` | `<OM_MODULE_PATH>` (from Step 3); must equal the plan's value in 6d |
 | `schedule.interval` | `01:00:00` (default). The receiver's `Source.FreshMinutes` must exceed it |
-| `profile.configuration.windowsMapping` | Keep the example's candidates; verify them against your management packs |
+| `profile.configuration.windowsMapping` | Keep the example's candidates; confirm them for your management packs in [6f](#6f-confirm-windowsmapping-for-your-management-packs) |
+| Verification flags (six) | Set to `true` only after you attest the evidence in [6e](#6e-attest-the-source-evidence) |
 
 Setup's Configure step supplies the script path and hash, state paths and some identity
 fields while merging ([worker.example.md](../examples/worker.example.md)); still fill in the
 values above so the file can be reviewed before you run it.
 
-> **Note:** The verification flags in `worker.json` are operator attestations. Leave them
-> `false` unless you have reviewed the evidence they attest
-> ([worker.example.md](../examples/worker.example.md#verification-flags)).
+> **Note:** The verification flags in `worker.json` are operator attestations and ship as
+> `false`. They must be `true` before Activate and Publish will proceed, so complete 6e and 6f
+> before Step 7, command 5.
 
 ### 6d. `setup-plan.json` (the plan input)
 
@@ -349,38 +384,235 @@ This tells setup where to install and what to bind. Save it as `C:\ScomMcp\plan-
 | Paths | Seven distinct folders on local NTFS, none inside another or under `%WINDIR%`; the parent of `installPath` must already exist |
 | Whole-management-group scope | `scopeKind` = `managementGroup`, `wholeManagementGroupApproved` = `true`, `groupId` = `null`. Validated on 3 servers only |
 
+### 6e. Attest the source evidence
+
+The collector will not read SCOM until you attest that you checked the source. The attestations
+are six boolean flags in `C:\ScomMcp\config\worker.json` (under `profile.configuration`). They
+ship as `false`. A flag is **your statement** that you inspected the evidence in the right-hand
+column; it is not measured by the software. Never set one to make a check pass.
+
+| Flag | What it declares | What to inspect |
+|---|---|---|
+| `windowsMapping.verified` | The class, relationship and property names and the unit factors in `windowsMapping` are right for your management packs | The three facts in [6f](#6f-confirm-windowsmapping-for-your-management-packs) |
+| `windowsMapping.agentMonitoringVerified` | The in-scope computers are agent-monitored, so health comes from the agent (no monitoring-role mapping is needed) | Operations console > Administration > Device Management > **Agent Managed** lists every in-scope computer; or `Get-SCOMAgent` |
+| `scopeVisibilityVerified` | The worker account sees the scope you intend (the group, or the whole management group) | Step 7 command 3 output, and the same group or inventory visible to `<WORKER_ACCOUNT>` in the console |
+| `membershipQueryContractVerified` | **Group scope only.** Group membership returns the computers you expect | The group's members in the console equal the members from the SDK (`Get-SCOMGroup -Id '<GROUP_ID>'` then its related objects) |
+| `enumerationQueryContractVerified` | **Whole-management-group scope only.** Enumerating all instances of the Windows classes returns what you expect | Instance counts from `Get-SCOMClassInstance -Class <class>` equal the console's Discovered Inventory counts |
+| `additionalRelationshipContractVerified` | Both names in `additionalRelationshipNames` exist and return edges | The relationship probe in 6f |
+
+What to set:
+
+- **Group scope:** set five flags to `true` (all except `enumerationQueryContractVerified`,
+  which stays `false`).
+- **Whole management group:** set five flags to `true` (all except
+  `membershipQueryContractVerified`, which stays `false`), set `wholeManagementGroupApproved`
+  to `true` in both `worker.json` and the plan (6d), and leave `groupId` as `null`.
+  Validated on 3 servers only.
+- `liveChecks.queryContractVerified` stays `false` in every case.
+
+When they are enforced: Configure (command 4) only validates that the JSON is well-formed and
+consistent, so set the flags **before** running it or Configure will report the file as
+changed. Activate (command 5) and every later command run `--validate-setup`, which exits with
+`SCOM_SETUP_SOURCE_EVIDENCE_REQUIRED` and blocks the step until the flags are `true`. The
+collector enforces them again on every run (for example `SCOM_WINDOWS_MAPPING_UNVERIFIED`,
+`SCOM_PROFILE_SCOPE_UNVERIFIED`, `SCOM_PROFILE_GRAPH_CONTRACT_UNVERIFIED`).
+
+Record the decision once, in your change ticket or the deployment notes (get the hash with
+`Get-FileHash C:\ScomMcp\config\worker.json`):
+
+```text
+Attested <YYYY-MM-DD> by <NAME>: set <flag list> = true for <group|managementGroup> scope after reviewing <evidence list>; worker.json SHA-256 <HASH>.
+```
+
+### 6f. Confirm windowsMapping for your management packs
+
+The example's class, relationship and property names are candidates from a Windows Server
+2022 lab, not guarantees. Confirm three facts for your management packs before you set
+`windowsMapping.verified`. These probes are read-only SDK queries; run them as
+`<WORKER_ACCOUNT>` in Windows PowerShell 5.1 (they were not run verbatim in the lab: adjust
+if your module version differs).
+
+```powershell
+Import-Module '<OM_MODULE_PATH>'
+New-SCOMManagementGroupConnection -ComputerName '<MGMT_SERVER_FQDN>'
+```
+
+**Fact 1: the classes and relationships exist, and which disk relationship applies.** The
+example uses `Microsoft.Windows.Computer`, `Microsoft.Windows.OperatingSystem` and
+`Microsoft.Windows.Server.LogicalDisk` (the collector requires the Server logical-disk class),
+with `Microsoft.Windows.ComputerHostsOperatingSystem` and
+`Microsoft.Windows.ComputerHostsLogicalDevice`. Use that direct computer-to-device edge **or**
+`osHostsVolumeRelationship`, never both, and list each relationship in
+`additionalRelationshipNames`.
+
+```powershell
+Get-SCOMClass -Name 'Microsoft.Windows.Computer','Microsoft.Windows.OperatingSystem','Microsoft.Windows.Server.LogicalDisk' |
+    Select-Object Name, DisplayName
+Get-SCRelationship -Name 'Microsoft.Windows.ComputerHostsOperatingSystem','Microsoft.Windows.ComputerHostsLogicalDevice' |
+    Select-Object Name
+```
+
+Every name must be returned. A missing name means that class or relationship is not in your
+management packs; choose the one your packs define.
+
+**Fact 2: the property names and their units.** Read one known server and compare. The
+properties used are `PrincipalName`, `OSVersion`, `OSVersionDisplayName` (the OS caption),
+`PhysicalMemory`, `LogicalProcessors`, `DeviceID`, `FileSystem` and `SizeInMBs`.
+
+```powershell
+$os   = Get-SCOMClassInstance -Class (Get-SCOMClass -Name 'Microsoft.Windows.OperatingSystem') | Select-Object -First 1
+$disk = Get-SCOMClassInstance -Class (Get-SCOMClass -Name 'Microsoft.Windows.Server.LogicalDisk') | Select-Object -First 1
+$os.Values   | Select-Object @{n='Property';e={$_.Type.Name}}, Value
+$disk.Values | Select-Object @{n='Property';e={$_.Type.Name}}, Value
+```
+
+For `memoryToMiB` and `volumeSizeToMiB`, pick a server whose real RAM and disk size you know
+and compute factor = real MiB / raw value. In the lab, `PhysicalMemory` was in KB (factor
+`0.0009765625`) although the management pack labels it MB, and `SizeInMBs` was MiB (factor
+`1`). Do not assume your packs match.
+
+**Fact 3: the most-derived class names for the allow-lists.** `allowedPropertiesByClass` in
+`worker.json` must be keyed by the most-derived class actually returned, and must equal the
+receiver's `AllowedPropertiesByClass` (6b).
+
+```powershell
+$cls = 'Microsoft.Windows.Computer','Microsoft.Windows.OperatingSystem','Microsoft.Windows.Server.LogicalDisk'
+foreach ($c in $cls) {
+    Get-SCOMClassInstance -Class (Get-SCOMClass -Name $c) | Select-Object -First 3 |
+        ForEach-Object { $_.GetMostDerivedClasses() | Select-Object -ExpandProperty Name }
+} | Sort-Object -Unique
+```
+
+In the lab these were `Microsoft.Windows.Server.10.0.Full.Computer`,
+`Microsoft.Windows.Server.10.0.Full.OperatingSystem` and
+`Microsoft.Windows.Server.10.0.LogicalDisk`. Your list may differ, for example with another
+Windows Server version: add one key per class returned.
+
+When all three facts hold, set `windowsMapping.verified` and
+`additionalRelationshipContractVerified` as described in 6e.
+
 At this point you should have `identity.json`, `receiver.json` and `worker.json` in
-`C:\ScomMcp\config`, and `plan-input.json` in `C:\ScomMcp`. Reference for every setting:
-[configuration-reference](configuration-reference.md).
+`C:\ScomMcp\config` (with the 6e flags set and a recorded decision), and `plan-input.json` in
+`C:\ScomMcp`. Reference for every setting: [configuration-reference](configuration-reference.md).
 
 ## Step 7. Run setup: Prepare to Host Publish
 
 Run these seven commands in order from `<pkg>`, in **Windows PowerShell 5.1**. Stop at the
 first command that does not print its expected line. The **Host** lane is an elevated shell
 as a local administrator; the **Worker** lane is a separate session running as
-`<WORKER_ACCOUNT>` (from Step 3), which must be able to read `<private>\worker.json` (created by step 4).
+`<WORKER_ACCOUNT>` (from Step 3), which must be able to read `<private>\worker.json` (created by command 4, Configure).
 
 In the commands below, `<state>` is a new state directory (for example `C:\ScomMcp\setup-state`),
 `<plan-input>` is `C:\ScomMcp\plan-input.json` (from Step 6) and `<private>` is
 the plan's `privatePath`, `C:\ScomMcp\private` (from Step 6).
 
-| # | Lane | What it does | Uses values from |
-|---|---|---|---|
-| 1 | Host | Initialize the private journal | none |
-| 2 | Host | **Prepare**: preflight checks, creates the plan | `plan-input.json` (Step 6) |
-| 3 | Worker | **Connect**: checks the account can see SCOM | `<WORKER_ACCOUNT>` (Step 3) |
-| 4 | Host | **Configure**: merges your three config files | `identity.json`, `receiver.json`, `worker.json` in `C:\ScomMcp\config` (Step 6) |
-| 5 | Host | **Activate**: installs the site, binds TLS, checks HTTPS | `<FQDN>`, `<TLS_THUMBPRINT>` (Step 2) |
-| 6 | Worker | **Publish**: one real SCOM collection to the receiver | `<CERT_THUMBPRINT>` (Step 4) |
-| 7 | Host | **Publish**: confirms the receiver committed the dataset | none |
+Every command except the first shows what it is about to do and waits at an approval prompt
+ending in "Type APPROVE to perform exactly this action; any other answer cancels". Only the
+exact word `APPROVE` proceeds. Read the text before you approve.
 
-The exact command lines and expected output of each step are in the
-[install-cli runbook](install-cli.md#commands); run them verbatim. Two things commonly go wrong:
+### Command 1. Host: initialize the private journal
 
-- Step 5 fails if the server cannot resolve its own `<FQDN>` (Step 2, item 1).
-- Step 6 needs a package at or after commit `55f3062` (this release includes it).
+```powershell
+.\setup\Initialize-ScomSetupState.ps1 -Path <state>
+```
 
-Setup never enables recurrence; that is Step 10.
+**APPROVE asks:** create only `<state>` and restrict it to SYSTEM and Administrators for the
+deployment journals; no IIS, source, Graph or install actions.
+**Expected:** `Private journal directory ready.`
+
+### Command 2. Host: Prepare
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory <state> -Step Prepare -PlanPath <plan-input>
+```
+
+It prints the preflight lines first; every one must be `PASS`. **APPROVE asks (twice):**
+(1) save the private deployment plan and resumable journal, with no host installation yet;
+(2) create only the new install, private, receiver-state, worker-state, MCP-log and
+collector-log folders from your plan, copy the reviewed package and restrict the ACLs, with
+no IIS startup and no source queries.
+**Expected:** `Prepared, not active.` followed by a hint to run the worker Connect step, then
+`SETUP_STAGE=prepared. No recurrence, metrics or targeted-live enabled.`
+**If it fails:** `SETUP_PREREQUISITES_BLOCKED` (fix the failed preflight line) or
+`SETUP_EXISTING_PARENT_DIRECTORY_REQUIRED` (create the parent of `installPath`).
+
+### Command 3. Worker: Connect
+
+Sign in to the collector host **as `<WORKER_ACCOUNT>`** and run:
+
+```powershell
+.\setup\Start-ScomWorkerSetup.ps1 -PlanPath <private>\setup-plan.json -Step Connect
+```
+
+**APPROVE asks:** connect to `<MGMT_SERVER_FQDN>` and check only the management-group identity
+and, for group scope, the existing group GUID; 60-second timeout; no members, alerts or
+inventory are enumerated and no scope flags are set.
+**Expected:** `SCOM_SETUP_CONNECTION_GROUP_VISIBLE_NOT_SCOPE_CERTIFIED` (this is the expected
+line for management-group scope too: it proves visibility, not scope certification).
+
+### Command 4. Host: Configure
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory <state> -Step Configure `
+    -IdentityPath C:\ScomMcp\config\identity.json `
+    -ReceiverSettingsPath C:\ScomMcp\config\receiver.json `
+    -WorkerSettingsPath C:\ScomMcp\config\worker.json
+```
+
+**APPROVE asks:** back up the staged configuration privately and import the reviewed
+receiver and worker JSON plus the non-secret identity; setup sets no source-verification flags.
+**Expected:** `SETUP_STAGE=configured. No recurrence, metrics or targeted-live enabled.`
+**If it fails:** `SETUP_CONFIGURATION_CHANGED_REVIEW_REQUIRED` means a config file changed
+after Configure; re-run Configure.
+
+### Command 5. Host: Activate
+
+Before this command the source-evidence flags in `worker.json` must be `true`
+([6e](#6e-attest-the-source-evidence)); otherwise it stops with
+`SETUP_SOURCE_EVIDENCE_REQUIRED_NO_FLAGS_INFERRED`.
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory <state> -Step Activate
+```
+
+**APPROVE asks:** create the dedicated pool `<poolName>` and the HTTPS site and application
+using `https://<FQDN>`; nothing existing is overwritten; start only this app and enable normal
+IIS startup after the HTTPS health check succeeds; on failure stop and disable only its owned pool.
+**Expected:** `HTTPS reachable only; inventory and reader acceptance NOT proven.` then
+`SETUP_STAGE=activated.`
+**If it fails:** a DNS failure gives `SETUP_INTERRUPTED_ACTION_REQUIRES_RECOVERY`; the server
+cannot resolve its own `<FQDN>` (Step 2, item 1).
+
+### Command 6. Worker: Publish
+
+As `<WORKER_ACCOUNT>`:
+
+```powershell
+.\setup\Start-ScomWorkerSetup.ps1 -PlanPath <private>\setup-plan.json -Step Publish
+```
+
+**APPROVE asks:** run one collection, publication and checkpoint attempt for your scope as
+`<WORKER_ACCOUNT>`, to `https://<FQDN>`; no recurrence, metrics or live checks.
+**Expected:** `SCOM_WORKER_PUBLISHED observed after checkpoint acknowledgement.`
+**If it fails:** `SETUP_PUBLICATION_NOT_ACKNOWLEDGED_OR_CONFIGURATION_CHANGED` usually means
+a package older than commit `55f3062` (this release includes the fix);
+`SETUP_CONFIGURATION_OR_SOURCE_EVIDENCE_BLOCKED` means `--validate-setup` failed, so check the
+flags in 6e and the mapping in 6f.
+
+### Command 7. Host: Publish
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory <state> -Step Publish
+```
+
+**APPROVE asks:** record the worker-reported publication and checkpoint receipt for your
+scope; no new source run. A receipt alone is not reader acceptance.
+**Expected:** `Publication observed; complete intended-user Studio/tool and unauthorized-user
+acceptance before Accept.` then `SETUP_STAGE=published.`
+
+Host-lane commands fail with `SETUP_ADMINISTRATOR_REQUIRED_FOR_HOST_LANE` if the shell is not
+elevated. Setup never enables recurrence; that is Step 10. The same sequence is also
+documented in the [install-cli runbook](install-cli.md#commands) for depth.
 
 📷 *Screenshot pending: `readme-wizard.png` (GUI alternative); see
 [install-wizard](install-wizard.md) and [screenshots/README.md](screenshots/README.md).*
@@ -418,38 +650,196 @@ Model Context Protocol** and fill in:
 📷 *Screenshots pending: `copilot-studio-connector.png`, `copilot-studio-connection.png`;
 see [screenshots/README.md](screenshots/README.md).*
 
-At this point the agent can call the server. If sign-in fails with a redirect mismatch,
+At this point you should have a working connection: the agent lists the server's tools and
+`<CALLBACK_URI>` is saved on the reader app. If sign-in fails with a redirect mismatch,
 `<CALLBACK_URI>` was not saved on the reader app exactly as shown; see
 [Troubleshooting](#troubleshooting).
 
 ## Step 9. Acceptance checks and Accept
 
 Setup's Accept records that you ran these checks; it does not run them. State which you
-skip.
+skip. Run the PowerShell below in a normal Windows PowerShell 5.1 session on any machine that
+can reach `https://<FQDN>`. These commands were assembled from the documented endpoints
+([mcp-server-spec](mcp-server-spec.md)); if a response differs from what is described, stop
+and use [Troubleshooting](#troubleshooting).
 
-1. `GET https://<FQDN>/healthz` returns 200.
-2. `POST https://<FQDN>/mcp` without a token returns 401.
-3. In Copilot Studio, `get_source_status` returns the expected computer count with complete
-   coverage.
-4. The Operations console computer count matches the inventory.
-5. `get_inventory_summary` counts and health match the console.
-6. `get_device_details` works for each computer.
-7. A signed-in user who is **not** in `Auth.Callers` gets 403.
-8. A reader token against the ingestion endpoint gets 403.
+### 9.0 Prepare: a status helper and a test token
 
-Then run the Host **Accept** command (type `APPROVE`) from the
-[install-cli runbook](install-cli.md#commands), step 8. Expected:
-`SETUP_STAGE=accepted. No recurrence, metrics or targeted-live enabled.`
+Define a helper that returns the HTTP status code instead of throwing on 401/403:
+
+```powershell
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+function Get-HttpStatus {
+    param([string]$Method = 'GET', [string]$Uri, [hashtable]$Headers = @{}, [string]$Body)
+    $p = @{ Method = $Method; Uri = $Uri; Headers = $Headers; UseBasicParsing = $true }
+    if ($Body) { $p.Body = $Body; $p.ContentType = 'application/json' }
+    try { [int](Invoke-WebRequest @p).StatusCode }
+    catch { if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { throw } }
+}
+```
+
+Checks 3, 5, 6, 7 and 8 need a reader access token. Copilot Studio holds the real one, so
+create a **temporary public-client "check app"** (delete it when you finish this step):
+
+1. Entra admin center > Entra ID > App registrations > **New registration**. Name
+   `scom-mcp-check-temp`, single tenant, redirect URI platform **Public client/native** with
+   value `http://localhost`. Register, and copy the Application (client) ID as
+   `<CHECK_CLIENT_ID>`.
+2. Authentication > Advanced settings > **Allow public client flows** = Yes. Save.
+3. API permissions > Add a permission > **My APIs** > the API app > **Delegated** >
+   `Scom.Read` > Add. Then **Grant admin consent for `<your tenant>`** > Yes.
+
+Get a token with the device-code flow. It prints a code; open the URL it shows in a browser
+and sign in as an allow-listed reader (`<READER_USER_OBJECT_ID>`, Step 6):
+
+```powershell
+$tenant = '<TENANT_ID>'; $client = '<CHECK_CLIENT_ID>'
+$dc = Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$tenant/oauth2/v2.0/devicecode" `
+    -Body @{ client_id = $client; scope = 'api://<API_APP_ID>/Scom.Read' }
+Write-Host $dc.message
+$token = $null
+while (-not $token) {
+    Start-Sleep -Seconds $dc.interval
+    try {
+        $token = (Invoke-RestMethod -Method Post -Uri "https://login.microsoftonline.com/$tenant/oauth2/v2.0/token" `
+            -Body @{ grant_type = 'urn:ietf:params:oauth:grant-type:device_code'; client_id = $client; device_code = $dc.device_code }).access_token
+    } catch {
+        $e = $null
+        try { $e = ($_.ErrorDetails.Message | ConvertFrom-Json).error } catch { }
+        if ($e -ne 'authorization_pending') { throw }
+    }
+}
+```
+
+Keep `$token` in memory only; never write it to a file or paste it into a ticket. Then define
+a helper that calls an MCP tool as that user:
+
+```powershell
+function Invoke-Mcp {
+    param([string]$Tool, [hashtable]$Arguments = @{}, [string]$Token = $token)
+    $body = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{ name = $Tool; arguments = $Arguments } } |
+        ConvertTo-Json -Depth 6 -Compress
+    (Invoke-WebRequest -Method Post -Uri 'https://<FQDN>/mcp' -UseBasicParsing -ContentType 'application/json' `
+        -Headers @{ Authorization = "Bearer $Token"; Accept = 'application/json, text/event-stream' } -Body $body).Content
+}
+```
+
+### 9.1 The eight checks
+
+1. **Health.** `Get-HttpStatus -Uri 'https://<FQDN>/healthz'` returns `200`.
+2. **No token is refused.**
+   `Get-HttpStatus -Method POST -Uri 'https://<FQDN>/mcp' -Headers @{ Accept = 'application/json, text/event-stream' } -Body '{}'`
+   returns `401`.
+3. **Source status.** The JSON-RPC body the server receives is:
+
+   ```json
+   {"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_source_status","arguments":{}}}
+   ```
+
+   Send it with `Invoke-Mcp -Tool get_source_status`. The server is stateless, so no
+   `initialize` call is needed; if your server replies that a session is required, send an
+   `initialize` request first. The response may arrive as a server-sent event (`data: {...}`).
+   Expect the committed computer count, `freshness` = `fresh` and coverage complete (expected
+   equals unique). The same result must appear when you ask the Copilot Studio agent.
+4. **Computer count.** In the Operations console: Monitoring > Discovered Inventory > Change
+   Target Type > **Windows Computer**; the number of in-scope instances (for group scope,
+   the group's members) must equal the computer count from check 3.
+5. **Inventory matches the console.**
+   - OS: `Invoke-Mcp -Tool get_inventory_summary`; add up the `count` values of the
+     `osCaption` breakdown. In the console, Discovered Inventory > Change Target Type >
+     **Windows Operating System**. The in-scope **Discovered Inventory OS count** must equal
+     the **OS edges** (the sum from the tool).
+   - Disks: `Invoke-Mcp -Tool get_capacity_summary -Arguments @{ resource = 'disk' }`; read
+     `matchingVolumeCount`. In the console, Change Target Type > **Windows Server Logical
+     Disk**. The in-scope **Logical Disk count** must equal the **disk edges**
+     (`matchingVolumeCount`).
+
+   For group scope, count only the instances hosted by the group's computers. A mismatch
+   means a mapping or scope problem: see 6f.
+6. **Device details.** `Invoke-Mcp -Tool list_devices` returns each computer's `entityId`;
+   for each, `Invoke-Mcp -Tool get_device_details -Arguments @{ entityId = '<ENTITY_ID>' }`
+   returns the `device` and its `volumes`.
+7. **A signed-in user who is not allow-listed is refused.** Repeat the device-code sign-in
+   above as a user whose object ID is **not** in `Auth.Callers`, storing the result in
+   `$otherToken`. Then:
+
+   ```powershell
+   Get-HttpStatus -Method POST -Uri 'https://<FQDN>/mcp' -Headers @{ Authorization = "Bearer $otherToken"; Accept = 'application/json, text/event-stream' } `
+       -Body '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_source_status","arguments":{}}}'
+   ```
+
+   Expect `403`. (A user who is not assigned to the check app, or never consented, may be
+   refused at sign-in instead, which is also a pass; record which.)
+8. **A reader token cannot ingest.**
+
+   ```powershell
+   Get-HttpStatus -Method POST -Uri "https://<FQDN>/ingestion/sessions/$([guid]::NewGuid())" `
+       -Headers @{ Authorization = "Bearer $token" } -Body '{}'
+   ```
+
+   Expect `403`: only the publisher's app-only `Scom.Ingest` role may write.
+
+When you finish, delete the check app (Entra admin center > App registrations >
+`scom-mcp-check-temp` > Delete) and close the session that holds `$token`.
+
+### 9.2 Accept
+
+Host lane, elevated, from `<pkg>`. Run it only after you have run (or consciously skipped)
+the checks above:
+
+```powershell
+.\setup\Start-ScomSetup.ps1 -StateDirectory <state> -Step Accept
+```
+
+**APPROVE asks:** "Record operator attestation of intended-user Studio tool discovery,
+committed inventory, unauthorized-user denial and scoped coverage. This is NOT automated
+certification." Type `APPROVE`; any other answer cancels.
+
+**Expected:** `SETUP_STAGE=accepted. No recurrence, metrics or targeted-live enabled.`
+
+At this point you should have all eight checks recorded as passed (or skipped by you, by
+name), the check app deleted, and setup at the `accepted` stage.
 
 ## Step 10. Register recurrence
 
-Register the single scheduled task that refreshes the snapshot every hour. It runs as
-`<WORKER_ACCOUNT>` (from Step 3) and uses the `worker.json` from Step 6; the command and its
-expected output are in [operations, recurrence](operations.md#recurrence). The credential is
-entered at a prompt; never pass a password as an argument.
+Register the single scheduled task that refreshes the snapshot every hour (the interval is
+`schedule.interval` = `01:00:00` in `worker.json`, Step 6). It runs as `<WORKER_ACCOUNT>`
+(from Step 3), which must hold **Log on as a batch job**; SYSTEM, LocalService and
+NetworkService are rejected. Run in an **elevated** Windows PowerShell 5.1 on the collector host:
 
-Confirm with `get_source_status` after the first run: `collected_at` advances and freshness
-is `fresh`.
+```powershell
+$c = Get-Credential '<WORKER_ACCOUNT>'
+& 'C:\ScomMcp\package\Operations\DurableIndexedRefresh\Register-ScomWorkerTask.ps1' `
+    -WorkerDllPath 'C:\ScomMcp\install\server\ScomMcp.dll' `
+    -WorkerConfigPath 'C:\ScomMcp\private\worker.json' `
+    -StateDirectory 'C:\ScomMcp\worker-runtime' `
+    -Credential $c -StartNow
+```
+
+- The password is typed into the `Get-Credential` prompt; never pass it as an argument.
+- `-StateDirectory` must be a **new, empty** local NTFS directory (the script creates it and
+  sets its ACL). If `C:\ScomMcp\worker-runtime` exists already, choose another.
+- The command asks you to confirm before it registers (high-impact action); answer `Y`.
+- The task name `SCOM-MCP Durable Indexed Refresh` must not already exist.
+
+**Expected output** (an object with these values):
+
+| Property | Value |
+|---|---|
+| `TaskName` / `TaskPath` | `SCOM-MCP Durable Indexed Refresh` / `\` |
+| `WorkerIdentity` | `<WORKER_ACCOUNT>` |
+| `State` | `start-requested` |
+| `StartupTrigger` | `AtStartup` |
+| `DuplicateInstancePolicy` | `IgnoreNew` |
+| `AutomaticRestartCount` | `0` |
+| `RuntimeStateDirectory` | `C:\ScomMcp\worker-runtime` |
+
+Day-two commands (status, start, stop, re-arm, unregister) are in
+[operations, recurrence](operations.md#recurrence). Confirm with `get_source_status` (Step 9,
+check 3) after the first run: `collected_at` advances and freshness is `fresh`.
+
+At this point you should have one scheduled task registered for `<WORKER_ACCOUNT>`, a
+`collected_at` that advances each hour, and freshness `fresh`. Setup is complete.
 
 ## Step 11. Agent acceptance test
 
