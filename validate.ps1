@@ -20,6 +20,8 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell local discovery validation failed.' }
     & $desktopPowerShell -NoProfile -File (Join-Path $PSScriptRoot 'Setup\Validate-ScomPrerequisiteInstall.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Desktop PowerShell prerequisite installer validation failed.' }
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Validation\Validate-ScomMappingProfile.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Mapping profile generator validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-Collector.ps1')
     & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomSupportedWindowsScope.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Supported Windows scope validation failed.' }

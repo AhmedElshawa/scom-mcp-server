@@ -3,6 +3,7 @@
 ## Unreleased
 
 ### Added
+- `setup\New-ScomMappingProfile.ps1` and `setup\Approve-ScomMappingProfile.ps1`: generate a complete `worker.json` (`windowsMapping`, allow-list, relationships, scope) from read-only SCOM observation with proven units, then approve the six attestation flags with one `APPROVE` and an attestation record. `Validation\Validate-ScomMappingProfile.ps1` covers them offline.
 - Partner distribution package: landing README and the `docs/` set (architecture, CLI runbook, wizard walkthrough, Entra setup, network and ports, service accounts, Copilot Studio integration, MCP server spec, configuration reference, operations, sizing and scope, troubleshooting, security, limitations).
 - `examples/` with receiver, worker and identity examples (placeholders only), field notes and the Copilot Studio agent instructions.
 - `package.ps1 -Release`: release ZIP, SHA256 sidecar and a CycloneDX SBOM list.

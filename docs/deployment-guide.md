@@ -316,6 +316,7 @@ Start from [`receiver.example.json`](../examples/receiver.example.json); field n
 | `Auth.Callers[].ObjectId` | `<READER_USER_OBJECT_ID>`, one entry per allowed user (from Step 5) |
 | `ReadModel.PublisherObjectIds` | `<PUBLISHER_SP_OBJECT_ID>` (from Step 5) |
 | `ReadModel.ManagementGroupId` / `GroupId` | `<MG_ID>` / `<GROUP_ID>` (from Step 3) |
+| `ReadModel.AllowedPropertiesByClass` | The same classes and properties as the worker's `allowedPropertiesByClass`; copy them from the generator summary in 6c |
 | `AllowedHosts` | `<FQDN>` (from Step 2) |
 
 ### 6c. `worker.json`
@@ -333,16 +334,62 @@ Start from [`worker.example.json`](../examples/worker.example.json); field notes
 | `profile.configuration.managementServer`, `managementGroupId`, `groupId` | `<MGMT_SERVER_FQDN>`, `<MG_ID>`, `<GROUP_ID>` (from Step 3) |
 | `profile.configuration.operationsManagerModule` | `<OM_MODULE_PATH>` (from Step 3); must equal the plan's value in 6d |
 | `schedule.interval` | `01:00:00` (default). The receiver's `Source.FreshMinutes` must exceed it |
-| `profile.configuration.windowsMapping` | Keep the example's candidates; confirm them for your management packs in [6f](#6f-confirm-windowsmapping-for-your-management-packs) |
-| Verification flags (six) | Set to `true` only after you attest the evidence in [6e](#6e-attest-the-source-evidence) |
+| `profile.configuration.windowsMapping`, `allowedPropertiesByClass`, `additionalRelationshipNames` | Generated from your SCOM by `New-ScomMappingProfile.ps1` (below); do not hand-edit |
+| Verification flags (six) | Set to `true` by `Approve-ScomMappingProfile.ps1` (below) after you review the evidence |
 
 Setup's Configure step supplies the script path and hash, state paths and some identity
 fields while merging ([worker.example.md](../examples/worker.example.md)); still fill in the
 values above so the file can be reviewed before you run it.
 
-> **Note:** The verification flags in `worker.json` are operator attestations and ship as
-> `false`. They must be `true` before Activate and Publish will proceed, so complete 6e and 6f
-> before Step 7, command 5.
+**Generate the mapping, review it, approve it.** The generator reads your SCOM read-only,
+works out the class, relationship and property names and the memory and disk units, and writes
+a complete `worker.json` with all six verification flags `false`. Run it as `<WORKER_ACCOUNT>`
+in Windows PowerShell 5.1 from `<pkg>`, on a host that has the Operations Manager console or
+PowerShell module. The worker account needs write access to the output folder while it runs
+(create `C:\ScomMcp\worker-draft` and grant it Modify):
+
+```powershell
+.\setup\New-ScomMappingProfile.ps1 -ManagementServer '<MGMT_SERVER_FQDN>' -ScopeKind group -GroupId '<GROUP_ID>' -SampleComputers 3 -OutputPath C:\ScomMcp\worker-draft\worker.json
+```
+
+For whole-management-group scope use `-ScopeKind managementGroup` and omit `-GroupId`
+(validated on 3 servers only). Optional parameters: `-OperationsManagerModule <OM_MODULE_PATH>`
+if the module is not in the default location, `-WorkerTemplatePath` for another template
+(default `..\examples\worker.example.json`), `-DeadlineSeconds` (default 120) and `-Force` to
+overwrite earlier output. The script samples at most 10 computers, does one relationship read
+per computer and stops at the local deadline; these bounds limit local consumption only and
+do not bound work inside SCOM.
+
+It writes three outputs next to each other: `worker.json`, `worker.json.evidence.json` (everything it
+observed) and a printed summary. Exit codes: `0` ready for review; `1` bad arguments or
+existing output; `2` no computers in scope, the module is missing or discovery failed (nothing
+written); `3` the memory or disk unit could not be proven (the file carries `null` units and
+cannot be approved); `4` the mapping is ambiguous, for example disks hosted by both relationships
+(only the evidence file is written). On `3` or `4` use the manual path in 6e and 6f. The
+generator never guesses a unit.
+
+**Review the summary.** Check that the computers sampled are the ones you expect, that the
+memory and disk units match what you know about one of those servers, and that the listed
+classes are the most-derived classes for your management packs. Copy the printed
+`allowedPropertiesByClass` into the receiver's `ReadModel.AllowedPropertiesByClass` in
+`receiver.json` (6b): the two must be identical.
+
+**Approve.** This prints the evidence again, refuses if the file no longer matches it, asks for
+one `APPROVE`, sets exactly the six flags to `true` and writes `worker.json.attestation.txt`
+(operator, UTC date, SHA-256 of the evidence file). It changes nothing else:
+
+```powershell
+.\setup\Approve-ScomMappingProfile.ps1 -WorkerPath C:\ScomMcp\worker-draft\worker.json
+```
+
+Expected last line: `Result: APPROVED. Next: fill the identity fields, then run the setup Configure step.`
+
+Finally, copy the three files together to `C:\ScomMcp\config` (keep the names), and fill in
+the `identity`, `publisher` and remaining placeholder values in the table above in
+`C:\ScomMcp\config\worker.json`. Approval is your attestation: the SCOM SDK does not prove it,
+so review the summary before you type `APPROVE`. The flags must be `true` before Activate and
+Publish will proceed (Step 7, command 5). To do the same checks by hand, use the advanced
+path in [6e](#6e-attest-the-source-evidence) and [6f](#6f-confirm-windowsmapping-for-your-management-packs).
 
 ### 6d. `setup-plan.json` (the plan input)
 
@@ -386,6 +433,10 @@ This tells setup where to install and what to bind. Save it as `C:\ScomMcp\plan-
 
 ### 6e. Attest the source evidence
 
+**Advanced / manual path.** Most readers skip 6e and 6f: `Approve-ScomMappingProfile.ps1` in [6c](#6c-workerjson) already
+sets these flags after you review the generator's evidence. Use this section if the generator
+exited `3` or `4`, or your change process requires you to inspect the evidence yourself.
+
 The collector will not read SCOM until you attest that you checked the source. The attestations
 are six boolean flags in `C:\ScomMcp\config\worker.json` (under `profile.configuration`). They
 ship as `false`. A flag is **your statement** that you inspected the evidence in the right-hand
@@ -425,6 +476,9 @@ Attested <YYYY-MM-DD> by <NAME>: set <flag list> = true for <group|managementGro
 ```
 
 ### 6f. Confirm windowsMapping for your management packs
+
+**Advanced / manual path.** `New-ScomMappingProfile.ps1` (6c) performs these checks for you. Use this section to verify its
+result independently, or to build the mapping by hand when the generator cannot prove a unit.
 
 The example's class, relationship and property names are candidates from a Windows Server
 2022 lab, not guarantees. Confirm three facts for your management packs before you set
@@ -512,7 +566,8 @@ When all three facts hold, set `windowsMapping.verified` and
 `additionalRelationshipContractVerified` as described in 6e.
 
 At this point you should have `identity.json`, `receiver.json` and `worker.json` in
-`C:\ScomMcp\config` (with the 6e flags set and a recorded decision), and `plan-input.json` in
+`C:\ScomMcp\config` (with the six flags `true`, from Approve in 6c or from 6e, and a recorded
+decision: `worker.json.attestation.txt` or the 6e template), and `plan-input.json` in
 `C:\ScomMcp`. Reference for every setting: [configuration-reference](configuration-reference.md).
 
 ## Step 7. Run setup: Prepare to Host Publish
@@ -588,7 +643,7 @@ after Configure; re-run Configure.
 ### Command 5. Host: Activate
 
 Before this command the source-evidence flags in `worker.json` must be `true`
-([6e](#6e-attest-the-source-evidence)); otherwise it stops with
+([6c](#6c-workerjson) Approve, or [6e](#6e-attest-the-source-evidence)); otherwise it stops with
 `SETUP_SOURCE_EVIDENCE_REQUIRED_NO_FLAGS_INFERRED`.
 
 ```powershell
@@ -617,7 +672,7 @@ As `<WORKER_ACCOUNT>`:
 **If it fails:** `SETUP_PUBLICATION_NOT_ACKNOWLEDGED_OR_CONFIGURATION_CHANGED` usually means
 a package older than commit `55f3062` (this release includes the fix);
 `SETUP_CONFIGURATION_OR_SOURCE_EVIDENCE_BLOCKED` means `--validate-setup` failed, so check the
-flags in 6e and the mapping in 6f.
+flags and the mapping (re-run 6c, or see 6e and 6f).
 
 ### Command 7. Host: Publish
 

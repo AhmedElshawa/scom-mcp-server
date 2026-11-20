@@ -201,6 +201,8 @@ All of `profile.configuration` is covered by the checkpoint policy hash (Policy:
 
 `ReadModel.WindowsMetricHosting` must carry the mapping's `computerClassName`, `operatingSystemClassName` and `computerHostsOsRelationship`.
 
+**Generating this section.** `setup\New-ScomMappingProfile.ps1` writes `windowsMapping`, `allowedPropertiesByClass` (keyed by the observed most-derived classes), `additionalRelationshipNames` (the two observed relationships), the scope fields, and `memoryToMiB` / `volumeSizeToMiB` proven by plausibility (memory must land in 0.5-4096 GiB; disk uses `SizeInMBs` when present, otherwise `Size` / `SizeNumeric` as bytes). It leaves all six attestation flags `false`, writes `<worker>.evidence.json`, and exits non-zero with `null` units rather than guess. `setup\Approve-ScomMappingProfile.ps1` then sets exactly `windowsMapping.verified`, `windowsMapping.agentMonitoringVerified`, `scopeVisibilityVerified`, `membershipQueryContractVerified`, `enumerationQueryContractVerified` and `additionalRelationshipContractVerified` to `true` and writes `<worker>.attestation.txt`. The generator does not fill identity, publisher, script-hash or state-path placeholders, and it does not set the receiver: copy `allowedPropertiesByClass` into `ReadModel.AllowedPropertiesByClass`. See [deployment-guide.md](deployment-guide.md#6c-workerjson).
+
 ### 2.7 `identity`
 
 | Setting | Type | Rule | Purpose | Policy? |
