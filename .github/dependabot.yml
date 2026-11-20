@@ -1,0 +1,23 @@
+# Alerts and security updates only: a zero PR limit disables routine version-update pull requests.
+version: 2
+updates:
+  - package-ecosystem: nuget
+    directory: /ScomMcp
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: nuget
+    directory: /SetupGui
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: nuget
+    directory: /Validation
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
