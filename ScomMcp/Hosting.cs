@@ -3,6 +3,8 @@ using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.IdentityModel.Tokens;
 using ModelContextProtocol.Server;
 using Microsoft.AspNetCore.RateLimiting;
+using Microsoft.Extensions.Options;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Diagnostics;
 using Microsoft.Data.Sqlite;
 
@@ -45,6 +47,19 @@ public static class Hosting
                 limiter.PermitLimit = 1;
                 limiter.QueueLimit = 0;
             });
+            options.AddPolicy(McpRateLimiting.PolicyName, context =>
+            {
+                var limits = context.RequestServices.GetRequiredService<IOptions<McpRateLimitOptions>>().Value;
+                return RateLimitPartition.Get(McpRateLimiting.PartitionKey(context.User),
+                    _ => new WindowAndConcurrencyLimiter(limits));
+            });
+        });
+        services.AddOptions<McpRateLimitOptions>();
+        services.AddHsts(options =>
+        {
+            options.MaxAge = TimeSpan.FromDays(365);
+            options.IncludeSubDomains = false;
+            options.Preload = false;
         });
         services.AddSingleton(TimeProvider.System);
         if (readModel.WindowsToolsEnabled) services.AddSingleton<ISnapshotReader, IndexedWindowsReader>();
@@ -110,6 +125,11 @@ public static class Hosting
             context.Response.StatusCode = StatusCodes.Status500InternalServerError;
             await context.Response.WriteAsJsonAsync(new { error = "REQUEST_FAILED" });
         }));
+        if (!app.Environment.IsDevelopment())
+        {
+            app.UseHsts();
+            app.UseHttpsRedirection();
+        }
         app.UseRouting();
         app.UseAuthentication();
         app.UseAuthorization();
@@ -168,7 +188,7 @@ public static class Hosting
             await next(context);
         });
         app.MapGet("/healthz", () => Results.Json(new { service = "ScomReadOnlyMcp", version = "1.0.0" })).AllowAnonymous();
-        app.MapMcp("/mcp").RequireAuthorization("ScomRead");
+        app.MapMcp("/mcp").RequireAuthorization("ScomRead").RequireRateLimiting(McpRateLimiting.PolicyName);
         ReadModelHosting.Map(app);
         TargetedLiveHosting.Map(app);
     }

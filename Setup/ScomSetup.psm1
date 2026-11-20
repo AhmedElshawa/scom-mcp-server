@@ -59,6 +59,8 @@ function Assert-ScomSetupPlan {
         if ($name -notmatch '^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$') { throw 'SETUP_IIS_NAME_INVALID' }
     }
     if ($Plan.applicationPath -notmatch '^/([A-Za-z0-9_-]+)?$') { throw 'SETUP_APPLICATION_PATH_INVALID' }
+    # Literal prefix check first: the [uri] cast below normalizes case, whitespace and malformed schemes.
+    if ($Plan.httpsBaseUrl -isnot [string] -or $Plan.httpsBaseUrl -cnotmatch '^https://') { throw 'SETUP_HTTPS_INVALID' }
     $uri = [uri]$Plan.httpsBaseUrl
     if (-not $uri.IsAbsoluteUri -or $uri.Scheme -ne 'https' -or $uri.UserInfo -or $uri.Query -or $uri.Fragment -or
         $uri.HostNameType -ne 'Dns' -or $uri.AbsolutePath.TrimEnd('/') -ne $Plan.applicationPath.TrimEnd('/') -or

@@ -87,10 +87,30 @@ static class NormalizationProcessChecks
             deadline ?? TimeSpan.FromSeconds(15), token);
     }
 
+    // The production process starter refuses bare executable names, so fixtures resolve pwsh to an absolute path.
+    internal static string PwshPath()
+    {
+        var name = OperatingSystem.IsWindows() ? "pwsh.exe" : "pwsh";
+        foreach (var directory in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(directory.Trim('"'), name);
+            if (File.Exists(candidate)) return Path.GetFullPath(candidate);
+        }
+        throw new InvalidOperationException("pwsh was not found on PATH.");
+    }
+
+    private static string DotnetHost()
+    {
+        if (Environment.ProcessPath is { } path &&
+            string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase)) return path;
+        // The production process starter requires an absolute executable path, so resolve the dotnet root from the running runtime.
+        var root = Path.GetFullPath(Path.Combine(System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory(), "..", "..", ".."));
+        return Path.Combine(root, OperatingSystem.IsWindows() ? "dotnet.exe" : "dotnet");
+    }
+
     private static ProcessStartInfo StartInfo(string mode)
     {
-        var start = new ProcessStartInfo(Environment.ProcessPath is { } path &&
-            string.Equals(Path.GetFileNameWithoutExtension(path), "dotnet", StringComparison.OrdinalIgnoreCase) ? path : "dotnet")
+        var start = new ProcessStartInfo(DotnetHost())
         {
             UseShellExecute = false, CreateNoWindow = true,
             RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true

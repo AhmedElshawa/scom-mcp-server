@@ -11,7 +11,7 @@ static class ManagementGroupSourceChecks
         var count = 0;
         foreach (var mode in new[] { "complete", "partial", "empty" })
         {
-            var start = new ProcessStartInfo("pwsh")
+            var start = new ProcessStartInfo(NormalizationProcessChecks.PwshPath())
             {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
                 RedirectStandardOutput = true, RedirectStandardError = true

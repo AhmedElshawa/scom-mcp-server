@@ -82,6 +82,11 @@ try {
     $f = New-Fixture
     $f.plan.httpsBaseUrl='http://synthetic.invalid'
     Reject { Assert-ScomSetupPlan $f.plan } 'SETUP_HTTPS_INVALID'
+    foreach ($badUrl in @($null,'','ftp://synthetic.invalid','https:/synthetic.invalid',' https://synthetic.invalid','HTTPS://synthetic.invalid','//synthetic.invalid','synthetic.invalid')) {
+        $f = New-Fixture
+        $f.plan.httpsBaseUrl=$badUrl
+        Reject { Assert-ScomSetupPlan $f.plan } 'SETUP_HTTPS_INVALID'
+    }
     $f = New-Fixture
     $f.plan.groupId=[guid]::Empty.ToString('D')
     Reject { Assert-ScomSetupPlan $f.plan } 'SETUP_SCOPE_GUID_INVALID'
