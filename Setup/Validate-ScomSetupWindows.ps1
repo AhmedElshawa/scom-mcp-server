@@ -238,7 +238,7 @@ try {
         [IO.File]::WriteAllText($scriptFile,'Synthetic nonexecuted fixture')
         $workerFile=Join-Path $p.privatePath 'worker.json';$receiverFile=Join-Path $p.installPath 'server\appsettings.json'
         $worker=[pscustomobject]@{checkpointPath=(Join-Path $p.workerStatePath 'worker.db')
-            profile=@{scriptPath=$scriptFile;scriptSha256=(Get-ScomSetupHash $scriptFile)}
+            profile=@{scriptPath=$scriptFile;scriptSha256=(Get-ScomSetupHash $scriptFile);configuration=@{}}
             operationalLogging=@{directory=$p.collectorLogPath};liveChecks=@{enabled=$false}}
         Save-ScomSetupJson $workerFile $worker;Save-ScomSetupJson $receiverFile @{synthetic=$true}
         Save-ScomSetupJson (Join-Path $p.privatePath 'installed-files.json') @{
