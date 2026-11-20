@@ -69,7 +69,7 @@ Obtain such a token with the client-credentials flow, scope `<RESOURCE>/.default
 ## 3. Rate limits
 
 - **`/ingestion/*` (including `/ingestion/live/*`):** a concurrency limiter named `ScomIngestion` with permit limit 1 and queue limit 0. A second concurrent request is rejected with HTTP 429.
-- **`/mcp`:** no general per-caller or per-IP rate limiter exists in code. The only throttles on MCP calls are the targeted-live admission limits (section 4.3) and the 32 KB body cap.
+- **`/mcp`:** a per-caller limiter named `ScomRead`, partitioned by the token's `oid`: 30 requests per fixed one-minute window and at most 4 concurrent requests per caller, with no queue. A request over either limit is rejected with HTTP 429. It runs after authentication and authorization, so unauthenticated or unauthorized requests get 401/403 first and do not consume a caller's budget. `/healthz` is anonymous and not limited. The targeted-live admission limits (section 4.3) and the 32 KB body cap still apply.
 - Throttling at the network or API-gateway layer is outside this package: Not determined from source.
 
 ## 4. MCP tools

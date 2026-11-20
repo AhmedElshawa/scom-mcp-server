@@ -52,7 +52,7 @@ public sealed class PowerShellNormalizationProfile : IScomNormalizationProfile
             !string.Equals(Path.GetExtension(script), ".ps1", StringComparison.OrdinalIgnoreCase))
             throw new InvalidOperationException("SDK bridge requires the system Desktop PowerShell and an installed .ps1 profile.");
         ValidateLocalFile(executable);
-        ValidateLocalFile(script);
+        ValidateCollectorScript(script);
         scriptHash = Convert.FromHexString(settings.ScriptSha256);
         VerifyScript();
         SnapshotReader.RejectDuplicateProperties(settings.Configuration);
@@ -110,11 +110,17 @@ public sealed class PowerShellNormalizationProfile : IScomNormalizationProfile
 
     private void VerifyScript()
     {
-        ValidateLocalFile(script);
+        ValidateCollectorScript(script);
         using var file = File.OpenRead(script);
         if (!System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
             System.Security.Cryptography.SHA256.HashData(file), scriptHash))
             throw new InvalidOperationException("SDK bridge installed script differs from the reviewed SHA256.");
+    }
+
+    private static void ValidateCollectorScript(string path)
+    {
+        ValidateLocalFile(path);
+        if (OperatingSystem.IsWindows()) CollectorDirectoryPolicy.Require(path);
     }
 
     private static void ValidateLocalFile(string path)

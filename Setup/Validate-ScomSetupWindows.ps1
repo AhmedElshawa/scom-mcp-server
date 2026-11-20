@@ -214,6 +214,11 @@ try {
         foreach ($path in @($p.privatePath,(Join-Path $p.installPath 'server'),(Join-Path $p.installPath 'collector'))) {
             $null=New-Item -ItemType Directory -Path $path -Force
         }
+        foreach ($badUrl in @('http://synthetic.invalid','ftp://synthetic.invalid','HTTPS://synthetic.invalid',' https://synthetic.invalid','synthetic.invalid')) {
+            $bad=$p.PSObject.Copy();$bad.httpsBaseUrl=$badUrl
+            try { & $module { param($plan) & (New-ScomSetupWindowsAdapters).Prepare $plan } $bad; throw "Prepare accepted httpsBaseUrl '$badUrl'" }
+            catch { if ($_.Exception.Message -notmatch 'SETUP_HTTPS_INVALID') { throw }; $count++ }
+        }
         & $module {
             param($workerSid,$privatePath)
             $script:workerSid=$workerSid;$script:privatePath=$privatePath

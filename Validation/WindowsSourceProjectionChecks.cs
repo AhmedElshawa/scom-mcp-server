@@ -14,7 +14,7 @@ static class WindowsSourceProjectionChecks
         foreach (var mode in new[] { "complete", "direct", "partial", "managementServer", "unknownRole",
             "legacy", "missingCaption", "blankCaption", "unmappedCaption", "buildOnly", "lab", "labMissingDisk" })
         {
-            var start = new ProcessStartInfo("pwsh")
+            var start = new ProcessStartInfo(NormalizationProcessChecks.PwshPath())
             {
                 UseShellExecute = false, CreateNoWindow = true, RedirectStandardInput = true,
                 RedirectStandardOutput = true, RedirectStandardError = true

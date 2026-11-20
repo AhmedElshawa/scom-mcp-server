@@ -46,7 +46,7 @@ try {
                 siteName=(Read-Host 'New site name, or existing site for a NEW subapplication')
                 applicationPath=(Read-Host 'Application path (/ for a new site, or /monitoring for a new subapplication)')
                 poolName=(Read-Host 'NEW dedicated application pool name')
-                httpsBaseUrl=(Read-Host 'Approved HTTPS application base URL including prefix')
+                httpsBaseUrl=(Read-Host 'Approved HTTPS application base URL including prefix').Trim()
                 tlsThumbprint=(Read-Host 'Existing LocalMachine My TLS certificate thumbprint')
                 workerAccount=(Read-Host 'Existing approved read-only SCOM worker DOMAIN\account')
                 managementServer=(Read-Host 'SCOM management server FQDN')

@@ -77,6 +77,8 @@ static class Checks
         var fixtureRoot = Path.Combine(FindRoot(), ".validation-data");
         var root = Path.Combine(fixtureRoot, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
+        // Fixtures live under arbitrary temp directories; the collector ACL policy has its own checks in RemediationChecks.
+        CollectorPolicySettings.Enforce = false;
         try
         {
             var source = Source(root);
@@ -100,6 +102,7 @@ static class Checks
             await TestReader(root, snapshot, source);
             await TestCapturedSnapshot(root, snapshot, source);
             await TestHttp(auth, source, dataset);
+            await RemediationChecks.Run(auth, source, dataset, Clock, (key, oid) => Token(auth, key, oid: oid), Check);
             await ReadModelChecks.Run(root);
             await ReadModelFaultChecks.Run(root);
             await IngestionPublisherChecks.Run(root);
@@ -684,6 +687,7 @@ static class Checks
         var memory = new MemoryReader(ds);
         builder.Services.AddSingleton<ISnapshotReader>(memory);
         builder.Services.AddSingleton<TimeProvider>(Clock);
+        builder.Services.Configure<McpRateLimitOptions>(o => o.PermitLimit = 100_000);
         builder.Services.Configure<JwtBearerOptions>(JwtBearerDefaults.AuthenticationScheme, o =>
         {
             // Only this synthetic harness replaces network discovery with an in-memory public signing key.

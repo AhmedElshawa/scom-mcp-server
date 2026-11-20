@@ -20,6 +20,9 @@ internal sealed class NormalizationChildProcess : IDisposable
 
     public static NormalizationChildProcess Start(ProcessStartInfo start)
     {
+        // No PATH or current-directory search: the configured absolute path is the only thing that may run.
+        if (!Path.IsPathFullyQualified(start.FileName) || !File.Exists(start.FileName))
+            throw new QueryFault("SOURCE_UNAVAILABLE", "SOURCE_BRIDGE_EXECUTABLE_PATH_REQUIRED");
         var child = new NormalizationChildProcess();
         try
         {
@@ -97,13 +100,6 @@ internal sealed class NormalizationChildProcess : IDisposable
             Attributes = attributes.Pointer
         };
         var executable = start.FileName;
-        if (!Path.IsPathFullyQualified(executable))
-        {
-            var resolved = new StringBuilder(32768);
-            var length = SearchPathW(null, executable, ".exe", resolved.Capacity, resolved, IntPtr.Zero);
-            if (length == 0 || length >= resolved.Capacity) throw new Win32Exception(Marshal.GetLastWin32Error());
-            executable = resolved.ToString();
-        }
         var arguments = start.ArgumentList.Count == 0 ? start.Arguments :
             string.Join(" ", start.ArgumentList.Select(Quote));
         var command = new StringBuilder(Quote(executable) + " " + arguments);
@@ -235,5 +231,4 @@ internal sealed class NormalizationChildProcess : IDisposable
     [DllImport("kernel32.dll")] private static extern void DeleteProcThreadAttributeList(IntPtr attributes);
     [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] [return: MarshalAs(UnmanagedType.Bool)] private static extern bool CreateProcessW(string application, StringBuilder command, IntPtr processSecurity, IntPtr threadSecurity, [MarshalAs(UnmanagedType.Bool)] bool inherit, uint flags, string environment, string? directory, ref StartupInfoEx startup, out ProcessInformation process);
     [DllImport("kernel32.dll", SetLastError = true)] private static extern uint ResumeThread(SafeFileHandle thread);
-    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] private static extern uint SearchPathW(string? path, string file, string extension, int size, StringBuilder buffer, IntPtr part);
 }
