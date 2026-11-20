@@ -64,6 +64,11 @@ You need the following. People and roles differ per organization; one person may
 | Copilot Studio access in the same tenant | The agent | Step 8 |
 | The Entra user(s) allowed to ask questions | Caller allow-list | Steps 5, 6, 9 |
 
+**Supported SCOM versions.** Validated: SCOM 2025 (lab SDK assemblies `7.0.5000.0`, file
+version `10.25.x`). Expected: SCOM 2019/2022/2025 (same SDK and Windows Library MP; verify with
+`New-ScomMappingProfile`). Not supported: SCOM 2016 and earlier (out of Microsoft support);
+SCOM Managed Instance untested.
+
 Network: inbound 443 only; the worker reaches the management server on the SDK port.
 Details: [network-and-ports](network-and-ports.md).
 

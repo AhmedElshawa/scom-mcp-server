@@ -64,6 +64,11 @@ Prerequisites box:
 > Operations Manager console or PowerShell module on the collector host · Copilot Studio
 > access in the same tenant.
 
+**Supported SCOM versions.** Validated: SCOM 2025 (lab SDK assemblies `7.0.5000.0`, file
+version `10.25.x`). Expected: SCOM 2019/2022/2025 (same SDK and Windows Library MP; verify with
+`New-ScomMappingProfile`). Not supported: SCOM 2016 and earlier (out of Microsoft support);
+SCOM Managed Instance untested.
+
 **Follow the [deployment guide](docs/deployment-guide.md)** for one numbered walkthrough that
 tracks every value (app IDs, thumbprints, URLs) from the step that creates it to each step that
 uses it. The eight steps below are the short version.
