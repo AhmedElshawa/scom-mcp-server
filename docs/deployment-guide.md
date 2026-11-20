@@ -673,7 +673,7 @@ function Get-HttpStatus {
     param([string]$Method = 'GET', [string]$Uri, [hashtable]$Headers = @{}, [string]$Body)
     $p = @{ Method = $Method; Uri = $Uri; Headers = $Headers; UseBasicParsing = $true }
     if ($Body) { $p.Body = $Body; $p.ContentType = 'application/json' }
-    try { [int](Invoke-WebRequest @p).StatusCode }
+    try { (Invoke-WebRequest @p).StatusCode -as [int] }
     catch { if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { throw } }
 }
 ```
