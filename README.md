@@ -64,6 +64,10 @@ Prerequisites box:
 > Operations Manager console or PowerShell module on the collector host · Copilot Studio
 > access in the same tenant.
 
+**Follow the [deployment guide](docs/deployment-guide.md)** for one numbered walkthrough that
+tracks every value (app IDs, thumbprints, URLs) from the step that creates it to each step that
+uses it. The eight steps below are the short version.
+
 1. Understand the design: [architecture](docs/architecture.md), [security](docs/security.md), [sizing and scope](docs/sizing-and-scope.md).
 2. Open the network path: [network and ports](docs/network-and-ports.md).
 3. Create Entra registrations: [entra-setup](docs/entra-setup.md).
@@ -92,6 +96,7 @@ list and naming are in [docs/screenshots/README.md](docs/screenshots/README.md).
 
 | Document | Purpose |
 |---|---|
+| [deployment-guide](docs/deployment-guide.md) | End-to-end numbered walkthrough with a values register linking each value to the steps that use it |
 | [architecture](docs/architecture.md) | Components, data flow and identities |
 | [install-cli](docs/install-cli.md) | Validated step-by-step install runbook |
 | [install-wizard](docs/install-wizard.md) | Evaluation GUI walkthrough |
