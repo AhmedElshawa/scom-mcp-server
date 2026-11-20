@@ -555,7 +555,7 @@ function Get-ScomMappingObservation {
     [ordered]@{
         managementServer = $ManagementServer; managementGroupId = $mg.Id.ToString(); managementGroupName = [string]$mg.Name
         modulePath = $ModulePath; sampleLimit = $SampleComputers
-        classChains = $chains; derivedRelationshipTypes = $derived; computers = @($records)
+        classChains = $chains; derivedRelationshipTypes = $derived; computers = $records.ToArray()
     }
 }
 

@@ -161,6 +161,15 @@ $missing = New-Computer 'p1' -DiskProperties @{ DeviceID = 'C:'; Size = '1358398
 $prop = Invoke-Generator (New-Observation @($missing)) 'missingprop'
 Assert-That ($prop.Outcome.ExitCode -eq 4) 'a required property that was not observed must be ambiguous (exit 4)'
 
+# Lab regression: @() over a List[object] of ordered dictionaries threw "Argument types do not match"
+# on Windows PowerShell 5.1 in the lab, so the observation must hand records over with ToArray().
+$generatorSource = [IO.File]::ReadAllText($generator)
+Assert-That ($generatorSource -notmatch '@\(\$records\)') 'observation records must not be wrapped in @() (use .ToArray())'
+Assert-That ($generatorSource -match 'computers = \$records\.ToArray\(\)') 'observation records must be returned via .ToArray()'
+$recordList = New-Object System.Collections.Generic.List[object]
+$recordList.Add([ordered]@{ id = 'a'; edges = @([ordered]@{ kind = 'os' }) })
+Assert-That ($recordList.ToArray().Count -eq 1) 'record list must convert to an array'
+
 # Refuse to overwrite.
 $threw = $false
 try { Invoke-Generator (New-Observation (Get-Many 1 { param($i) New-Computer 'w1' })) 'lab' | Out-Null } catch { $threw = $true }
