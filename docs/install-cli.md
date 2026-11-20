@@ -16,7 +16,7 @@ session as the approved read-only SCOM worker account
 - Windows Server host(s) with IIS and the **.NET 8 ASP.NET Core Hosting Bundle** (install it after IIS).
 - A public TLS certificate for `<FQDN>` ([network-and-ports.md](network-and-ports.md)); the host resolves its own FQDN.
 - Entra registrations and a reviewed `identity.json` ([entra-setup.md](entra-setup.md)).
-- Reviewed receiver and worker settings, based on [`worker.example.json`](../examples/worker.example.json) and [`receiver.example.json`](../examples/receiver.example.json).
+- Reviewed receiver and worker settings, based on [`worker.example.json`](../examples/worker.example.json) and [`receiver.example.json`](../examples/receiver.example.json). Generate the worker's `windowsMapping` and approve it with `setup\New-ScomMappingProfile.ps1` then `setup\Approve-ScomMappingProfile.ps1`, run as the worker account before command 4 ([deployment-guide.md](deployment-guide.md#6c-workerjson)); the manual alternative is in the same guide, 6e and 6f.
 - The worker account and permissions ([service-accounts.md](service-accounts.md)); the SCOM Operations console, PowerShell module and a reachable management server.
 - No pending reboot; the parent directory of the install path already exists.
 - Use the package built from this repository at or after commit `55f3062` (the publication-marker fix). The package is unsigned unless you sign it yourself ([local-evaluation-signing.md](local-evaluation-signing.md)).

@@ -15,6 +15,10 @@ not the recommended default.
 
 ## `windowsMapping` — Windows Server 2022 management-pack candidates
 
+Run `setup\New-ScomMappingProfile.ps1` to generate this section from your own SCOM
+instead of editing it by hand ([deployment-guide.md](../docs/deployment-guide.md#6c-workerjson)).
+The table below documents the lab candidates the generator replaces.
+
 The class, relationship and property names below are **candidates** taken from the
 lab probe of Windows Server 2022 agents. They are not guaranteed for your management
 packs. Verify each against your own probe output before setting any `*Verified` flag.

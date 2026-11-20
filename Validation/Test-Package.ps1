@@ -43,6 +43,7 @@ $required = @(
     'setup\Invoke-ScomSetupGui.ps1', 'setup\ScomSetup.Gui.psm1',
     'setup\Get-ScomWorkerDeployment.ps1',
     'setup\Start-ScomWorkerTaskSetup.ps1',
+    'setup\New-ScomMappingProfile.ps1', 'setup\Approve-ScomMappingProfile.ps1', 'examples\worker.example.json',
     'docs\images\scom-reference-architecture.png', 'docs\images\scom-reference-architecture.excalidraw'
 )
 foreach ($relative in $required) {
