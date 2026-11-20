@@ -61,6 +61,10 @@ Run these nine prompts in a new test session after publishing the instructions. 
 A transient "source unavailable" answer while a collection commit is in progress is correct
 behaviour, not a failure; ask again after the commit completes.
 
+After a server restart or token expiry, the first question may show a "Let's get you connected
+first" card. Clicking **Retry** re-authenticates the connection, and this is expected; the
+retried question then returns the normal answer.
+
 ## 4. Verify
 
 `/healthz` proves reachability only. Check that an unauthenticated `/mcp` returns 401, a
