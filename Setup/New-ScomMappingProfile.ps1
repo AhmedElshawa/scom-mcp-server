@@ -391,7 +391,9 @@ function ConvertTo-ScomSummaryLines {
     foreach ($errorText in @($Resolution.errors)) { $lines.Add("  Problem: $errorText") }
     $lines.Add(('  Bounds: at most {0} computers kept via Select-Object -First; one relationship read per computer (one extra OS-object read only when no disk edge is direct); {1} s local deadline.' -f $Requested, $Deadline))
     $lines.Add('  These bounds limit local consumption only. The SCOM SDK provides no completeness or cancellation contract and SCOM-side work is not bounded by them.')
-    $lines.Add('  Next: set the same allowedPropertiesByClass in the receiver settings, then run Approve-ScomMappingProfile.ps1. The six flags stay false until you approve.')
+    if ($Resolution.status -eq 'Ready') {
+        $lines.Add('  Next: set the same allowedPropertiesByClass in the receiver settings, then run Approve-ScomMappingProfile.ps1. The six flags stay false until you approve.')
+    }
     @($lines)
 }
 

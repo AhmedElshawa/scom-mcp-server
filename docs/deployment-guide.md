@@ -341,6 +341,8 @@ Setup's Configure step supplies the script path and hash, state paths and some i
 fields while merging ([worker.example.md](../examples/worker.example.md)); still fill in the
 values above so the file can be reviewed before you run it.
 
+The generated worker.json is a staging input for Configure (Step 7), which fills identity, endpoint, script hash and paths; do not run --validate-setup on it directly.
+
 **Generate the mapping, review it, approve it.** The generator reads your SCOM read-only,
 works out the class, relationship and property names and the memory and disk units, and writes
 a complete `worker.json` with all six verification flags `false`. Run it as `<WORKER_ACCOUNT>`

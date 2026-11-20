@@ -127,6 +127,9 @@ Assert-That ($noSize.Outcome.ExitCode -eq 3) 'a disk without any size property m
 # Zero computers: non-zero exit, nothing written.
 $zero = Invoke-Generator (New-Observation @()) 'zero'
 Assert-That ($zero.Outcome.ExitCode -eq 2 -and -not (Test-Path -LiteralPath $zero.Path) -and -not (Test-Path -LiteralPath "$($zero.Path).evidence.json")) 'zero computers must exit 2 and write nothing'
+Assert-That (@(@($zero.Outcome.Summary) -match 'Next:').Count -eq 0) 'a non-zero exit must not print the Next: approve hint'
+$readyHint = Invoke-Generator (New-Observation (Get-Many 1 { param($i) New-Computer "n$i" })) 'nexthint'
+Assert-That (@(@($readyHint.Outcome.Summary) -match 'Next:').Count -eq 1) 'a Ready run must print the Next: approve hint'
 
 # OS-hosted disks.
 $osHosted = Invoke-Generator (New-Observation (Get-Many 2 { param($i) New-Computer "o$i" -DiskSource 'os' -DiskRelationship 'Contoso.OsHostsDisk' })) 'oshosted'
