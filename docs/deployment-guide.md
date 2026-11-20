@@ -455,6 +455,26 @@ Get-SCRelationship -Name 'Microsoft.Windows.ComputerHostsOperatingSystem','Micro
 Every name must be returned. A missing name means that class or relationship is not in your
 management packs; choose the one your packs define.
 
+Then confirm the relationships exist **on a real in-scope computer**, not only in the
+management pack. Pick one monitored computer and list the relationship types that start at it
+and at its operating system:
+
+```powershell
+$computer = Get-SCOMClassInstance -Class (Get-SCOMClass -Name 'Microsoft.Windows.Computer') |
+    Where-Object DisplayName -eq '<SERVER_FQDN>'
+$os = Get-SCOMClassInstance -Class (Get-SCOMClass -Name 'Microsoft.Windows.OperatingSystem') |
+    Where-Object { $_.Path -eq $computer.DisplayName } | Select-Object -First 1
+foreach ($source in $computer, $os) {
+    Get-SCOMRelationshipInstance -SourceInstance $source |
+        Select-Object @{n='Relationship';e={$_.RelationshipId}}, @{n='Target';e={$_.TargetObject.DisplayName}}
+}
+```
+
+You should see the computer-to-OS edge and the computer-to-disk (or OS-to-volume) edges for
+that server. If the disk edges appear under a different relationship than the one in your
+`windowsMapping`, use the one that appears. `RelationshipId` is a GUID; resolve it to a name
+with `Get-SCRelationship -Id '<GUID>' | Select-Object Name`.
+
 **Fact 2: the property names and their units.** Read one known server and compare. The
 properties used are `PrincipalName`, `OSVersion`, `OSVersionDisplayName` (the OS caption),
 `PhysicalMemory`, `LogicalProcessors`, `DeviceID`, `FileSystem` and `SizeInMBs`.
