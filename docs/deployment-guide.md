@@ -736,8 +736,11 @@ The connection appears as **Connected** under Copilot Studio's **Manage your con
 
 ![Copilot Studio connections page showing the SCOM MCP connection as Connected](screenshots/copilot-studio-connection.png)
 
-📷 *Screenshot pending: `copilot-studio-connector.png`; see
-[screenshots/README.md](screenshots/README.md).*
+The **Add a Model Context Protocol server** form, with **OAuth 2.0** and **Manual** selected.
+Fill in the server URL and the reader app's client ID and secret here; the **Client secret**
+field is shown empty (this image shows the form layout, not a configured connector):
+
+![Copilot Studio Add a Model Context Protocol server form with OAuth 2.0 and Manual selected, fields empty](screenshots/copilot-studio-connector.png)
 
 The agent's **Tools** page lists the server's tools with their toggles on (the lab server
 exposes 13 read-only tools):

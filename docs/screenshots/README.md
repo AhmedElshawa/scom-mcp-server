@@ -3,7 +3,9 @@
 Committed so far: the five `entra-setup-*.png` files, `copilot-studio-connection.png`,
 `copilot-studio-tools.png`, `readme-agent-answer.png`, `readme-agent-count.png`,
 `iis-https-binding.png` and `terminal-accept.png` (real captures from the lab with the
-tenant, account, hostnames and all identifiers redacted). The files marked **pending** in the
+tenant, account, hostnames and all identifiers redacted), plus `copilot-studio-connector.png`
+(the blank "Add a Model Context Protocol server" form: OAuth 2.0 / Manual with every field empty; it
+shows the form layout only, not the lab connector's values). The files marked **pending** in the
 table below were not captured; the reason for each is given after the table. Screenshots show lab or customer identifiers (hostnames,
 tenant, app and object GUIDs, IP addresses, thumbprints, user names), so each one is
 redacted before it is committed.
@@ -31,7 +33,7 @@ accepted install is not touched.
 | `entra-setup-publisher-cert.png` | Publisher app, Certificates (public cert only) | [entra-setup.md](../entra-setup.md) |
 | `entra-setup-publisher-permissions.png` | Publisher app, API permissions with admin consent granted | [entra-setup.md](../entra-setup.md) |
 | `entra-setup-reader-permissions.png` | Reader app, delegated `Scom.Read` | [entra-setup.md](../entra-setup.md) |
-| `copilot-studio-connector.png` | Custom MCP connector settings (no secret visible) | [copilot-studio-integration.md](../copilot-studio-integration.md) |
+| `copilot-studio-connector.png` | Add a Model Context Protocol server form (OAuth 2.0, Manual; all fields empty, so no secret or URL visible; form layout only, not a configured connector) | [deployment-guide.md](../deployment-guide.md) |
 | `copilot-studio-connection.png` | Connection created and tool added to the agent | [copilot-studio-integration.md](../copilot-studio-integration.md) |
 | `copilot-studio-tools.png` | Agent Tools page, all tools enabled (13 tools) | [deployment-guide.md](../deployment-guide.md) |
 | `readme-agent-count.png` | Agent answering "How many servers do we have?" (server names redacted) | [deployment-guide.md](../deployment-guide.md) |
