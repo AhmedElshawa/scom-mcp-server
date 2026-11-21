@@ -92,8 +92,9 @@ Whole-management-group scope is validated on 3 servers only; start with group sc
 
 ## 7. Screenshots
 
-Redacted screenshots of the agent answering and the setup wizard are pending; the capture
-list and naming are in [docs/screenshots/README.md](docs/screenshots/README.md).
+Redacted screenshots of the agent answering are in the [deployment guide](docs/deployment-guide.md#step-11-agent-acceptance-test);
+the setup wizard screenshots are evaluation: pending. The capture list and naming are in
+[docs/screenshots/README.md](docs/screenshots/README.md).
 
 ## Documentation
 

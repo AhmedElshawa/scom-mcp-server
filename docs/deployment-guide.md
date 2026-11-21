@@ -153,7 +153,9 @@ At this point you should have: `<pkg>` with `setup\Start-ScomSetup.ps1` inside i
    443 to `login.microsoftonline.com` and the worker's path to the management server.
    Rule examples (NSG and Windows Firewall): [network-and-ports](network-and-ports.md).
 
-📷 *Screenshot pending: IIS HTTPS binding; see [screenshots/README.md](screenshots/README.md).*
+![IIS Manager Edit Site Binding dialog: https, port 443, Require Server Name Indication selected (hostname, site and certificate redacted)](screenshots/iis-https-binding.png)
+
+*The HTTPS binding that setup creates: port 443 with Require Server Name Indication ticked (identifiers redacted).*
 
 **Record these values:** `<FQDN>`, `<TLS_THUMBPRINT>` (40 hex characters, no spaces).
 
@@ -272,9 +274,15 @@ Either way you also need to:
 5. **Confirm the publisher's consent** the same way: the publisher app > API permissions >
    `Scom.Ingest` (Application) must show **Granted for `<your tenant>`**.
 
-📷 *Screenshots pending: `entra-setup-api-expose.png`, `entra-setup-api-approles.png`,
-`entra-setup-publisher-cert.png`, `entra-setup-publisher-permissions.png`,
-`entra-setup-reader-permissions.png`; see [screenshots/README.md](screenshots/README.md).*
+![Expose an API: the application ID URI and the admin-only read scope (identifiers redacted)](screenshots/entra-setup-api-expose.png)
+
+![App roles: the Scom.Ingest application role](screenshots/entra-setup-api-approles.png)
+
+![Publisher app, Certificates: one uploaded certificate and no client secrets (identifiers redacted)](screenshots/entra-setup-publisher-cert.png)
+
+![Publisher app, API permissions: Scom.Ingest (Application) with admin consent granted](screenshots/entra-setup-publisher-permissions.png)
+
+![Reader app, API permissions: delegated Scom.Read with admin consent granted](screenshots/entra-setup-reader-permissions.png)
 
 At this point you should have these values:
 
@@ -696,7 +704,7 @@ Host-lane commands fail with `SETUP_ADMINISTRATOR_REQUIRED_FOR_HOST_LANE` if the
 elevated. Setup never enables recurrence; that is Step 10. The same sequence is also
 documented in the [install-cli runbook](install-cli.md#commands) for depth.
 
-📷 *Screenshot pending: `readme-wizard.png` (GUI alternative); see
+📷 *Wizard screenshots (`wizard-prerequisites.png`, `wizard-configuration.png`) are evaluation: pending; see
 [install-wizard](install-wizard.md) and [screenshots/README.md](screenshots/README.md).*
 
 At this point you should have the receiver running at `https://<FQDN>` with one published
@@ -729,8 +737,20 @@ Model Context Protocol** and fill in:
 4. Paste [`examples/agent-instructions.md`](../examples/agent-instructions.md) verbatim into the
    agent's Instructions.
 
-📷 *Screenshots pending: `copilot-studio-connector.png`, `copilot-studio-connection.png`;
-see [screenshots/README.md](screenshots/README.md).*
+The connection appears as **Connected** under Copilot Studio's **Manage your connections**:
+
+![Copilot Studio connections page showing the SCOM MCP connection as Connected](screenshots/copilot-studio-connection.png)
+
+The **Add a Model Context Protocol server** form, with **OAuth 2.0** and **Manual** selected.
+Fill in the server URL and the reader app's client ID and secret here; the **Client secret**
+field is shown empty (this image shows the form layout, not a configured connector):
+
+![Copilot Studio Add a Model Context Protocol server form with OAuth 2.0 and Manual selected, fields empty](screenshots/copilot-studio-connector.png)
+
+The agent's **Tools** page lists the server's tools with their toggles on (the lab server
+exposes 13 read-only tools):
+
+![Copilot Studio Tools page listing the SCOM MCP tools, all enabled](screenshots/copilot-studio-tools.png)
 
 At this point you should have a working connection: the agent lists the server's tools and
 `<CALLBACK_URI>` is saved on the reader app. If sign-in fails with a redirect mismatch,
@@ -882,6 +902,10 @@ certification." Type `APPROVE`; any other answer cancels.
 At this point you should have all eight checks recorded as passed (or skipped by you, by
 name), the check app deleted, and setup at the `accepted` stage.
 
+![Elevated PowerShell on the host printing SETUP_STAGE=accepted read from setup-state.json](screenshots/terminal-accept.png)
+
+*The recorded setup stage, read from `setup-state.json` in the state directory after Accept (the Accept step itself was not re-run).*
+
 ## Step 10. Register recurrence
 
 Register the single scheduled task that refreshes the snapshot every hour (the interval is
@@ -929,7 +953,13 @@ Ask the nine prompts in [copilot-studio-integration, Agent acceptance test](copi
 and compare against the pass criteria. A transient "source unavailable" answer while a
 collection commits is correct behaviour, not a failure.
 
-📷 *Screenshot pending: `readme-agent-answer.png`; see [screenshots/README.md](screenshots/README.md).*
+![Test pane answer to "How many servers do we have?" with the server table, health summary and Data status block; server names redacted](screenshots/readme-agent-count.png)
+
+*The agent's answer to "How many servers do we have?", including the Data status block (server names redacted).*
+
+![Test pane answer to "Which servers are nearest end of support?" with the lifecycle table, "Not in the lifecycle catalog." for the unmapped server, and the Data Status block; server names redacted](screenshots/readme-agent-answer.png)
+
+*The agent's answer to "Which servers are nearest end of support?" (server names redacted), including the Data Status block.*
 
 You are done. Day-two operation (logs, policy changes, recovery, lifecycle catalog):
 [operations](operations.md).

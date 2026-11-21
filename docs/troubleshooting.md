@@ -34,6 +34,44 @@ Event names: `WorkerStarted`, `WorkerPublished`, `WorkerCancelled`, `WorkerFaile
 2. For ingestion rejections, the HTTP 409 body carries `reason`; the receiver log keeps only a few reasons (see [mcp-server-spec.md](mcp-server-spec.md#9-ingestion-contract-publisher-to-receiver)).
 3. The collector script only writes the umbrella `SCOM_GENERIC_PROFILE_FAILED` to stderr; the specific `SCOM_*` code is thrown inside the child process and is hidden from the log. How to surface it on demand: Not determined from source (run the preflight script, `Test-SCOMPreflight.ps1`, and the setup flow, which report check names, and capture the collector profile log).
 
+## After a server restart: agent says `READ_MODEL_EXPIRED`
+
+**Symptom.** After the host running the worker was rebooted, the agent answers every question with `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` and no data. The scheduled task looks `Ready`, but its last result is nonzero (for example `0x1`), and running it from Task Scheduler appears to do nothing.
+
+**Root cause.** The worker marks `worker.status.json` as `state=running` while it works. If the host reboots (or the process is killed) without a cooperative stop, that status stays `running` with the process id from before the reboot. On the next start the worker sees a prior `running` state it cannot explain, refuses to start (the task exits within about a second, return code 1) and sets the gate `RearmRequired=true`. Automatic rearm is intentionally absent, so no new dataset is published; once the last one is older than `UnavailableMinutes` the receiver reports `READ_MODEL_EXPIRED`. The data path (receiver, Entra, certificates, SCOM) is not at fault. The code `UNEXPECTED_PRIOR_RUNNING_STATE` identifies this case.
+
+**Confirm.** On the worker host, in an elevated PowerShell:
+
+```powershell
+cd <package>\Operations\DurableIndexedRefresh
+.\Get-ScomWorkerTaskStatus.ps1 | Format-List TaskState,LastTaskResult,RuntimeState,RuntimeConsistency,LastOutcome,LastPublicationUtc,RearmRequired,LastFailureCode
+Get-CimInstance Win32_Process | Where-Object CommandLine -match '--worker'
+```
+
+The gated case shows `RearmRequired=True` (often `RuntimeConsistency=unknown-outcome-inspect-required`), `LastFailureCode=UNEXPECTED_PRIOR_RUNNING_STATE`, a `LastPublicationUtc` older than the reboot, and no worker process.
+
+**Fix** (only when no worker process is running):
+
+```powershell
+.\Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure -Confirm:$false
+.\Start-ScomWorkerTask.ps1 -Confirm:$false
+Start-Sleep 60
+.\Get-ScomWorkerTaskStatus.ps1 | Format-List TaskState,RuntimeState,LastOutcome,LastPublicationUtc,RearmRequired
+```
+
+Expected: `TaskState=Running`, `RuntimeState=running`, `LastOutcome=published`, a new `LastPublicationUtc` and `RearmRequired=False`. `LastFailureCode` keeps showing `UNEXPECTED_PRIOR_RUNNING_STATE` as retained history; it no longer gates. Then ask the agent again (for example "Give me the inventory summary") and confirm with `get_source_status`, because task liveness is not data freshness.
+
+**Do not**
+
+- delete or edit `worker.status.json`, the checkpoint or other state files to "clear" the problem;
+- run the worker as `SYSTEM` or any account other than the registered worker account (use the task, not a manual launch);
+- run `Rearm-` or `Start-` through a non-interactive channel such as Azure VM Run Command without `-Confirm:$false`: both scripts use `ConfirmImpact=High`, wait for a prompt nobody can answer, and the hung execution blocks further Run Command calls (`Conflict: Run command extension execution is in progress`) until it is ended;
+- rearm while a worker process is running (the script refuses).
+
+**Prevent.** Before a planned reboot or patching, run `Stop-ScomWorkerTask.ps1` (cooperative stop), reboot, then start the task with `Start-ScomWorkerTask.ps1`. A clean stop followed by a reboot has not been lab-tested, and unattended recovery after an unclean reboot is not provided: after any unplanned restart, check `Get-ScomWorkerTaskStatus.ps1` and rearm as above. Consider alerting on `get_source_status` freshness so an expired read model is noticed before users ask.
+
+*Lab evidence (sanitized):* a VM restarted without a cooperative stop was down for about six and a half hours. The startup task exited with return code 1 on each launch; the status file still said `running` with the preboot process id. One operator rearm followed by a start restored `published` publications and the agent answered again. The exact reason the worker process exited was not independently captured beyond the documented status codes.
+
 ## Receiver startup and configuration
 
 | Code or message | Emitted by | Likely cause | Fix |
@@ -61,7 +99,7 @@ Details and wire formats are in [mcp-server-spec.md](mcp-server-spec.md#7-error-
 | `INVALID_CURSOR` | Cursor expired (default 300 s), from another caller/filter/page size, or issued before an app-pool recycle | Restart paging from the first page |
 | `CURSOR_DATASET_CHANGED` | A new dataset was committed while paging | Restart paging |
 | `NOT_FOUND` | Entity or object id not in the current dataset | Check id; the dataset may not contain it |
-| `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` | Oldest domain `asOfUtc` older than `UnavailableMinutes` | Check the worker (`Get-ScomWorkerTaskStatus.ps1`), then network and publisher codes |
+| `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` | Oldest domain `asOfUtc` older than `UnavailableMinutes` | Check the worker (`Get-ScomWorkerTaskStatus.ps1`), then network and publisher codes. If the host was just restarted, see [After a server restart](#after-a-server-restart-agent-says-read_model_expired) |
 | `SOURCE_UNAVAILABLE` / `READ_MODEL_LATEST_COLLECTION_UNAVAILABLE` | No committed dataset, or a new ingestion session began and has not committed | Wait for commit; check worker logs |
 | `SOURCE_UNAVAILABLE` / `READ_MODEL_DISABLED`, `INDEXED_WINDOWS_DISABLED` | `ReadModel.Enabled` or `WindowsToolsEnabled` is false | Enable per [configuration-reference.md](configuration-reference.md) |
 | `SOURCE_UNAVAILABLE` / `WINDOWS_PROJECTION_MISSING` | Dataset has no Windows projection (worker not `supportedWindows`) | Check `inventoryKind` and `windowsMapping` |

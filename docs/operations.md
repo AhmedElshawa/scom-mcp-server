@@ -27,8 +27,7 @@ folder: `Get-`, `Start-`, `Stop-`, `Rearm-` and `Unregister-ScomWorkerTask.ps1`.
 
 - `Stop` is cooperative. `Start` never rearms a failed worker.
 - After a terminal failure the worker is gated: run `Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure` after fixing the cause.
-- A reboot without a clean stop left the worker in a gated state requiring an explicit rearm. A clean stop followed by a reboot has **not** been live-tested.
-- Confirm freshness with the `get_source_status` tool after the first run.
+- A reboot without a clean stop left the worker in a gated state requiring an explicit rearm. A clean stop followed by a reboot has **not** been live-tested. Symptom, confirmation and fix: [After a server restart](troubleshooting.md#after-a-server-restart-agent-says-read_model_expired). Run `Stop-ScomWorkerTask.ps1` before planned reboots.- Confirm freshness with the `get_source_status` tool after the first run.
 
 ## Logs and state
 
@@ -80,7 +79,7 @@ If the agent cannot see the tool:
 
 | Symptom | Action |
 |---|---|
-| `READ_MODEL_EXPIRED` | No fresh dataset within the budget: check the task and `worker.status.json`, rearm if gated, or lengthen `FreshMinutes`. |
+| `READ_MODEL_EXPIRED` | No fresh dataset within the budget: check the task and `worker.status.json`, rearm if gated (typical after a reboot without a clean stop: [procedure](troubleshooting.md#after-a-server-restart-agent-says-read_model_expired)), or lengthen `FreshMinutes`. |
 | Worker gated (`rearmRequired`) | Fix the cause, `Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure`, `Start-ScomWorkerSetup`/task start. |
 | Setup interrupted | `Start-ScomSetup.ps1 -Step Recover`; it does not clear a pending action; see [install-cli.md](install-cli.md). |
 | Certificate rotation | Add the new cert to the publisher app, install in `LocalMachine\My`, grant private-key read, update the thumbprint in `worker.json`. |
