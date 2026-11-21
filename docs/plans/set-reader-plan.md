@@ -128,3 +128,17 @@ No changes outside `Collector/`, `ScomMcp/SetupConfigurationValidation.cs`, `Set
     `MaxResultCount` `NotImplementedException` was found only after a full day of implementation.** Applied here:
     the spike for the redesigned call is recorded in `docs/evidence/set-read-spike.json`. The rule is also in
     `CONTRIBUTING.md`.
+24. Third SDK-contract defect found only on the real SDK: `ObjectQueryOptions.Default` is a static field, not a
+    property, so a reflection lookup of the property returned null and the lab scan aborted. Rule: the spike
+    script's exact call pattern is the production call pattern; reflection against SDK types only when the spike
+    used reflection. The reader now reads `[Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]::Default`
+    exactly as the spike did.
+25. Structural fix so this class of bug cannot abort a scan: all set-reader SDK interaction (type resolution,
+    options construction, method lookup, invoke, row member probing) runs inside one try that maps any exception
+    to `SCOM_SET_READ_UNAVAILABLE`, which falls back to `perSource`. Only the budget check is outside it.
+    The two deliberate data-fault codes (`SCOM_SET_READ_OVERSIZE`, `SCOM_RELATIONSHIP_ROW_INVALID`) pass through.
+    The synthetic suite injects a failure at each stage (missing `Default`, throwing `Default`, missing method,
+    null options, wrong manager type, throwing call, null result) and asserts fallback, not abort. The fake SDK
+    exposes `Default` as a field so the suite matches the real type.
+26. Windows PowerShell 5.1 reads a throwing property getter as `$null`, so a row whose members cannot be read is
+    indistinguishable from an invalid row and fails closed as `SCOM_RELATIONSHIP_ROW_INVALID` (covered by a test).

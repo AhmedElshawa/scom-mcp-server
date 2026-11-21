@@ -4,6 +4,11 @@ Set-StrictMode -Version Latest
 # bounded by a pre-call budget check and a post-call oversize check (the SDK rejects MaxResultCount here).
 # The result is an observation, never evidence of completeness: completeness stays set reconciliation in
 # ConvertTo-SCOMWindowsInventory. Class and relationship objects come from the reviewed windowsMapping.
+#
+# Failure containment: the budget check is the only thing outside the try. Every other step (type resolution,
+# options construction, method lookup, invoke, row probing and validation) runs inside one try, and any
+# exception other than the two deliberate data-fault codes becomes SCOM_SET_READ_UNAVAILABLE, which makes the
+# caller fall back to the per-source reader. An SDK contract surprise can therefore never abort a scan.
 function Read-SCOMRelationshipSet {
     [CmdletBinding()]
     param(
@@ -14,6 +19,33 @@ function Read-SCOMRelationshipSet {
         [Parameter(Mandatory)] [ValidateCount(1, 100000)] [Guid[]]$ServedSourceIds,
         [Parameter(Mandatory)] [ValidateCount(1, 100000)] [Guid[]]$ServedTargetIds,
         [Parameter(Mandatory)] [ValidateRange(1, 100000)] [int]$MaxObjects
+    )
+    # Verified on the SCOM 2025 SDK: the set overload throws NotImplementedException when MaxResultCount is set,
+    # so the call is unbounded and materialises the whole relationship set. The bound is therefore applied
+    # around the call: this guard runs before any SCOM call, the oversize guard after materialisation.
+    if ($ServedTargetIds.Count -gt $MaxObjects) { throw 'SCOM_SET_READ_BUDGET' }
+    try {
+        Get-SCOMRelationshipSetRows -EntityObjects $EntityObjects -ManagementGroupId $ManagementGroupId `
+            -RelationshipClass $RelationshipClass -TargetClass $TargetClass -ServedSourceIds $ServedSourceIds `
+            -ServedTargetIds $ServedTargetIds -MaxObjects $MaxObjects
+    }
+    catch {
+        $code = [string]$_.Exception.Message
+        if ($code -ceq 'SCOM_SET_READ_OVERSIZE' -or $code -ceq 'SCOM_RELATIONSHIP_ROW_INVALID') { throw $code }
+        throw 'SCOM_SET_READ_UNAVAILABLE'
+    }
+}
+
+function Get-SCOMRelationshipSetRows {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)] [object]$EntityObjects,
+        [Parameter(Mandatory)] [Guid]$ManagementGroupId,
+        [Parameter(Mandatory)] [object]$RelationshipClass,
+        [Parameter(Mandatory)] [object]$TargetClass,
+        [Parameter(Mandatory)] [Guid[]]$ServedSourceIds,
+        [Parameter(Mandatory)] [Guid[]]$ServedTargetIds,
+        [Parameter(Mandatory)] [int]$MaxObjects
     )
     $managerType = 'Microsoft.EnterpriseManagement.IEntityObjectsManagement' -as [type]
     $objectType = 'Microsoft.EnterpriseManagement.Monitoring.MonitoringObject' -as [type]
@@ -56,17 +88,12 @@ function Read-SCOMRelationshipSet {
     $returnType = [System.Collections.Generic.IList``1].MakeGenericType(
         [type[]]@($edgeType.MakeGenericType([type[]]@($objectType))))
     if ($method.ReturnType -ne $returnType) { throw 'SCOM_SET_READ_UNAVAILABLE' }
-    # Verified on the SCOM 2025 SDK: this overload throws NotImplementedException when MaxResultCount is set, so
-    # the call is unbounded and materialises the whole relationship set. The bound is therefore applied around
-    # the call: the budget guard runs before any SCOM call, the oversize guard after materialisation.
-    if ($targets.Count -gt $MaxObjects) { throw 'SCOM_SET_READ_BUDGET' }
-    $options = $optionsType.GetProperty('Default', [Reflection.BindingFlags]'Public,Static').GetValue($null)
+    # Same call pattern as the Phase 0 spike: ObjectQueryOptions.Default is a static field on the real SDK, and
+    # PowerShell member access reads it. No reflection over the options type.
+    $options = [Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]::Default
     if ($null -eq $options) { throw 'SCOM_SET_READ_UNAVAILABLE' }
-    try {
-        $result = $method.Invoke($EntityObjects.PSObject.BaseObject, [object[]]@(
-            $RelationshipClass.PSObject.BaseObject, [Enum]::Parse($derivedType, 'None'), $options.PSObject.BaseObject))
-    }
-    catch { throw 'SCOM_SET_READ_UNAVAILABLE' }
+    $result = $method.Invoke($EntityObjects.PSObject.BaseObject, [object[]]@(
+        $RelationshipClass.PSObject.BaseObject, [Enum]::Parse($derivedType, 'None'), $options.PSObject.BaseObject))
     if ($null -eq $result) { throw 'SCOM_SET_READ_UNAVAILABLE' }
     # Hosting relationships legitimately return non-target devices (for example network adapters), so the
     # post-call bound is a multiple of the budget rather than of the expected targets.

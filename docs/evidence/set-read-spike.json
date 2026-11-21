@@ -7,6 +7,7 @@
   },
   "objectQueryOptionsDefault": {
     "available": true,
+    "memberKind": "static field (not a property); read as [ObjectQueryOptions]::Default",
     "maxResultCount": 0
   },
   "relatedFinding": {

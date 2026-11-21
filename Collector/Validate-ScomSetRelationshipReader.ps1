@@ -1,11 +1,12 @@
-﻿param([switch]$NoIsDeleted)
+param([switch]$NoIsDeleted, [ValidateSet('', 'NoDefault', 'ThrowingDefault', 'NoMethod')] [string]$BreakContract = '')
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 if ('Microsoft.EnterpriseManagement.IEntityObjectsManagement' -as [type]) {
     throw 'Synthetic set reader test requires a fresh process without SDK assemblies.'
 }
 # Synthetic stand-ins for the SDK types the set reader binds to by name. Like the real SCOM 2025 SDK, the manager
-# throws NotImplementedException when MaxResultCount is set, so any attempt to cap this call fails the suite.
+# throws NotImplementedException when MaxResultCount is set, so any attempt to cap this call fails the suite, and
+# ObjectQueryOptions.Default is a static FIELD (verified on the real SDK), so a property-only lookup fails here too.
 $typeText = @'
 using System;
 using System.Collections.Generic;
@@ -19,13 +20,19 @@ namespace Microsoft.EnterpriseManagement.Configuration {
 }
 namespace Microsoft.EnterpriseManagement.Common {
     public class ObjectQueryOptions {
-        public static ObjectQueryOptions Default { get { return new ObjectQueryOptions(); } }
+        public static ObjectQueryOptions Default = new ObjectQueryOptions(); //DEFAULT
         public int MaxResultCount { get; set; }
     }
     public class EnterpriseManagementRelationshipObject<T> {
         public Guid Id, RelationshipId, ManagementGroupId;
         public bool IsDeleted; //ISDELETED
-        public T SourceObject, TargetObject;
+        public bool FailTarget;
+        public T SourceObject;
+        T target;
+        public T TargetObject {
+            get { if (FailTarget) throw new InvalidOperationException("Synthetic row failure"); return target; }
+            set { target = value; }
+        }
     }
 }
 namespace Microsoft.EnterpriseManagement.Monitoring {
@@ -53,7 +60,7 @@ namespace Microsoft.EnterpriseManagement {
     using Monitoring;
     public interface IEntityObjectsManagement {
         IList<EnterpriseManagementRelationshipObject<T>> GetRelationshipObjects<T>(
-            ManagementPackRelationship relationship, DerivedClassTraversalDepth depth, ObjectQueryOptions options);
+            ManagementPackRelationship relationship, DerivedClassTraversalDepth depth, ObjectQueryOptions options); //IFACE
     }
     public class SyntheticEdge {
         public Guid Id=Guid.NewGuid();
@@ -67,6 +74,10 @@ namespace Microsoft.EnterpriseManagement {
         public string Mode="valid";
         public Guid Group;
         public List<SyntheticEdge> Edges=new List<SyntheticEdge>();
+        public IList<EnterpriseManagementRelationshipObject<T>> GetRelationshipObjects<T>(
+            ManagementPackRelationship relationship, DerivedClassTraversalDepth depth) {
+            throw new NotImplementedException("Two-argument overload is not the contract under test.");
+        }
         public IList<EnterpriseManagementRelationshipObject<T>> GetRelationshipObjects<T>(
             ManagementPackRelationship relationship, DerivedClassTraversalDepth depth, ObjectQueryOptions options) {
             Calls++; Limits.Add(options.MaxResultCount);
@@ -82,6 +93,7 @@ namespace Microsoft.EnterpriseManagement {
                     RelationshipId=Mode=="derived" ? Guid.NewGuid() : relationship.Id,
                     ManagementGroupId=e.WrongGroup ? Guid.NewGuid() : Group,
                     IsDeleted=e.Deleted, //ISDELETED
+                    FailTarget=Mode=="rowthrow",
                     SourceObject=(T)(object)e.Source,
                     TargetObject=(T)(object)e.Target });
             }
@@ -92,6 +104,15 @@ namespace Microsoft.EnterpriseManagement {
 '@
 if ($NoIsDeleted) {
     $typeText = (($typeText -split "`r?`n") | Where-Object { $_ -notmatch '//ISDELETED' }) -join "`n"
+}
+# Variant runs (separate process) break one SDK contract at the type level; the reader must report UNAVAILABLE.
+switch ($BreakContract) {
+    'NoDefault' { $typeText = (($typeText -split "`r?`n") | Where-Object { $_ -notmatch '//DEFAULT' }) -join "`n" }
+    'ThrowingDefault' {
+        $typeText = $typeText -replace 'Default = new ObjectQueryOptions\(\); //DEFAULT',
+            'Default = Boom(); static ObjectQueryOptions Boom() { throw new InvalidOperationException("Synthetic options failure"); }'
+    }
+    'NoMethod' { $typeText = $typeText -replace ', ObjectQueryOptions options\); //IFACE', '); //IFACE' }
 }
 Add-Type -TypeDefinition $typeText
 Import-Module (Join-Path $PSScriptRoot 'ScomSetRelationshipReader.psm1') -Force
@@ -155,6 +176,8 @@ if ($NoIsDeleted) {
     return
 }
 
+# Variant runs only exercise the broken-contract stage (reader and scan level, below), not the main suite.
+if (-not $BreakContract) {
 # --- Reader: normal 3 computers / 5 volumes ---
 Reset-Manager
 foreach ($pair in $layout) { Add-SynthEdge $relationship.Name $computers[$pair[0]] $volumes[$pair[1]] | Out-Null }
@@ -166,11 +189,11 @@ Check (-not $normal.Complete -and -not $normal.SourceWorkBoundVerified -and
     -not $normal.ScopeMembershipVerified -and $null -eq $normal.PSObject.Properties['CapHit']) 'A set read must never claim completeness or source coverage'
 
 # The synthetic manager must reject MaxResultCount like the real SDK, so a regression to a capped call is caught.
-$capped = [Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]::Default
+$capped = New-Object Microsoft.EnterpriseManagement.Common.ObjectQueryOptions
 $capped.MaxResultCount = 6
 $threw = $false
 try {
-    $generic = $manager.GetType().GetMethod('GetRelationshipObjects').MakeGenericMethod([Microsoft.EnterpriseManagement.Monitoring.MonitoringObject])
+    $generic = @($manager.GetType().GetMethods() | Where-Object { $_.Name -ceq 'GetRelationshipObjects' -and $_.GetParameters().Count -eq 3 })[0].MakeGenericMethod([Microsoft.EnterpriseManagement.Monitoring.MonitoringObject])
     $generic.Invoke($manager, [object[]]@($relationship.PSObject.BaseObject, [Microsoft.EnterpriseManagement.Configuration.DerivedClassTraversalDepth]::None, $capped.PSObject.BaseObject)) | Out-Null
 }
 catch { $threw = $_.Exception.GetBaseException() -is [NotImplementedException] }
@@ -247,6 +270,11 @@ $manager.Mode = 'valid'
 $powerShell = (Get-Process -Id $PID).Path
 $childOutput = & $powerShell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -NoIsDeleted 2>&1
 Check ($LASTEXITCODE -eq 0 -and (($childOutput | Out-String) -match 'IsDeleted absent')) "IsDeleted-absent run failed: $($childOutput | Out-String)"
+foreach ($brokenVariant in 'NoDefault', 'ThrowingDefault', 'NoMethod') {
+    $variantOutput = & $powerShell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -BreakContract $brokenVariant 2>&1
+    Check ($LASTEXITCODE -eq 0 -and (($variantOutput | Out-String) -match "variant $brokenVariant")) "Variant $brokenVariant must fall back, not abort: $($variantOutput | Out-String)"
+}
+}
 
 # --- Scan level: real set reader and per-source stubs over one master edge list ---
 $module = Import-Module (Join-Path $PSScriptRoot 'ScomNormalization.psm1') -Force -PassThru
@@ -362,6 +390,22 @@ function Assert-SameResult($Left, $Right, [string]$Message) {
 function Get-PerSourceCalls { & $module { $script:PerSourceCalls } }
 function Reset-PerSourceCalls { & $module { $script:PerSourceCalls = 0 } }
 
+if ($BreakContract) {
+    # One SDK contract is broken at the type level: the reader reports UNAVAILABLE before any SDK call and
+    # the scan falls back to per-source with an identical result instead of aborting.
+    New-Fixture 'os'
+    Assert-Fault { Read-Set } 'SCOM_SET_READ_UNAVAILABLE'
+    Check ($manager.Calls -eq 0) "Variant $BreakContract must fail before any SDK call"
+    $variantExpected = Invoke-Scan 'perSource'
+    $variantCounters = @{}
+    $variantScan = Invoke-Scan 'set' 'os' $variantCounters
+    Check ($variantCounters.setReadFallback -and $variantCounters.readMode -ceq 'perSource' -and
+        $variantCounters.graphQueries -eq 22 -and -not $variantCounters.setReadOversize) "Variant $BreakContract must fall back to per-source"
+    Assert-SameResult $variantExpected $variantScan "Variant $BreakContract fallback result differs from per-source"
+    Write-Output "$script:cases synthetic cases passed (variant $BreakContract)"
+    return
+}
+
 # Normal 3 computers / 3 OS / 5 volumes: set equals per-source, with 2 calls instead of 22.
 foreach ($variant in 'os', 'direct') {
     New-Fixture $variant
@@ -392,6 +436,36 @@ $fallback = Invoke-Scan 'set' 'os' $fallbackCounters
 Check ($fallbackCounters.setReadFallback -and $fallbackCounters.readMode -ceq 'perSource' -and
     $fallbackCounters.graphQueries -eq 22 -and $manager.Calls -eq 1) 'Set failure must fall back once to 22 per-source calls'
 Assert-SameResult $expected $fallback 'Fallback result differs from per-source'
+$manager.Mode = 'valid'
+
+# A failure at any stage of the SDK interaction falls back to per-source; it never aborts the scan. The type-level
+# stages (missing Default, throwing Default, missing method) run as variants in separate processes above.
+$optionsType = [Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]
+$goodDefault = $optionsType::Default
+foreach ($stage in 'nullOptions', 'invoke', 'nullResult') {
+    New-Fixture 'os'
+    $stageExpected = Invoke-Scan 'perSource'
+    $stageEntity = $manager
+    switch ($stage) {
+        'nullOptions' { $optionsType::Default = $null }
+        'invoke' { $manager.Mode = 'throw' }
+        'nullResult' { $manager.Mode = 'null' }
+    }
+    $stageCounters = @{}
+    try { $stageScan = Invoke-Scan 'set' 'os' $stageCounters -EntityObjects $stageEntity }
+    finally { $optionsType::Default = $goodDefault; $manager.Mode = 'valid' }
+    Check ($stageCounters.setReadFallback -and $stageCounters.readMode -ceq 'perSource' -and
+        $stageCounters.graphQueries -eq 22 -and -not $stageCounters.setReadOversize) "Stage $stage must fall back to per-source"
+    Assert-SameResult $stageExpected $stageScan "Stage $stage fallback result differs from per-source"
+}
+New-Fixture 'direct'
+Assert-Fault { Read-SCOMRelationshipSet -EntityObjects @{} -ManagementGroupId $group -RelationshipClass $directRel `
+    -TargetClass $scanVolumeClass -ServedSourceIds @($sc.Id) -ServedTargetIds @($sv.Id) -MaxObjects 5 } 'SCOM_SET_READ_UNAVAILABLE'
+$manager.Mode = 'rowthrow'
+# Windows PowerShell 5.1 reads a throwing property getter as $null, so an unreadable row is an invalid row and
+# fails closed like any other row-validation fault; it is deliberately not a fallback.
+Assert-Fault { Read-SCOMRelationshipSet -EntityObjects $manager -ManagementGroupId $group -RelationshipClass $directRel `
+    -TargetClass $scanVolumeClass -ServedSourceIds @($sc.Id) -ServedTargetIds @($sv.Id) -MaxObjects 5 } 'SCOM_RELATIONSHIP_ROW_INVALID'
 $manager.Mode = 'valid'
 
 # Budget guard is fatal for the scan: 5 volume targets exceed maxObjects 4, so no SCOM call and no fallback.
