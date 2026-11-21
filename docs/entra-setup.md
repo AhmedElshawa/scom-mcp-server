@@ -55,7 +55,11 @@ connector's redirect URI are still handled separately (below).
    in the Copilot Studio connector. After the connector is created, add the redirect
    URI it displays as a **Web** redirect URI, exactly as shown.
 
-Screenshots of these portal pages: see [screenshots/README.md](screenshots/README.md).
+![Expose an API: the application ID URI and the admin-only read scope (identifiers redacted)](screenshots/entra-setup-api-expose.png)
+
+![App roles: the Scom.Ingest application role (identifiers redacted)](screenshots/entra-setup-api-approles.png)
+
+More portal screenshots: see [screenshots/README.md](screenshots/README.md).
 
 ## Where each value lands
 

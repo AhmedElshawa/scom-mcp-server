@@ -267,8 +267,11 @@ Either way you also need to:
 5. **Confirm the publisher's consent** the same way: the publisher app > API permissions >
    `Scom.Ingest` (Application) must show **Granted for `<your tenant>`**.
 
-📷 *Screenshots pending: `entra-setup-api-expose.png`, `entra-setup-api-approles.png`,
-`entra-setup-publisher-cert.png`, `entra-setup-publisher-permissions.png`,
+![Expose an API: the application ID URI and the admin-only read scope (identifiers redacted)](screenshots/entra-setup-api-expose.png)
+
+![App roles: the Scom.Ingest application role](screenshots/entra-setup-api-approles.png)
+
+📷 *Screenshots pending: `entra-setup-publisher-cert.png`, `entra-setup-publisher-permissions.png`,
 `entra-setup-reader-permissions.png`; see [screenshots/README.md](screenshots/README.md).*
 
 At this point you should have these values:

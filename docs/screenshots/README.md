@@ -1,9 +1,11 @@
 # Screenshots
 
-No screenshots are committed yet. Screenshots must show lab or customer identifiers
-(hostnames, tenant, app and object GUIDs, IP addresses, thumbprints, user names), and
-capturing them needs an interactive Entra, Copilot Studio or RDP session. They were not
-captured automatically rather than risk publishing an unredacted image.
+Committed so far: `entra-setup-api-expose.png` and `entra-setup-api-approles.png`
+(real captures from the lab tenant with the tenant, account and all identifiers redacted).
+The others in the table below are still to be captured. Screenshots show lab or customer
+identifiers (hostnames, tenant, app and object GUIDs, IP addresses, thumbprints, user
+names), and capturing them needs an interactive Entra, Copilot Studio or RDP session, so
+each one is redacted by hand before it is committed.
 
 Capture, **redact** (blur or replace hostnames, GUIDs, IPs, thumbprints, accounts), save as PNG
 at 1 MB or less, and name by documentation section:
