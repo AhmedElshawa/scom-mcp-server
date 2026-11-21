@@ -214,7 +214,7 @@ function Resolve-ScomMappingObservation {
     }
     $nonDisk = @($otherEdges | Where-Object { $_.source -eq $diskHostedBy -and $_.relationship -ceq $diskRelationship })
     if ($nonDisk.Count -gt 0) {
-        $warnings.Add("$($nonDisk.Count) non-disk logical device edge(s) (for example network adapters) share the disk relationship; the collector ignores them.")
+        $warnings.Add("$($nonDisk.Count) non-disk logical device edge(s) (for example network adapters) share the disk relationship; the collector skips and counts them.")
     }
     foreach ($derived in @($Observation.derivedRelationshipTypes)) {
         if ($null -ne $derived -and @($derived.derived).Count -gt 0) {
@@ -326,13 +326,10 @@ function Resolve-ScomMappingObservation {
     foreach ($property in $TemplateMapping.PSObject.Properties) {
         if ($skip -notcontains $property.Name) { $mapping[$property.Name] = $property.Value }
     }
-    # Set reads need both hosting relationships observed. Non-disk rows sharing the disk relationship would reach the
-    # set-read cap (expected targets + 1) and fail closed, so that case stays per-source.
+    # Set reads need both hosting relationships observed. Non-disk rows sharing the disk relationship are skipped and
+    # counted by the set reader (lab-verified), so they do not prevent set mode.
     $readMode = 'perSource'; $readModeReason = 'RELATIONSHIP_NOT_OBSERVED'
-    if ($osEdges.Count -gt 0 -and $diskEdges.Count -gt 0) {
-        if ($nonDisk.Count -gt 0) { $readModeReason = 'NON_DISK_EDGES_SHARE_DISK_RELATIONSHIP' }
-        else { $readMode = 'set'; $readModeReason = 'BOTH_RELATIONSHIPS_OBSERVED' }
-    }
+    if ($osEdges.Count -gt 0 -and $diskEdges.Count -gt 0) { $readMode = 'set'; $readModeReason = 'BOTH_RELATIONSHIPS_OBSERVED' }
     $result.relationshipReadMode = $readMode
     $result.relationshipReadModeReason = $readModeReason
     $result.windowsMapping = $mapping

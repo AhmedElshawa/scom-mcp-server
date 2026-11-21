@@ -156,9 +156,9 @@ Assert-That ($notDisk.Outcome.ExitCode -eq 4) 'a hosted device whose class does 
 $nics = Invoke-Generator (New-Observation (Get-Many 2 { param($i) New-Computer "n$i" -NetworkAdapter })) 'nics'
 Assert-That ($nics.Outcome.ExitCode -eq 0 -and @($nics.Outcome.Resolution.warnings | Where-Object { $_ -match 'non-disk' }).Count -eq 1) 'non-disk logical devices must be ignored with a warning'
 Assert-That ($nics.Mapping.windowsMapping.computerHostsVolumeRelationship -eq 'Microsoft.Windows.ComputerHostsLogicalDevice' -and @($nics.Mapping.allowedPropertiesByClass.PSObject.Properties.Name) -notcontains 'Microsoft.Windows.NetworkAdapter') 'network adapters must not enter the mapping or the allow-list'
-Assert-That ($nics.Mapping.relationshipReadMode -eq 'perSource') 'non-disk edges sharing the disk relationship must keep per-source reads'
+Assert-That ($nics.Mapping.relationshipReadMode -eq 'set') 'non-disk edges sharing the disk relationship must not prevent set reads (the reader skips and counts them)'
 $nicEvidence = Get-Content -LiteralPath "$($nics.Path).evidence.json" -Raw | ConvertFrom-Json
-Assert-That ($nicEvidence.relationshipReadMode -eq 'perSource' -and $nicEvidence.relationshipReadModeReason -eq 'NON_DISK_EDGES_SHARE_DISK_RELATIONSHIP') 'evidence must record why set reads were not chosen'
+Assert-That ($nicEvidence.relationshipReadMode -eq 'set' -and $nicEvidence.relationshipReadModeReason -eq 'BOTH_RELATIONSHIPS_OBSERVED') 'evidence must record the set read choice for a group with non-disk devices'
 
 # Derived relationship types are reported.
 $observation = New-Observation (Get-Many 1 { param($i) New-Computer 'r1' })

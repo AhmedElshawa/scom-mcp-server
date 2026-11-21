@@ -142,3 +142,10 @@ No changes outside `Collector/`, `ScomMcp/SetupConfigurationValidation.cs`, `Set
     exposes `Default` as a field so the suite matches the real type.
 26. Windows PowerShell 5.1 reads a throwing property getter as `$null`, so a row whose members cannot be read is
     indistinguishable from an invalid row and fails closed as `SCOM_RELATIONSHIP_ROW_INVALID` (covered by a test).
+27. Supersedes Decisions 17 and 22. The generator writes `relationshipReadMode` `set` whenever both hosting
+    relationships were observed on the sampled computers, regardless of non-disk devices (for example network
+    adapters) that share the disk relationship: the lab (SCOM 2025, SDK 7.0.5000.0) proved the reader skips and
+    counts them (`skippedNonVolumeTargets=4`, 8 relationships identical to `perSource`). It writes `perSource`
+    otherwise (a run that observes neither relationship produces no mapping and exits non-zero). Evidence reason
+    codes are `BOTH_RELATIONSHIPS_OBSERVED` and `RELATIONSHIP_NOT_OBSERVED`; `NON_DISK_EDGES_SHARE_DISK_RELATIONSHIP`
+    is no longer written. The generator warning about non-disk edges remains, now saying they are skipped and counted.
