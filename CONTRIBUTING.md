@@ -7,6 +7,7 @@ Thanks for helping. This project is security-sensitive: please keep changes smal
 - Do not claim lab validation you did not perform; label untested behaviour as untested.
 - Keep read-only guarantees: no change may add a write path to SCOM or widen the allow-lists by default.
 - Follow existing conventions; keep the package directory limited to the files listed in `package-manifest.json`.
+- **Phase 0 (a 30-second read-only spike against the real SDK) is mandatory before implementing any new SDK call.** Synthetic tests prove plumbing, not SDK contracts. This rule exists because the `MaxResultCount` `NotImplementedException` was found only after a full day of implementation. Record the spike result in `docs/evidence/` (sanitised: no hostnames, thumbprints or GUIDs).
 
 Validation before a pull request (Windows, .NET 8 SDK pinned in CI):
 

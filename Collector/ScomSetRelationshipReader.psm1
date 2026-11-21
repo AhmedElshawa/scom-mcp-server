@@ -1,6 +1,7 @@
 Set-StrictMode -Version Latest
 
-# Reads one configured hosting relationship for the whole management group with a single bounded SDK call.
+# Reads one configured hosting relationship for the whole management group with a single SDK call that is
+# bounded by a pre-call budget check and a post-call oversize check (the SDK rejects MaxResultCount here).
 # The result is an observation, never evidence of completeness: completeness stays set reconciliation in
 # ConvertTo-SCOMWindowsInventory. Class and relationship objects come from the reviewed windowsMapping.
 function Read-SCOMRelationshipSet {
@@ -11,7 +12,8 @@ function Read-SCOMRelationshipSet {
         [Parameter(Mandatory)] [object]$RelationshipClass,
         [Parameter(Mandatory)] [object]$TargetClass,
         [Parameter(Mandatory)] [ValidateCount(1, 100000)] [Guid[]]$ServedSourceIds,
-        [Parameter(Mandatory)] [ValidateCount(1, 100000)] [Guid[]]$ServedTargetIds
+        [Parameter(Mandatory)] [ValidateCount(1, 100000)] [Guid[]]$ServedTargetIds,
+        [Parameter(Mandatory)] [ValidateRange(1, 100000)] [int]$MaxObjects
     )
     $managerType = 'Microsoft.EnterpriseManagement.IEntityObjectsManagement' -as [type]
     $objectType = 'Microsoft.EnterpriseManagement.Monitoring.MonitoringObject' -as [type]
@@ -54,22 +56,21 @@ function Read-SCOMRelationshipSet {
     $returnType = [System.Collections.Generic.IList``1].MakeGenericType(
         [type[]]@($edgeType.MakeGenericType([type[]]@($objectType))))
     if ($method.ReturnType -ne $returnType) { throw 'SCOM_SET_READ_UNAVAILABLE' }
-    # The cap is one above the targets this scan serves. Reaching it means the call returned at least as many
-    # rows as expected targets plus one, so the result is rejected rather than trusted or truncated.
-    $cap = $targets.Count + 1
-    $options = [Activator]::CreateInstance($optionsType)
-    try {
-        $options.MaxResultCount = $cap
-        if ($options.MaxResultCount -ne $cap) { throw 'Cap was not retained' }
-    }
-    catch { throw 'SCOM_SET_READ_UNAVAILABLE' }
+    # Verified on the SCOM 2025 SDK: this overload throws NotImplementedException when MaxResultCount is set, so
+    # the call is unbounded and materialises the whole relationship set. The bound is therefore applied around
+    # the call: the budget guard runs before any SCOM call, the oversize guard after materialisation.
+    if ($targets.Count -gt $MaxObjects) { throw 'SCOM_SET_READ_BUDGET' }
+    $options = $optionsType.GetProperty('Default', [Reflection.BindingFlags]'Public,Static').GetValue($null)
+    if ($null -eq $options) { throw 'SCOM_SET_READ_UNAVAILABLE' }
     try {
         $result = $method.Invoke($EntityObjects.PSObject.BaseObject, [object[]]@(
             $RelationshipClass.PSObject.BaseObject, [Enum]::Parse($derivedType, 'None'), $options.PSObject.BaseObject))
     }
     catch { throw 'SCOM_SET_READ_UNAVAILABLE' }
     if ($null -eq $result) { throw 'SCOM_SET_READ_UNAVAILABLE' }
-    if ($result.Count -ge $cap) { throw 'SCOM_SET_READ_CAP_HIT' }
+    # Hosting relationships legitimately return non-target devices (for example network adapters), so the
+    # post-call bound is a multiple of the budget rather than of the expected targets.
+    if ($result.Count -gt ($MaxObjects * 8)) { throw 'SCOM_SET_READ_OVERSIZE' }
     # Optional row members differ between SDK builds. Probe once and validate only the ones that exist.
     $present = New-Object 'System.Collections.Generic.HashSet[string]' ([StringComparer]::Ordinal)
     if ($result.Count -gt 0) {
@@ -117,7 +118,6 @@ function Read-SCOMRelationshipSet {
         SkippedNonTarget = $skippedNonTarget
         SkippedOutsideScope = $skippedOutsideSources
         OutsideScopeTargets = $outsideTargets
-        CapHit = $false
         Complete = $false
         ScopeMembershipVerified = $false
         SourceWorkBoundVerified = $false

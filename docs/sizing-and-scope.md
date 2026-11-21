@@ -26,13 +26,14 @@ below are for the generated Windows mapping (two relationships: OS hosting and d
 hosting) and the lab-shaped example of 3 computers, 3 operating systems and 5 logical disks
 (11 source objects).
 
-| | `perSource` (default, lab-validated) | `set` (implemented, lab validation pending) |
+| | `perSource` (default, lab-validated) | `set` |
 |---|---|---|
 | Relationship calls per run | objects × relationships = 11 × 2 = **22** | one per mapped relationship = **2** |
 | Grows with | number of objects | number of relationships (not objects) |
 | `maxGraphQueries` counts | each per-source call | each set call |
 | Active alerts | **1** bulk `Get-SCOMAlert` per run | **1** bulk `Get-SCOMAlert` per run |
-| Row bound | one source per call | `MaxResultCount` = expected disks + 1 |
+| Row bound | one source per call | expected targets ≤ `maxObjects` before the call; rows returned ≤ `maxObjects × 8` after it |
+| Memory | scales with the served scope | **materialises the full relationship set**: scales with management-group size |
 | Other configured relationships (for example monitoring role) | per source | per source (only the OS and disk relationships are read as sets) |
 
 Both modes read alerts with one bulk call (criteria `ResolutionState < 255`) instead of one
@@ -43,15 +44,20 @@ previous per-object reads did, so measure it before relying on it.
 
 Set-mode safety rules:
 
-- **Fail closed at the cap.** If a set read returns as many rows as the cap
-  (`SCOM_SET_READ_CAP_HIT`) nothing is published for the run. The cap counts all rows
-  returned, including rows for targets that are not disks. With the direct
-  computer-to-device mapping, a single non-disk device (for example a network adapter)
-  therefore reaches the cap; the generator keeps `perSource` when it samples such devices,
-  and Phase 4 lab validation must measure this on real data.
+- **Verified SDK limit.** On SCOM 2025 (SDK 7.0.5000.0) the set call
+  `GetRelationshipObjects<T>(relationship, depth, options)` throws `NotImplementedException` when
+  `ObjectQueryOptions.MaxResultCount` is set, so the collector cannot ask the SDK to cap the result. It
+  uses `ObjectQueryOptions.Default` and bounds the read itself. Set mode therefore materialises the
+  **full relationship set**: memory scales with management-group size, not with the served scope. It is
+  still 2 calls.
+- **Fail closed on the budget.** If the expected targets of a relationship exceed `maxObjects`
+  (`SCOM_SET_READ_BUDGET`) nothing is published for the run and no SCOM call is made.
+- **Fall back on an oversize result.** If a set read returns more than `maxObjects × 8` rows
+  (`SCOM_SET_READ_OVERSIZE`), that run falls back to `perSource` and logs `scan.setReadFallback`
+  (`setReadFallback` and `setReadOversize` true in the `scan.completed` counters). The rows have already
+  been materialised by then; the limit bounds what the collector keeps, not what the SDK allocates.
 - **Fall back on call failure.** If the set call itself throws
-  (`SCOM_SET_READ_UNAVAILABLE`), that run falls back to `perSource` and logs
-  `scan.setReadFallback`.
+  (`SCOM_SET_READ_UNAVAILABLE`), that run falls back to `perSource` and logs `scan.setReadFallback`.
 - **Skip and count, never abort.** Targets that are not an instance of the configured OS or
   disk class and sources outside the served computer set are skipped and counted
   (`skippedNonVolumeTargets`, `skippedOutsideScopeSources` in the `scan.completed` log

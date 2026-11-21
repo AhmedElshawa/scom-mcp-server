@@ -4,8 +4,8 @@ Set-StrictMode -Version Latest
 if ('Microsoft.EnterpriseManagement.IEntityObjectsManagement' -as [type]) {
     throw 'Synthetic set reader test requires a fresh process without SDK assemblies.'
 }
-# Synthetic stand-ins for the SDK types the set reader binds to by name. The manager truncates results at
-# MaxResultCount exactly like the real SDK, so a full result is indistinguishable from a truncated one.
+# Synthetic stand-ins for the SDK types the set reader binds to by name. Like the real SCOM 2025 SDK, the manager
+# throws NotImplementedException when MaxResultCount is set, so any attempt to cap this call fails the suite.
 $typeText = @'
 using System;
 using System.Collections.Generic;
@@ -19,12 +19,8 @@ namespace Microsoft.EnterpriseManagement.Configuration {
 }
 namespace Microsoft.EnterpriseManagement.Common {
     public class ObjectQueryOptions {
-        public static bool Reject, IgnoreSetter;
-        private int limit;
-        public int MaxResultCount {
-            get { return limit; }
-            set { if (Reject) throw new NotSupportedException(); if (!IgnoreSetter) limit=value; }
-        }
+        public static ObjectQueryOptions Default { get { return new ObjectQueryOptions(); } }
+        public int MaxResultCount { get; set; }
     }
     public class EnterpriseManagementRelationshipObject<T> {
         public Guid Id, RelationshipId, ManagementGroupId;
@@ -74,13 +70,13 @@ namespace Microsoft.EnterpriseManagement {
         public IList<EnterpriseManagementRelationshipObject<T>> GetRelationshipObjects<T>(
             ManagementPackRelationship relationship, DerivedClassTraversalDepth depth, ObjectQueryOptions options) {
             Calls++; Limits.Add(options.MaxResultCount);
+            if (options.MaxResultCount != 0) throw new NotImplementedException("MaxResultCount is not supported with this method.");
             if (depth!=DerivedClassTraversalDepth.None) throw new Exception("Unexpected derived traversal");
             if (Mode=="throw") throw new InvalidOperationException("Synthetic SDK failure");
             if (Mode=="null") return null;
             var rows=new List<EnterpriseManagementRelationshipObject<T>>();
             foreach (var e in Edges) {
                 if (e.Rel!=relationship.Name) continue;
-                if (rows.Count>=options.MaxResultCount) break;
                 rows.Add(new EnterpriseManagementRelationshipObject<T> {
                     Id=e.Id,
                     RelationshipId=Mode=="derived" ? Guid.NewGuid() : relationship.Id,
@@ -143,9 +139,9 @@ $computers = @(1..3 | ForEach-Object { New-SynthObject 'Synthetic.Computer' })
 $volumes = @(1..5 | ForEach-Object { New-SynthObject 'Synthetic.Volume' })
 $nic = New-SynthObject 'Synthetic.Nic'
 $outsider = New-SynthObject 'Synthetic.Computer'
-function Read-Set {
+function Read-Set([int]$MaxObjects = 5) {
     Read-SCOMRelationshipSet -EntityObjects $manager -ManagementGroupId $group -RelationshipClass $relationship `
-        -TargetClass $volumeClass -ServedSourceIds @($computers.Id) -ServedTargetIds @($volumes.Id)
+        -TargetClass $volumeClass -ServedSourceIds @($computers.Id) -ServedTargetIds @($volumes.Id) -MaxObjects $MaxObjects
 }
 function Reset-Manager { $manager.Edges.Clear(); $manager.Calls = 0; $manager.Limits.Clear(); $manager.Mode = 'valid' }
 $layout = @(@(0, 0), @(0, 1), @(1, 2), @(1, 3), @(2, 4))
@@ -165,18 +161,35 @@ foreach ($pair in $layout) { Add-SynthEdge $relationship.Name $computers[$pair[0
 $normal = Read-Set
 Check ($normal.Relationships.Count -eq 5 -and $normal.SkippedNonTarget -eq 0 -and $normal.SkippedOutsideScope -eq 0 -and
     $normal.OutsideScopeTargets -eq 0) 'Normal set read changed the edges'
-Check ($manager.Calls -eq 1 -and $manager.Limits[0] -eq 6) 'Cap must be expected targets plus one in one call'
-Check (-not $normal.CapHit -and -not $normal.Complete -and -not $normal.SourceWorkBoundVerified -and
-    -not $normal.ScopeMembershipVerified) 'A set read must never claim completeness or source coverage'
+Check ($manager.Calls -eq 1 -and $manager.Limits[0] -eq 0) 'The set read must be one call that never sets MaxResultCount'
+Check (-not $normal.Complete -and -not $normal.SourceWorkBoundVerified -and
+    -not $normal.ScopeMembershipVerified -and $null -eq $normal.PSObject.Properties['CapHit']) 'A set read must never claim completeness or source coverage'
 
-# --- Reader: cap hit fails closed, no dataset, no retry ---
+# The synthetic manager must reject MaxResultCount like the real SDK, so a regression to a capped call is caught.
+$capped = [Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]::Default
+$capped.MaxResultCount = 6
+$threw = $false
+try {
+    $generic = $manager.GetType().GetMethod('GetRelationshipObjects').MakeGenericMethod([Microsoft.EnterpriseManagement.Monitoring.MonitoringObject])
+    $generic.Invoke($manager, [object[]]@($relationship.PSObject.BaseObject, [Microsoft.EnterpriseManagement.Configuration.DerivedClassTraversalDepth]::None, $capped.PSObject.BaseObject)) | Out-Null
+}
+catch { $threw = $_.Exception.GetBaseException() -is [NotImplementedException] }
+Check $threw 'Synthetic manager must throw NotImplementedException when MaxResultCount is set'
+
+# --- Reader: budget guard fails closed before any SCOM call ---
 Reset-Manager
 foreach ($pair in $layout) { Add-SynthEdge $relationship.Name $computers[$pair[0]] $volumes[$pair[1]] | Out-Null }
+Assert-Fault { Read-Set 4 } 'SCOM_SET_READ_BUDGET'
+Check ($manager.Calls -eq 0) 'Budget fault must make no SCOM call'
+
+# --- Reader: oversize guard rejects the materialised set; rows above maxObjects x 8 are never trusted ---
+Reset-Manager
+foreach ($pair in $layout) { Add-SynthEdge $relationship.Name $computers[$pair[0]] $volumes[$pair[1]] | Out-Null }
+foreach ($i in 1..35) { Add-SynthEdge $relationship.Name $computers[2] $nic | Out-Null }
+Check ((Read-Set).SkippedNonTarget -eq 35) 'Exactly maxObjects x 8 rows (40) must still be accepted'
 Add-SynthEdge $relationship.Name $computers[2] $nic | Out-Null
-Assert-Fault { Read-Set } 'SCOM_SET_READ_CAP_HIT'
-Check ($manager.Calls -eq 1) 'Cap hit must not retry'
-foreach ($i in 1..4) { Add-SynthEdge $relationship.Name $computers[2] $nic | Out-Null }
-Assert-Fault { Read-Set } 'SCOM_SET_READ_CAP_HIT'
+Assert-Fault { Read-Set } 'SCOM_SET_READ_OVERSIZE'
+Check ($manager.Calls -eq 2) 'Oversize must not retry'
 
 # --- Reader: SDK call failure and unusable SDK surface report UNAVAILABLE ---
 Reset-Manager
@@ -188,15 +201,9 @@ foreach ($mode in 'throw', 'null') {
 $manager.Mode = 'valid'
 Assert-Fault {
     Read-SCOMRelationshipSet -EntityObjects @{} -ManagementGroupId $group -RelationshipClass $relationship `
-        -TargetClass $volumeClass -ServedSourceIds @($computers.Id) -ServedTargetIds @($volumes.Id)
+        -TargetClass $volumeClass -ServedSourceIds @($computers.Id) -ServedTargetIds @($volumes.Id) -MaxObjects 5
 } 'SCOM_SET_READ_UNAVAILABLE'
 $manager.Calls = 0
-foreach ($switch in 'Reject', 'IgnoreSetter') {
-    [Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]::$switch = $true
-    try { Assert-Fault { Read-Set } 'SCOM_SET_READ_UNAVAILABLE' }
-    finally { [Microsoft.EnterpriseManagement.Common.ObjectQueryOptions]::$switch = $false }
-}
-Check ($manager.Calls -eq 0) 'A cap that is not retained must be rejected before any call'
 
 # --- Reader: NIC targets and outside-scope rows are counted, never fatal ---
 Reset-Manager
@@ -307,7 +314,7 @@ function New-Mapping([string]$Variant) {
 }
 $script:AlertCalls = 0
 $script:Alerts = @()
-function Invoke-Scan([string]$Mode, [string]$Variant = 'os', [hashtable]$Counters = @{}, [switch]$Lab, [switch]$Generic, [switch]$NoRelationships, $EntityObjects = $manager) {
+function Invoke-Scan([string]$Mode, [string]$Variant = 'os', [hashtable]$Counters = @{}, [switch]$Lab, [switch]$Generic, [switch]$NoRelationships, $EntityObjects = $manager, [int]$MaxObjects = 0) {
     $instant = [DateTimeOffset]::UtcNow
     $diskRel = if ($Variant -ceq 'os') { $osVolumeRel } else { $directRel }
     $arguments = @{
@@ -319,6 +326,7 @@ function Invoke-Scan([string]$Mode, [string]$Variant = 'os', [hashtable]$Counter
         ReadAlertById = { param($id) @() }
         RelationshipReadMode = $Mode; GraphCounters = $Counters; AllowedPropertiesByClass = @{}
     }
+    if ($MaxObjects -gt 0) { $arguments.MaxObjects = $MaxObjects }
     if ($Generic) { $arguments.EntityClass = $computerClass }
     else {
         $arguments.WindowsMapping = New-Mapping $Variant
@@ -386,15 +394,24 @@ Check ($fallbackCounters.setReadFallback -and $fallbackCounters.readMode -ceq 'p
 Assert-SameResult $expected $fallback 'Fallback result differs from per-source'
 $manager.Mode = 'valid'
 
-# Cap hit is fatal for the scan: no dataset, no fallback. A NIC row on the direct relationship reaches the cap.
+# Budget guard is fatal for the scan: 5 volume targets exceed maxObjects 4, so no SCOM call and no fallback.
 New-Fixture 'direct'
-Add-SynthEdge $directRel.Name $sc[2] $snic | Out-Null
 $manager.Calls = 0
 Reset-PerSourceCalls
-Assert-Fault { Invoke-Scan 'set' 'direct' } 'SCOM_SET_READ_CAP_HIT'
-Check ((Get-PerSourceCalls) -eq 0) 'Cap hit must not fall back to per-source'
+Assert-Fault { Invoke-Scan 'set' 'direct' -MaxObjects 4 } 'SCOM_SET_READ_BUDGET'
+Check ($manager.Calls -eq 0 -and (Get-PerSourceCalls) -eq 0) 'Budget fault must make no call and not fall back'
 
-# NIC target skipped and counted when it fits under the cap; the result still matches per-source.
+# Oversize set result: fall back to per-source for this run, logged, with an identical result.
+New-Fixture 'direct'
+$oversizePer = Invoke-Scan 'perSource' 'direct' -MaxObjects 10
+foreach ($i in 1..80) { Add-SynthEdge $directRel.Name $sc[2] $snic | Out-Null }
+$manager.Calls = 0
+$oversizeCounters = @{}
+$oversize = Invoke-Scan 'set' 'direct' $oversizeCounters -MaxObjects 10
+Check ($oversizeCounters.setReadFallback -and $oversizeCounters.setReadOversize -and
+    $oversizeCounters.readMode -ceq 'perSource' -and $oversizeCounters.graphQueries -eq 22) 'Oversize must fall back to 22 per-source calls and be flagged'
+Assert-SameResult $oversizePer $oversize 'Oversize fallback result differs from per-source'
+Check (-not $fallbackCounters.setReadOversize) 'A thrown SDK call must not be reported as oversize'
 New-Fixture 'direct'
 Remove-Edge $directRel.Name $sv[4]
 Add-SynthEdge $directRel.Name $sc[2] $snic | Out-Null

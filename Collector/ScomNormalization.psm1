@@ -259,6 +259,7 @@ function Get-SCOMGenericScan {
     $outsideEdges = $false
     $graphQueries = 0
     $setFallback = $false
+    $setFallbackReason = ''
     $skippedNonVolume = 0
     $skippedNonOs = 0
     $skippedOutsideSources = 0
@@ -288,11 +289,17 @@ function Get-SCOMGenericScan {
         }
         $setResults = New-Object 'System.Collections.Generic.List[object]'
         try {
+            # Budget check for every set before the first SCOM call, so an over-budget scope makes no call.
             foreach ($spec in $setSpecs) {
-                $sourceIds = @($discovery.Objects | Where-Object { $_.IsInstanceOf($spec.Source) } |
+                $spec.SourceIds = @($discovery.Objects | Where-Object { $_.IsInstanceOf($spec.Source) } |
                     ForEach-Object { [Guid]$_.Id })
-                $targetIds = @($discovery.Objects | Where-Object { $_.IsInstanceOf($spec.Target) } |
+                $spec.TargetIds = @($discovery.Objects | Where-Object { $_.IsInstanceOf($spec.Target) } |
                     ForEach-Object { [Guid]$_.Id })
+                if ($spec.TargetIds.Count -gt $MaxObjects) { throw 'SCOM_SET_READ_BUDGET' }
+            }
+            foreach ($spec in $setSpecs) {
+                $sourceIds = $spec.SourceIds
+                $targetIds = $spec.TargetIds
                 # With nothing served on either side no edge can be reported, so no call is made.
                 if ($sourceIds.Count -eq 0 -or $targetIds.Count -eq 0) { continue }
                 if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_PROFILE_DEADLINE' }
@@ -300,14 +307,15 @@ function Get-SCOMGenericScan {
                 $graphQueries++
                 $read = Read-SCOMRelationshipSet -EntityObjects $EntityObjects -ManagementGroupId $ManagementGroupId `
                     -RelationshipClass $spec.Class -TargetClass $spec.Target -ServedSourceIds $sourceIds `
-                    -ServedTargetIds $targetIds
+                    -ServedTargetIds $targetIds -MaxObjects $MaxObjects
                 $setResults.Add([pscustomobject]@{Spec=$spec; Read=$read})
             }
         }
         catch {
-            if ($_.Exception.Message -cne 'SCOM_SET_READ_UNAVAILABLE') { throw }
-            # An unsupported or failing set call is not a data fault: discard partial results and read this
-            # run per source.
+            # Budget and every other fault fail closed. An unsupported, failing or oversized set call is not a
+            # data fault: discard partial results and read this run per source.
+            if ($_.Exception.Message -cnotin @('SCOM_SET_READ_UNAVAILABLE', 'SCOM_SET_READ_OVERSIZE')) { throw }
+            $setFallbackReason = [string]$_.Exception.Message
             $setFallback = $true
             $setResults.Clear()
             $graphQueries = 0
@@ -423,6 +431,7 @@ function Get-SCOMGenericScan {
         $GraphCounters['readMode'] = $(if ($RelationshipReadMode -ceq 'set' -and -not $setFallback) { 'set' } else { 'perSource' })
         $GraphCounters['graphQueries'] = $graphQueries
         $GraphCounters['setReadFallback'] = $setFallback
+        $GraphCounters['setReadOversize'] = ($setFallbackReason -ceq 'SCOM_SET_READ_OVERSIZE')
         $GraphCounters['skippedNonVolumeTargets'] = $skippedNonVolume
         $GraphCounters['skippedNonOsTargets'] = $skippedNonOs
         $GraphCounters['skippedOutsideScopeSources'] = $skippedOutsideSources

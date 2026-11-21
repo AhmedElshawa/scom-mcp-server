@@ -229,6 +229,7 @@ try {
             graphQueries=[int]$graph.graphQueries
             setRead=[bool]($graph.readMode -ceq 'set')
             setReadFallback=[bool]$graph.setReadFallback
+            setReadOversize=[bool]$graph.setReadOversize
             skippedNonVolumeTargets=[int]$graph.skippedNonVolumeTargets
             skippedNonOsTargets=[int]$graph.skippedNonOsTargets
             skippedOutsideScopeSources=[int]$graph.skippedOutsideScopeSources
