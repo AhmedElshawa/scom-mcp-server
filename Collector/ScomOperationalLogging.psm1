@@ -40,8 +40,9 @@ function Write-SCOMOperationalEvent {
         [Parameter(Mandatory)] [object]$Log,
         [Parameter(Mandatory)]
         [ValidateSet('profile.started','configuration.validated','source.connected','scan.completed','profile.failed',
-            'setup.started','setup.completed','setup.failed')]
-        [string]$Event
+            'setup.started','setup.completed','setup.failed','scan.setReadFallback')]
+        [string]$Event,
+        [hashtable]$Counters = @{}
     )
     $directory=Assert-SCOMLogDirectory $Log.Directory
     $path=Join-Path $directory 'scom-collector-profile.jsonl'
@@ -61,6 +62,18 @@ function Write-SCOMOperationalEvent {
         schemaVersion=1; timestampUtc=[DateTimeOffset]::UtcNow.ToString('o')
         component=$(if ($Event.StartsWith('setup.',[StringComparison]::Ordinal)) {'setup'} else {'collectorProfile'})
         event=$Event
+    }
+    if ($Counters.Count -gt 0) {
+        # Only fixed, bounded, non-sensitive scalars: names are validated identifiers, values are numbers or booleans.
+        $safe=[ordered]@{}
+        foreach ($name in ($Counters.Keys | Sort-Object)) {
+            $value=$Counters[$name]
+            if ([string]$name -cnotmatch '^[a-zA-Z]{1,48}$' -or ($value -isnot [int] -and $value -isnot [bool])) {
+                throw 'SCOM_LOG_COUNTER_INVALID'
+            }
+            $safe[[string]$name]=$value
+        }
+        $record['counters']=$safe
     }
     $bytes=(New-Object Text.UTF8Encoding($false)).GetBytes(($record | ConvertTo-Json -Compress)+"`n")
     $stream=$null

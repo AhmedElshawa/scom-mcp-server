@@ -2,6 +2,7 @@ Set-StrictMode -Version Latest
 Import-Module (Join-Path $PSScriptRoot 'ScomSdkReader.psm1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'ScomMetricProfile.psm1') -ErrorAction Stop
 Import-Module (Join-Path $PSScriptRoot 'ScomWindowsProjection.psm1') -ErrorAction Stop
+Import-Module (Join-Path $PSScriptRoot 'ScomSetRelationshipReader.psm1') -ErrorAction Stop
 
 function Get-SCOMGenericScan {
     [CmdletBinding()]
@@ -19,8 +20,14 @@ function Get-SCOMGenericScan {
         [bool] $EnumerationQueryContractVerified = $false,
         [object] $EntityClass = $null,
         [Parameter(Mandatory)] [object] $Request,
+        # Called once, with no arguments, and returns every active (not closed) alert in the management group.
+        # Alerts are then grouped by parent and kept only for discovered objects.
         [Parameter(Mandatory)] [scriptblock] $ReadActiveAlerts,
         [Parameter(Mandatory)] [scriptblock] $ReadAlertById,
+        [string] $RelationshipReadMode = 'perSource',
+        # Optional collector-side counters, filled in for the caller. They are never part of the scan object
+        # because the .NET scan contract rejects unknown members.
+        [hashtable] $GraphCounters = $null,
         [hashtable] $AllowedPropertiesByClass = @{},
         [hashtable] $MetricMappingsByClass = @{},
         [object[]] $AdditionalRelationshipClasses = @(),
@@ -47,6 +54,11 @@ function Get-SCOMGenericScan {
         $null -eq $WindowsMapping -or $AdditionalRelationshipClasses.Count -ne 2 -or
         $AdditionalRelationshipContractVerified -or $MetricMappingsByClass.Count -ne 0 -or $IncludeAlertDescriptions)) {
         throw 'SCOM_HOSTING_LAB_CONFIGURATION_INVALID'
+    }
+    if ($RelationshipReadMode -cnotin @('perSource','set') -or
+        ($RelationshipReadMode -ceq 'set' -and ($HostingLabPreview -or $InventoryKind -ne 'supportedWindows' -or
+            $null -eq $WindowsMapping -or $AdditionalRelationshipClasses.Count -eq 0))) {
+        throw 'SCOM_SET_READ_MODE_INVALID'
     }
     if ($ManagementGroupId -eq [Guid]::Empty -or -not $ScopeVisibilityVerified -or
         ($ScopeKind -eq 'group' -and (-not $MembershipQueryContractVerified -or $GroupId -eq [Guid]::Empty -or
@@ -181,12 +193,17 @@ function Get-SCOMGenericScan {
             if ($metricSamples -gt $MaxMetricSamples) { throw 'SCOM_PROFILE_METRIC_BUDGET' }
             foreach ($series in $metricResult.Series) { $metricSeries.Add($series) }
         }
-        # Callback reads active alerts for exactly this discovered object, never
-        # an unscoped management-group alert enumeration.
-        $rows = @(& $ReadActiveAlerts $object)
-        if ($rows.Count -gt $MaxAlerts) { throw 'SCOM_PROFILE_ALERT_BUDGET' }
-        foreach ($alert in $rows) {
-            $normalized = ConvertTo-SCOMObservedAlert -Alert $alert -ExpectedObjectId ([Guid]$object.Id) `
+    }
+    if (-not $HostingLabPreview) {
+        if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_PROFILE_DEADLINE' }
+        # One bulk active-alert read serves both relationship read modes. Alerts whose parent is not a
+        # discovered object are outside the approved scope and are dropped, never normalized.
+        foreach ($alert in @(& $ReadActiveAlerts)) {
+            $parent = [Guid]::Empty
+            if ($null -eq $alert -or -not [Guid]::TryParse([string]$alert.MonitoringObjectId, [ref]$parent) -or
+                $parent -eq [Guid]::Empty) { throw 'SCOM_ALERT_ID_OR_PARENT_INVALID' }
+            if (-not $served.Contains($parent)) { continue }
+            $normalized = ConvertTo-SCOMObservedAlert -Alert $alert -ExpectedObjectId $parent `
                 -ObservedAtUtc ([DateTimeOffset]::UtcNow) -IncludeDescription $IncludeAlertDescriptions
             if ($normalized.resolutionState -eq 255) { throw 'SCOM_PROFILE_ACTIVE_ALERT_QUERY_MISMATCH' }
             $key = [Guid]$normalized.id
@@ -241,7 +258,88 @@ function Get-SCOMGenericScan {
     }
     $outsideEdges = $false
     $graphQueries = 0
-    foreach ($class in $AdditionalRelationshipClasses) {
+    $setFallback = $false
+    $setFallbackReason = ''
+    $skippedNonVolume = 0
+    $skippedNonOs = 0
+    $skippedOutsideSources = 0
+    $perSourceClasses = @($AdditionalRelationshipClasses)
+    if ($RelationshipReadMode -ceq 'set') {
+        # Only the reviewed OS and volume hosting relationships are read as sets. Names and classes come from
+        # windowsMapping; any other configured relationship keeps the per-source reader.
+        $setSpecs = New-Object 'System.Collections.Generic.List[object]'
+        $perSourceClasses = @()
+        foreach ($class in $AdditionalRelationshipClasses) {
+            $name = [string]$class.Name
+            $spec = $null
+            if ($name -ceq [string]$WindowsMapping.computerHostsOsRelationship) {
+                $spec = @{Source=$WindowsComputerClass; Target=$WindowsOsClass; Kind='os'}
+            }
+            elseif ($null -ne $WindowsMapping.PSObject.Properties['computerHostsVolumeRelationship'] -and
+                $name -ceq [string]$WindowsMapping.computerHostsVolumeRelationship) {
+                $spec = @{Source=$WindowsComputerClass; Target=$WindowsVolumeClass; Kind='volume'}
+            }
+            elseif ($null -ne $WindowsMapping.PSObject.Properties['osHostsVolumeRelationship'] -and
+                $name -ceq [string]$WindowsMapping.osHostsVolumeRelationship) {
+                $spec = @{Source=$WindowsOsClass; Target=$WindowsVolumeClass; Kind='volume'}
+            }
+            if ($null -eq $spec) { $perSourceClasses += $class; continue }
+            $spec.Class = $class
+            $setSpecs.Add($spec)
+        }
+        $setResults = New-Object 'System.Collections.Generic.List[object]'
+        try {
+            # Budget check for every set before the first SCOM call, so an over-budget scope makes no call.
+            foreach ($spec in $setSpecs) {
+                $spec.SourceIds = @($discovery.Objects | Where-Object { $_.IsInstanceOf($spec.Source) } |
+                    ForEach-Object { [Guid]$_.Id })
+                $spec.TargetIds = @($discovery.Objects | Where-Object { $_.IsInstanceOf($spec.Target) } |
+                    ForEach-Object { [Guid]$_.Id })
+                if ($spec.TargetIds.Count -gt $MaxObjects) { throw 'SCOM_SET_READ_BUDGET' }
+            }
+            foreach ($spec in $setSpecs) {
+                $sourceIds = $spec.SourceIds
+                $targetIds = $spec.TargetIds
+                # With nothing served on either side no edge can be reported, so no call is made.
+                if ($sourceIds.Count -eq 0 -or $targetIds.Count -eq 0) { continue }
+                if ($watch.Elapsed.TotalSeconds -ge $DeadlineSeconds) { throw 'SCOM_PROFILE_DEADLINE' }
+                if ($graphQueries -ge $MaxGraphQueries) { throw 'SCOM_PROFILE_GRAPH_QUERY_BUDGET' }
+                $graphQueries++
+                $read = Read-SCOMRelationshipSet -EntityObjects $EntityObjects -ManagementGroupId $ManagementGroupId `
+                    -RelationshipClass $spec.Class -TargetClass $spec.Target -ServedSourceIds $sourceIds `
+                    -ServedTargetIds $targetIds -MaxObjects $MaxObjects
+                $setResults.Add([pscustomobject]@{Spec=$spec; Read=$read})
+            }
+        }
+        catch {
+            # Budget and every other fault fail closed. An unsupported, failing or oversized set call is not a
+            # data fault: discard partial results and read this run per source.
+            if ($_.Exception.Message -cnotin @('SCOM_SET_READ_UNAVAILABLE', 'SCOM_SET_READ_OVERSIZE')) { throw }
+            $setFallbackReason = [string]$_.Exception.Message
+            $setFallback = $true
+            $setResults.Clear()
+            $graphQueries = 0
+            $perSourceClasses = @($AdditionalRelationshipClasses)
+        }
+        foreach ($entry in $setResults) {
+            $read = $entry.Read
+            if ($entry.Spec.Kind -ceq 'volume') { $skippedNonVolume += $read.SkippedNonTarget }
+            else { $skippedNonOs += $read.SkippedNonTarget }
+            $skippedOutsideSources += $read.SkippedOutsideScope
+            if ($read.OutsideScopeTargets -gt 0) { $outsideEdges = $true }
+            foreach ($edge in $read.Relationships) {
+                $key = [Guid]$edge.Id
+                if ($relationships.ContainsKey($key)) { throw 'SCOM_PROFILE_RELATIONSHIP_DUPLICATE' }
+                if ($relationships.Count -ge $MaxObjects) { throw 'SCOM_PROFILE_RELATIONSHIP_BUDGET' }
+                $relationships.Add($key, [pscustomobject]@{
+                    id=$key.ToString('D'); className=[string]$entry.Spec.Class.Name
+                    sourceId=([Guid]$edge.SourceObject.Id).ToString('D')
+                    targetId=([Guid]$edge.TargetObject.Id).ToString('D')
+                })
+            }
+        }
+    }
+    foreach ($class in $perSourceClasses) {
         foreach ($source in $discovery.Objects) {
             if ($HostingLabPreview) {
                 $sourceClass = $WindowsComputerClass
@@ -298,6 +396,8 @@ function Get-SCOMGenericScan {
     }
     $windows = $null
     if ($null -ne $WindowsMapping) {
+        # Completeness is decided only by set reconciliation in ConvertTo-SCOMWindowsInventory. The number of
+        # relationship rows a set read returned is never evidence that the inventory is complete.
         $projection = ConvertTo-SCOMWindowsInventory -Objects $discovery.Objects -ObservedObjects $objects.ToArray() `
             -Relationships @($relationships.Values) -ExpectedComputerIds @($expectedComputers) `
             -ComputerClass $WindowsComputerClass -OperatingSystemClass $WindowsOsClass -VolumeClass $WindowsVolumeClass `
@@ -327,6 +427,15 @@ function Get-SCOMGenericScan {
         $result.expectedComputerIds=@($expectedComputers | Sort-Object | ForEach-Object { $_.ToString('D') })
     }
     if ($InventoryKind -eq 'supportedWindows') { $result.inventoryKind=$InventoryKind }
+    if ($null -ne $GraphCounters) {
+        $GraphCounters['readMode'] = $(if ($RelationshipReadMode -ceq 'set' -and -not $setFallback) { 'set' } else { 'perSource' })
+        $GraphCounters['graphQueries'] = $graphQueries
+        $GraphCounters['setReadFallback'] = $setFallback
+        $GraphCounters['setReadOversize'] = ($setFallbackReason -ceq 'SCOM_SET_READ_OVERSIZE')
+        $GraphCounters['skippedNonVolumeTargets'] = $skippedNonVolume
+        $GraphCounters['skippedNonOsTargets'] = $skippedNonOs
+        $GraphCounters['skippedOutsideScopeSources'] = $skippedOutsideSources
+    }
     [pscustomobject]$result
 }
 

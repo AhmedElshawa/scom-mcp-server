@@ -1,0 +1,61 @@
+{
+  "purpose": "Phase 0 read-only spike against the real SCOM SDK before redesigning the set reader",
+  "method": "GetRelationshipObjects<MonitoringObject>(relationship, DerivedClassTraversalDepth.None, ObjectQueryOptions.Default), called once per relationship, no MaxResultCount",
+  "scom": {
+    "version": "SCOM 2025",
+    "sdkAssemblyVersion": "7.0.5000.0"
+  },
+  "objectQueryOptionsDefault": {
+    "available": true,
+    "maxResultCount": 0
+  },
+  "relatedFinding": {
+    "call": "GetRelationshipObjects<T>(ManagementPackRelationship, DerivedClassTraversalDepth, ObjectQueryOptions)",
+    "condition": "ObjectQueryOptions.MaxResultCount set to a non-zero value",
+    "result": "System.NotImplementedException: MaxResultCount is not supported with this method",
+    "thrownFrom": "ObjectQueryOptions.ValidateQueryOptionsForRelationships"
+  },
+  "rowType": "List<EnterpriseManagementRelationshipObject<MonitoringObject>>",
+  "rowMemberNames": [
+    "HasChanges",
+    "Id",
+    "IsDeleted",
+    "IsNew",
+    "LastModified",
+    "ManagementGroup",
+    "ManagementGroupId",
+    "RelationshipId",
+    "SourceObject",
+    "TargetObject",
+    "Values"
+  ],
+  "relationships": [
+    {
+      "name": "Microsoft.Windows.ComputerHostsOperatingSystem",
+      "succeeded": true,
+      "rowCount": 3,
+      "durationMs": 91,
+      "targetLeastDerivedClassCounts": {
+        "Microsoft.Windows.OperatingSystem": 3
+      },
+      "rowsNotInstanceOfOperatingSystemClass": 0,
+      "rowsWithComputerSource": 3,
+      "firstRowIsDeleted": false
+    },
+    {
+      "name": "Microsoft.Windows.ComputerHostsLogicalDevice",
+      "succeeded": true,
+      "rowCount": 9,
+      "durationMs": 65,
+      "targetLeastDerivedClassCounts": {
+        "Microsoft.Windows.Server.10.0.NetworkAdapter": 4,
+        "Microsoft.Windows.Server.10.0.LogicalDisk": 5
+      },
+      "rowsNotInstanceOfVolumeClass": 4,
+      "rowsNotInstanceOfOperatingSystemClass": 9,
+      "rowsWithComputerSource": 9,
+      "firstRowIsDeleted": false
+    }
+  ],
+  "conclusion": "Both set calls succeed with ObjectQueryOptions.Default. The logical-device relationship also returns network adapters, so non-target rows must be skipped and counted."
+}

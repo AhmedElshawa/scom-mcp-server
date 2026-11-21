@@ -326,6 +326,15 @@ function Resolve-ScomMappingObservation {
     foreach ($property in $TemplateMapping.PSObject.Properties) {
         if ($skip -notcontains $property.Name) { $mapping[$property.Name] = $property.Value }
     }
+    # Set reads need both hosting relationships observed. Non-disk rows sharing the disk relationship would reach the
+    # set-read cap (expected targets + 1) and fail closed, so that case stays per-source.
+    $readMode = 'perSource'; $readModeReason = 'RELATIONSHIP_NOT_OBSERVED'
+    if ($osEdges.Count -gt 0 -and $diskEdges.Count -gt 0) {
+        if ($nonDisk.Count -gt 0) { $readModeReason = 'NON_DISK_EDGES_SHARE_DISK_RELATIONSHIP' }
+        else { $readMode = 'set'; $readModeReason = 'BOTH_RELATIONSHIPS_OBSERVED' }
+    }
+    $result.relationshipReadMode = $readMode
+    $result.relationshipReadModeReason = $readModeReason
     $result.windowsMapping = $mapping
     $result.allowedPropertiesByClass = $allowed
     $result.additionalRelationshipNames = @($osRelationships[0], $diskRelationship)
@@ -356,6 +365,7 @@ function New-ScomWorkerDocument {
     Set-ScomJsonValue $configuration 'allowedPropertiesByClass' ([pscustomobject]$allowed)
     Set-ScomJsonValue $configuration 'additionalRelationshipNames' @($Resolution.additionalRelationshipNames)
     Set-ScomJsonValue $configuration 'windowsMapping' ([pscustomobject]$Resolution.windowsMapping)
+    Set-ScomJsonValue $configuration 'relationshipReadMode' $(if ($Resolution.Contains('relationshipReadMode')) { $Resolution.relationshipReadMode } else { 'perSource' })
     $document
 }
 
@@ -372,6 +382,9 @@ function ConvertTo-ScomSummaryLines {
         $lines.Add(('  Disk hosting     : {0} ({1}-hosted); disk classes {2}; {3} disk(s), {4} non-disk logical device edge(s)' -f
                 $facts.diskRelationship, $facts.diskHostedBy, (@($facts.diskClasses) -join ', '), $facts.diskCount, $facts.nonDiskLogicalDeviceEdges))
         $lines.Add(('  Computer classes : {0}' -f (@($facts.computerClasses) -join ', ')))
+    }
+    if ($Resolution.Contains('relationshipReadMode')) {
+        $lines.Add(('  Relationship read: {0} ({1})' -f $Resolution.relationshipReadMode, $Resolution.relationshipReadModeReason))
     }
     $memory = $Resolution.units.memory
     if ($null -ne $memory) {
@@ -425,6 +438,8 @@ function Invoke-ScomMappingProfile {
             powerShellVersion = $PSVersionTable.PSVersion.ToString()
             scopeKind = $ScopeKind; groupId = $(if ($ScopeKind -eq 'group') { $GroupId } else { $null })
             requestedSampleComputers = $SampleComputers; deadlineSeconds = $DeadlineSeconds
+            relationshipReadMode = $(if ($resolution.Contains('relationshipReadMode')) { $resolution.relationshipReadMode } else { 'perSource' })
+            relationshipReadModeReason = $(if ($resolution.Contains('relationshipReadModeReason')) { $resolution.relationshipReadModeReason } else { 'RELATIONSHIP_NOT_OBSERVED' })
             summaryLines = $summary; observation = $Observation; resolution = $resolution
         }
         Write-ScomUtf8File $evidencePath ($evidence | ConvertTo-Json -Depth 20)

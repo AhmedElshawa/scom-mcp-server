@@ -64,6 +64,15 @@ try {
             throw 'Reusable Setup fixed-event contract, sanitization or stdout purity failed.'
         }
     }
+    $null=Write-SCOMOperationalEvent -Log $log -Event 'scan.setReadFallback' -Counters @{graphQueries=22;setReadFallback=$true}
+    $counterText=@(Get-Content -LiteralPath (Join-Path $directory 'scom-collector-profile.jsonl'))[-1]
+    $counterLine=$counterText | ConvertFrom-Json
+    if ($counterLine.event -cne 'scan.setReadFallback' -or $counterLine.counters.graphQueries -ne 22 -or
+        $counterLine.counters.setReadFallback -ne $true -or $counterText.Contains($directory)) {
+        throw 'Bounded scalar counters were not logged as specified.'
+    }
+    Assert-LogFault { Write-SCOMOperationalEvent -Log $log -Event 'scan.completed' -Counters @{graphQueries='DO_NOT_LOG_CUSTOMER_TOKEN'} }
+    Assert-LogFault { Write-SCOMOperationalEvent -Log $log -Event 'scan.completed' -Counters @{'bad name'=1} }
     if (@(Get-ChildItem -LiteralPath $directory | Where-Object {
         $_.Name -notmatch '^scom-collector-profile\.jsonl(?:\.[12])?$'
     }).Count -ne 0) {

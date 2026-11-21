@@ -93,6 +93,10 @@ foreach ($flag in 'scopeVisibilityVerified', 'membershipQueryContractVerified', 
 Assert-That ($map.verified -eq $false -and $map.agentMonitoringVerified -eq $false) 'mapping flags must be false after generation'
 Assert-That (Test-Path -LiteralPath "$($run.Path).evidence.json") 'evidence file must be written'
 Assert-That (@($run.Outcome.Summary | Where-Object { $_ -match 'local consumption only' }).Count -eq 1) 'summary must say the bounds are local only'
+$runEvidence = Get-Content -LiteralPath "$($run.Path).evidence.json" -Raw | ConvertFrom-Json
+Assert-That ($run.Mapping.relationshipReadMode -eq 'set') 'both relationships observed must write set read mode'
+Assert-That ($runEvidence.relationshipReadMode -eq 'set' -and $runEvidence.relationshipReadModeReason -eq 'BOTH_RELATIONSHIPS_OBSERVED') 'evidence must record the chosen read mode and reason'
+Assert-That (@($run.Outcome.Summary | Where-Object { $_ -match 'Relationship read: set' }).Count -eq 1) 'summary must state the read mode'
 
 # Group scope keeps the group id and does not approve the whole management group.
 $group = Invoke-Generator (New-Observation (Get-Many 1 { param($i) New-Computer 'g1' })) 'group' 'group' '11111111-2222-3333-4444-555555555555'
@@ -152,6 +156,9 @@ Assert-That ($notDisk.Outcome.ExitCode -eq 4) 'a hosted device whose class does 
 $nics = Invoke-Generator (New-Observation (Get-Many 2 { param($i) New-Computer "n$i" -NetworkAdapter })) 'nics'
 Assert-That ($nics.Outcome.ExitCode -eq 0 -and @($nics.Outcome.Resolution.warnings | Where-Object { $_ -match 'non-disk' }).Count -eq 1) 'non-disk logical devices must be ignored with a warning'
 Assert-That ($nics.Mapping.windowsMapping.computerHostsVolumeRelationship -eq 'Microsoft.Windows.ComputerHostsLogicalDevice' -and @($nics.Mapping.allowedPropertiesByClass.PSObject.Properties.Name) -notcontains 'Microsoft.Windows.NetworkAdapter') 'network adapters must not enter the mapping or the allow-list'
+Assert-That ($nics.Mapping.relationshipReadMode -eq 'perSource') 'non-disk edges sharing the disk relationship must keep per-source reads'
+$nicEvidence = Get-Content -LiteralPath "$($nics.Path).evidence.json" -Raw | ConvertFrom-Json
+Assert-That ($nicEvidence.relationshipReadMode -eq 'perSource' -and $nicEvidence.relationshipReadModeReason -eq 'NON_DISK_EDGES_SHARE_DISK_RELATIONSHIP') 'evidence must record why set reads were not chosen'
 
 # Derived relationship types are reported.
 $observation = New-Observation (Get-Many 1 { param($i) New-Computer 'r1' })
