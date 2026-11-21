@@ -945,6 +945,10 @@ Ask the nine prompts in [copilot-studio-integration, Agent acceptance test](copi
 and compare against the pass criteria. A transient "source unavailable" answer while a
 collection commits is correct behaviour, not a failure.
 
+![Test pane answer to "How many servers do we have?" with the server table, health summary and Data status block; server names redacted](screenshots/readme-agent-count.png)
+
+*The agent's answer to "How many servers do we have?", including the Data status block (server names redacted).*
+
 ![Test pane answer to "Which servers are nearest end of support?" with the lifecycle table and "Not in the lifecycle catalog." for the unmapped server; server names redacted](screenshots/readme-agent-answer.png)
 
 *The agent's answer to "Which servers are nearest end of support?" (server names redacted; the Data status block follows below the visible area).*
