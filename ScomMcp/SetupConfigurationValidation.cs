@@ -54,6 +54,7 @@ public static class SetupConfigurationValidation
             throw new InvalidOperationException("Hosting lab preview must be explicitly paired in receiver and worker settings.");
         if (model.OfflineHostingPreview)
             ValidateHostingLabPreview(profile, model);
+        ValidateRelationshipReadMode(profile);
         var mcpLogs = ReviewedLogDirectory(receiverDocument.RootElement.GetProperty("OperationalLogging"));
         var workerLogs = ReviewedLogDirectory(workerDocument.RootElement.GetProperty("operationalLogging"));
         var profileLogs = ReviewedLogDirectory(profile.GetProperty("operationalLogging"));
@@ -108,6 +109,18 @@ public static class SetupConfigurationValidation
     internal static bool HostingLabPreviewEnabled(JsonElement profile) =>
         profile.ValueKind == JsonValueKind.Object &&
         profile.TryGetProperty("hostingLabPreview", out var value) && value.GetBoolean();
+
+    // Absent means perSource. The collector validates the same enum; set mode needs the reviewed Windows mapping.
+    private static void ValidateRelationshipReadMode(JsonElement profile)
+    {
+        if (!profile.TryGetProperty("relationshipReadMode", out var mode)) return;
+        var value = mode.ValueKind == JsonValueKind.String ? mode.GetString() : null;
+        if (value is not ("perSource" or "set"))
+            throw new InvalidOperationException("Relationship read mode must be perSource or set.");
+        if (value == "set" && (HostingLabPreviewEnabled(profile) ||
+            !profile.TryGetProperty("windowsMapping", out var mapping) || mapping.ValueKind != JsonValueKind.Object))
+            throw new InvalidOperationException("Set relationship reads require the reviewed Windows mapping and no lab preview.");
+    }
 
     private static void ValidateHostingLabPreview(JsonElement profile, ReadModelSettings model)
     {

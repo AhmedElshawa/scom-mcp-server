@@ -28,7 +28,7 @@ $collector = Join-Path $output 'collector'
 $null = New-Item -ItemType Directory -Path $collector
 foreach ($name in @('Collect-SCOMSnapshot.ps1', 'collector.example.json', 'Get-SCOMCompatibilityReport.ps1', 'Test-SCOMPreflight.ps1', 'Get-SCOMMetricCompatibilityReport.ps1',
     'ScomSdkReader.psm1', 'ScomNormalization.psm1', 'ScomMetricProfile.psm1', 'ScomWindowsProjection.psm1', 'ScomOperationalLogging.psm1',
-    'Invoke-SCOMGenericGroupProfile.ps1')) {
+        'ScomSetRelationshipReader.psm1', 'Invoke-SCOMGenericGroupProfile.ps1')) {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot "Collector\$name") -Destination $collector
 }
 $server = Join-Path $output 'server'

@@ -36,6 +36,8 @@ try {
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomGroupMembership.ps1')
     & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomRelationshipReader.ps1')
     if ($LASTEXITCODE -ne 0) { throw 'Relationship reader validation failed.' }
+    & $powerShell -NoProfile -File (Join-Path $PSScriptRoot 'Collector\Validate-ScomSetRelationshipReader.ps1')
+    if ($LASTEXITCODE -ne 0) { throw 'Set relationship reader validation failed.' }
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomObjectNormalization.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomAlertNormalization.ps1')
     & (Join-Path $PSScriptRoot 'Collector\Validate-ScomGenericProfile.ps1')

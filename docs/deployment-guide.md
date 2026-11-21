@@ -361,6 +361,8 @@ values above so the file can be reviewed before you run it.
 
 The generated worker.json is a staging input for Configure (Step 7), which fills identity, endpoint, script hash and paths; do not run --validate-setup on it directly.
 
+The generator also writes `profile.configuration.relationshipReadMode` (`set` whenever it observed both the OS and disk hosting relationships, including when non-disk devices share the disk relationship because the reader skips and counts them; otherwise `perSource`) and records the choice and its reason in `worker.json.evidence.json`; `set` was lab-validated on SCOM 2025 (identical inventory to `perSource`, 2 SDK calls instead of 22), and you may set it to `perSource` before Configure ([sizing-and-scope.md](sizing-and-scope.md)).
+
 **Generate the mapping, review it, approve it.** The generator reads your SCOM read-only,
 works out the class, relationship and property names and the memory and disk units, and writes
 a complete `worker.json` with all six verification flags `false`. Run it as `<WORKER_ACCOUNT>`
