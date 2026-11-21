@@ -81,10 +81,12 @@ not mistaken for chat-only acceptance:
   exact stopped task/action/identity, absence of the worker and the stale
   preboot status, the operator explicitly rearmed and started it; the agent
   confirmed a fresh postboot dataset at 08:03:35Z with 3/3 expected coverage.
-- This supports the persisted fail-closed gate and deliberate recovery path. It
-  does **not** demonstrate automatic reboot recovery. Clean cooperative stop
-  followed by reboot with the task left enabled is the documented planned path,
-  but has not yet been live-tested.
+- This supports the persisted fail-closed gate and the earlier operator-driven
+  recovery path. That reboot predates the self-healing worker: current builds
+  recover a stale `running` marker automatically (`WORKER_STALE_MARKER_RECOVERED`),
+  which is covered by synthetic tests; see the pull request that introduced it for
+  the lab reboot result. A clean cooperative stop followed by reboot has not been
+  live-tested.
 
 The first preview's observed collection temporarily made readers unavailable
 between ingestion Begin and commit (about 35 seconds in the observed run, not a
@@ -115,7 +117,7 @@ delete state or point the receiver at the worker checkpoint to bypass startup.
 | SCOM compatibility and scope | Exact SDK/management-pack versions, read-only identity, independently verified complete expected membership and reviewed relationship/property contracts. Do not enable verification flags by assumption. |
 | Inventory acceptance | Successful first commit and authenticated source status, pages, details and summary with matching dataset/count evidence and honest coverage. Lab success does not replace customer evidence. |
 | Continuous operation | Supervised recurring collection, subsequent datasets and membership changes, failure monitoring, freshness/cadence suitability, disk budgets and certificate rotation. Observed repeated publications do not establish clean logoff/reboot recovery or a continuous-availability SLA. |
-| Recovery and upgrade | Protected backups, controlled package replacement, checkpoint/policy compatibility and approved failure/restore rehearsal. Operator-driven rearm after an unclean reboot has lab evidence; automatic rearm is intentionally absent, and the planned clean-stop/reboot path remains untested. Never delete pinned state to make checks pass. |
+| Recovery and upgrade | Protected backups, controlled package replacement, checkpoint/policy compatibility and approved failure/restore rehearsal. Operator-driven rearm after an unclean reboot has lab evidence from before the self-healing worker; current builds recover a stale `running` marker automatically and require rearm only after a terminal failure (`WORKER_RECOVERY_REFUSED`). Automatic recovery is covered by synthetic tests; lab reboot evidence is in the pull request that introduced it, and the planned clean-stop/reboot path remains untested. Never delete pinned state to make checks pass. |
 | Copilot Studio identity | Intended per-caller delegated authorization and denied-caller/scope behavior through the real connector. |
 | Metrics, if enabled | Timestamp semantics, rule/unit mappings, raw observation parity and approved 14-day workload/budget tests. Inventory acceptance alone is insufficient. |
 | OS lifecycle | Implemented curated Windows Server profile, not universal OS support. Validate actual captions/editions, catalog freshness/maintenance ownership, unknown/missing counts and Studio interpretation; no entitlement or patch-compliance claim. |

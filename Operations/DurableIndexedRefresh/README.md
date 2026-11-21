@@ -64,15 +64,28 @@ $workerCredential = Get-Credential -UserName 'DOMAIN\approved-worker'
     -Credential $workerCredential
 ```
 
-Registration creates one task with an `AtStartup` trigger,
+Registration creates one task with an `AtStartup` trigger delayed **3 minutes** (so
+the network, SCOM SDK and certificate store are ready after a reboot),
 `StartWhenAvailable`, `IgnoreNew` duplicate-instance behavior, no execution time
-limit, and **zero automatic restarts**. Deferred attempts retry only within the
-current worker process after bounded backoff and checkpoint reconciliation.
-Task Scheduler does not restart a failed process. The first run is at system startup
+limit, and **automatic restart on failure: 3 restarts, 5 minutes apart**. It also
+creates the Windows Event Log source `ScomMcpWorker` (Application log) when missing;
+this needs elevation, and the worker account only writes events to it.
+Deferred attempts still retry within the current worker process after bounded
+backoff and checkpoint reconciliation. The first run is at system startup
 unless `-StartNow` is explicitly supplied. Task Scheduler keeps the supplied
 task credential using Windows-protected storage; the scripts do not save it to
 source, configuration, task arguments, or logs. Never pass a password as a
 script parameter or command-line argument.
+
+Worker exit codes: `0` published or already running; `1` transient failure
+(network, timeout, I/O, exhausted deferrals, lock held by an unverifiable process);
+`2` configuration or attestation failure (invalid JSON or arguments, publisher
+certificate/scope/token failures, HTTP 401/403, refused recovery). Task Scheduler
+restarts on **any** non-zero exit and cannot filter by exit code, so "not
+restartable" (`2`) is enforced by the persisted rearm gate: a terminal failure sets
+`rearmRequired`, restarted instances refuse at once with `WORKER_RECOVERY_REFUSED`
+(exit `2`, no source access) and use up the three restarts. After the restarts are
+used the task is not restarted again until the next startup or a manual start.
 
 If registration or the optional `-StartNow` launch reports an error, inspect the
 exact task and protected state directory before retrying. A task may already be
@@ -80,12 +93,22 @@ registered after a start-request failure.
 
 The worker's existing checkpoint lease and reconciliation are used after startup.
 An interrupted or ambiguous publication is reconciled before another source
-scan; checkpoint policy conflicts and unexpected errors stop the worker. There
-is no automatic process restart after a fatal exit: this intentionally prevents
-an unattended restart storm. The startup task invocation is still attempted
-after reboot, but a persisted terminal failure or prior `running` state blocks
-before configuration load or source work. Only a known clean stop permits normal
-startup recovery.
+scan; checkpoint policy conflicts and unexpected errors stop the worker. The
+restart budget is bounded (3 × 5 minutes) to prevent an unattended restart storm.
+
+**Self-healing after a reboot or crash.** While running, the worker holds an
+exclusive `worker.lock` and writes `pid`, `processStartTimeUtc`, `bootId`,
+`hostName` and `heartbeatUtc` (every 30 seconds) to `worker.status.json`. A leftover
+`running` marker is recovered automatically when the process is gone, the PID was
+reused, the boot id or host changed, or the heartbeat is older than 3 ×
+`schedule.interval`: the worker logs `WORKER_STALE_MARKER_RECOVERED` (Event Log
+`2001`), rearms itself and continues. A live worker with a fresh heartbeat makes a
+second start exit `0` (`WORKER_ALREADY_RUNNING`). A lock held by a process that cannot
+be verified is refused (exit `1`) and never taken over. Only a persisted **terminal**
+failure blocks the start (`WORKER_RECOVERY_REFUSED`, Event Log `3001`). The heartbeat
+is an in-process timer: it shows the process is alive, not that collection is
+progressing. Event Log events: `1001` started, `2001` recovered or restartable
+stop, `3001` non-restartable failure.
 
 ```powershell
 .\Get-ScomWorkerTaskStatus.ps1
@@ -95,16 +118,16 @@ startup recovery.
 ```
 
 Each command selects the exact task name/path and verifies the ownership marker,
-worker action, explicit password logon identity, duplicate policy, and zero
-restart count before acting. Stop creates a cooperative request in protected
+worker action, explicit password logon identity, duplicate policy, and the restart
+contract (3 restarts, 5 minutes apart) before acting. Stop creates a cooperative request in protected
 runtime state and waits for a clean worker stop; it never uses broad process
 kills. A timeout, power loss, malformed status or mismatched task is an unknown
 outcome and remains gated. The stop request cannot guarantee cancellation of
 work already accepted by a remote/backend system. Unregister removes only that
 task and deliberately preserves its protected status, logs, and checkpoint.
 
-After diagnosing a terminal failure and reconciling any ambiguous publication,
-rearm only the exact stopped owned task:
+After diagnosing a **terminal** failure (log shows `WORKER_RECOVERY_REFUSED`) and
+reconciling any ambiguous publication, rearm only the exact stopped owned task:
 
 ```powershell
 .\Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure
@@ -184,15 +207,19 @@ The following is bounded lab evidence, not a guarantee or production acceptance:
   fresh postboot dataset collected at 08:03:35Z with complete 3/3 expected
   coverage. This verifies the guarded, operator-driven recovery path only.
 
-**Reboot procedure:** for a planned reboot, request a cooperative clean stop,
-verify task/runtime status records a clean stop, and leave the startup task
-enabled. After boot, verify a new publication and authenticated source freshness.
-This clean-stop-then-reboot sequence has **not** yet been live-tested. An
-unexpected interruption or reboot without a prior clean stop can leave the
-persisted state gated and require diagnosis plus explicit rearm; startup never
-silently clears that state. Never delete or rewrite status/checkpoints to make
-startup proceed. A clean process stop also cannot guarantee cancellation of
-work already accepted by a remote/backend system.
+**Reboot procedure:** a planned reboot should still prefer a cooperative clean
+stop (leave the startup task enabled), but it is no longer required: after an
+unexpected interruption, crash or reboot without a clean stop, the worker recovers
+the stale `running` marker automatically at the next start
+(`WORKER_STALE_MARKER_RECOVERED`) and resumes publishing; manual rearm is needed
+only if the log shows `WORKER_RECOVERY_REFUSED`. After boot, verify a new
+publication and authenticated source freshness (or `GET /healthz/freshness`). The
+automatic recovery is covered by synthetic tests; the lab reboot result is
+recorded in the pull request that introduced it. A clean cooperative-stop-then-reboot
+sequence has not been live-tested. The evidence above predates the
+feature and describes the earlier manual-rearm behavior. Never delete or rewrite
+status/checkpoints to make startup proceed. A clean process stop also cannot
+guarantee cancellation of work already accepted by a remote/backend system.
 
 For a planned stop without invoking the packaged PowerShell scripts, the native
 worker control accepts only the explicitly supplied runtime-state directory.
@@ -221,7 +248,7 @@ if ([string]$task.State -ne 'Running' -or
     $task.Actions[0].Arguments -cne $expectedArguments -or
     $task.Actions[0].WorkingDirectory -ine (Split-Path -Parent $dll) -or
     [string]$task.Settings.MultipleInstances -ne 'IgnoreNew' -or
-    [int]$task.Settings.RestartCount -ne 0) {
+    [int]$task.Settings.RestartCount -ne 3 -or [string]$task.Settings.RestartInterval -ne 'PT5M') {
     throw 'Exact running owned task contract does not match; stop request refused.'
 }
 $workers = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
@@ -240,19 +267,19 @@ if ($LASTEXITCODE -ne 0) { throw 'Stop request refused; preserve state and inspe
 
 Wait for the exact task to stop, then inspect its protected `worker.status.json`.
 Proceed with reboot only when `state=stopped`, `failureCode` is null, and
-`rearmRequired=false`. Do not disable the task for a planned reboot. For an
-unexpected prior-running state, use the separately guarded native explicit
+`rearmRequired=false`. Do not disable the task for a planned reboot. For a
+terminal failure (`WORKER_RECOVERY_REFUSED`), use the separately guarded native explicit
 rearm procedure in the [upgrade and recovery guide](../../docs/easy-indexed-upgrade.md)
 only after confirming the task is stopped, the saved identity/action/runtime
-directory match, no worker remains, and the preboot status is understood.
+directory match, no worker remains, and the failure is understood.
 Malformed or ambiguous status is a stop-and-investigate condition.
 
-Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `LastOutcome`,
+Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `HeartbeatUtc`, `LastOutcome`,
 `FailureCode`, `LastFailureCode`, `RearmRequired`, and `LastPublicationUtc`
 together. `deferred` means the last
 attempt safely deferred; `stopped` means the worker stopped or failed; a running
-task with stale `running` runtime state is an unknown outcome to investigate,
-not a success. Use authenticated `get_source_status` and the configured
+task with a stale `running` runtime state is recovered automatically at the next
+start (shown as `StaleMarker`), not a success. Use authenticated `get_source_status` and the configured
 freshness budgets to assess published data. Do not extend expiry or equate
 process liveness with freshness.
 
@@ -264,6 +291,6 @@ contracts using mocked task-scheduler cmdlets and `-WhatIf`, and exercises
 multiple serialized collection cycles, bounded deferrals, checkpoint restart
 reconciliation, process-child cleanup, persisted failure across a fresh
 worker/reboot simulation, explicit rearm, unknown/malformed state refusal,
-healthy startup recovery, cooperative stop, and bounded log rotation.
+stale-marker self-recovery, healthy startup recovery, cooperative stop, and bounded log rotation.
 It registers no scheduled task and uses no SCOM connection or customer
 configuration. CI evidence is not deployment acceptance.

@@ -217,6 +217,12 @@ static class ReadModelChecks
         clock.Now = Now.AddMinutes(61);
         Fault(() => store.Page(Caller, "objects", null, 20, null), "expired unavailable");
         clock.Now = Now;
+        Check(store.GetFreshness() is { Status: "fresh", AgeSeconds: 0 }, "freshness endpoint reports fresh");
+        clock.Now = Now.AddMinutes(16);
+        Check(store.GetFreshness() is { Status: "stale", AgeSeconds: 960 }, "freshness endpoint reports stale");
+        clock.Now = Now.AddMinutes(61);
+        Check(store.GetFreshness() is { Status: "expired" }, "freshness endpoint reports expired");
+        clock.Now = Now;
         var properties = Guid.NewGuid().ToString("D");
         store.Begin(Publisher, properties);
         store.Append(Publisher, properties, 0, Bytes(batch with
@@ -521,6 +527,23 @@ static class ReadModelChecks
             }
             using var retryCommit = await client.PostAsync(route + "/commit", Content(Bytes(manifest)));
             Check(retryCommit.IsSuccessStatusCode, "deadline releases ingestion slot and preserves committed replay");
+            using (var monitor = new HttpClient { BaseAddress = new(address) })
+            {
+                using var freshResponse = await monitor.GetAsync("/healthz/freshness");
+                var freshBody = await freshResponse.Content.ReadAsStringAsync();
+                Check(freshResponse.StatusCode == HttpStatusCode.OK && freshBody.Contains("\"fresh\"", StringComparison.Ordinal) &&
+                    !freshBody.Contains(id, StringComparison.Ordinal) && freshBody.Length < 100,
+                    "anonymous freshness probe returns 200 with a minimal body when data is fresh");
+                httpClock.Now = observedAt.AddMinutes(16);
+                using var staleResponse = await monitor.GetAsync("/healthz/freshness");
+                Check(staleResponse.StatusCode == HttpStatusCode.ServiceUnavailable,
+                    "freshness probe returns 503 when data is stale");
+                httpClock.Now = observedAt.AddMinutes(61);
+                using var expiredResponse = await monitor.GetAsync("/healthz/freshness");
+                Check(expiredResponse.StatusCode == HttpStatusCode.ServiceUnavailable,
+                    "freshness probe returns 503 when data is expired");
+                httpClock.Now = observedAt;
+            }
             using var publisherMcp = await client.PostAsync("/mcp", Content(Bytes(new { jsonrpc = "2.0", id = 1, method = "tools/list" })));
             Check(publisherMcp.StatusCode == HttpStatusCode.Forbidden, "publisher cannot call delegated MCP");
             client.DefaultRequestHeaders.Authorization = new("Bearer", Token(Reader, delegated: true));

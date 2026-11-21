@@ -99,7 +99,7 @@ internal sealed record SafeOperationalEntry(
     DateTimeOffset Utc, string Component, string Level, string Event,
     string? Outcome = null, long? DurationMs = null, string? Code = null,
     int? Attempt = null, int? MaxAttempts = null, double? DelaySeconds = null,
-    long? LineNumber = null, long? BytePositionInLine = null)
+    long? LineNumber = null, long? BytePositionInLine = null, string? Reason = null)
 {
     public static SafeOperationalEntry? Project<TState>(OperationalComponent component, LogLevel level, TState state)
     {
@@ -123,6 +123,14 @@ internal sealed record SafeOperationalEntry(
             "Worker stopped. Event={Event}" => "WorkerCancelled",
             "Worker stopped. Event={Event} ErrorType={ErrorType} Code={Code}" => "WorkerFailed",
             "Worker stopped. Event={Event} Code={Code} LineNumber={LineNumber} BytePositionInLine={BytePositionInLine}" => "WorkerFailed",
+            "Worker recovery. Event={Event} Code={Code} Reason={Reason}" => (Field("Code") as string) switch
+            {
+                "WORKER_STALE_MARKER_RECOVERED" => "WorkerStaleMarkerRecovered",
+                "WORKER_ALREADY_RUNNING" => "WorkerAlreadyRunning",
+                "WORKER_RECOVERY_REFUSED" => "WorkerRecoveryRefused",
+                "WORKER_HEARTBEAT_STALE_LOCK_HELD" or "WORKER_LOCK_HELD_UNVERIFIED" => "WorkerLockHeld",
+                _ => null
+            },
             "Collection loop stopped. Event={Event} ErrorType={ErrorType}" => "CollectionStopped",
             "Collection published. Event={Event}" => "CollectionPublished",
             "Collection deferred. Event={Event} Attempt={Attempt} MaxAttempts={MaxAttempts} DelaySeconds={DelaySeconds}" => "CollectionDeferred",
@@ -148,20 +156,30 @@ internal sealed record SafeOperationalEntry(
         var delay = Field("DelaySeconds") is double seconds && double.IsFinite(seconds) &&
             seconds is >= 0 and <= 86400 ? (double?)seconds : null;
         long? Position(string key) => Field(key) is long value && value is >= 0 and <= 1048576 ? value : null;
+        var reason = Field("Reason") is string candidateReason && SafeReason(candidateReason) ? candidateReason : null;
         var outcome = name switch
         {
             "WorkerCancelled" => "Cancelled",
-            "WorkerStarted" or "WorkerPublished" or "CollectionPublished" or "IngestionAccepted" => "Succeeded",
+            "WorkerStarted" or "WorkerPublished" or "CollectionPublished" or "IngestionAccepted" or
+                "WorkerStaleMarkerRecovered" or "WorkerAlreadyRunning" => "Succeeded",
             "CollectionDeferred" or "LiveDeferred" or "LiveDeliveryDeferred" => "Deferred",
             _ when level >= LogLevel.Warning => "Failed",
             _ => null
         };
         return new(DateTimeOffset.UtcNow, source, level.ToString(), name, Outcome: outcome, Code: code,
             Attempt: Number("Attempt"), MaxAttempts: Number("MaxAttempts"), DelaySeconds: delay,
-            LineNumber: Position("LineNumber"), BytePositionInLine: Position("BytePositionInLine"));
+            LineNumber: Position("LineNumber"), BytePositionInLine: Position("BytePositionInLine"),
+            Reason: reason);
     }
 
+    private static bool SafeReason(string reason) => reason is
+        "HOST_CHANGED" or "BOOT_ID_CHANGED" or "PROCESS_NOT_RUNNING" or "PID_REUSED" or
+        "HEARTBEAT_STALE" or "LOCK_FREE_NO_OWNER" or "IDENTITY_UNAVAILABLE" or
+        "PRIOR_TERMINAL_FAILURE";
+
     private static bool SafeCode(string code) => code is
+        "WORKER_STALE_MARKER_RECOVERED" or "WORKER_ALREADY_RUNNING" or "WORKER_RECOVERY_REFUSED" or
+        "WORKER_HEARTBEAT_STALE_LOCK_HELD" or "WORKER_LOCK_HELD_UNVERIFIED" or "WORKER_TRANSIENT_FAILURE" or
         "WORKER_STOP_REQUEST_INVALID" or "WORKER_CONFIGURATION_JSON_INVALID" or
         "WORKER_CONFIGURATION_OR_EXECUTION_FAILED" or "COLLECTION_ATTEMPTS_EXHAUSTED" or
         "SOURCE_UNAVAILABLE" or "LIVE_NOT_ENABLED" or "LIVE_PROVIDER_UNAVAILABLE" or "LIVE_RATE_LIMITED" or
@@ -177,7 +195,9 @@ internal sealed record SafeOperationalEntry(
         "PUBLISHER_DEADLINE" or "PUBLISHER_TOKEN_INVALID" or "PUBLISHER_RETRY_DEFERRED" or
         "PUBLISHER_RETRY_EXHAUSTED" or "PUBLISHER_RESPONSE_INVALID" or "PUBLISHER_PAYLOAD_BUDGET" ||
         code.Length == 18 && code.StartsWith("PUBLISHER_HTTP_", StringComparison.Ordinal) &&
-        int.TryParse(code.AsSpan(15), out var status) && status is >= 100 and <= 599;
+        int.TryParse(code.AsSpan(15), out var status) && status is >= 100 and <= 599 ||
+        code.Length <= 60 && code.StartsWith("PUBLISHER_CERTIFICATE_", StringComparison.Ordinal) &&
+        code.All(character => character is >= 'A' and <= 'Z' or '_');
 }
 
 public sealed class OperationalFileLoggerProvider : ILoggerProvider

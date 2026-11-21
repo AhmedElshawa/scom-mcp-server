@@ -45,7 +45,7 @@ static class OperationalLoggingChecks
         var allowed = new HashSet<string>
         {
             "utc", "component", "level", "event", "outcome", "durationMs", "code", "attempt",
-            "maxAttempts", "delaySeconds", "lineNumber", "bytePositionInLine"
+            "maxAttempts", "delaySeconds", "lineNumber", "bytePositionInLine", "reason"
         };
         foreach (var file in files)
             foreach (var line in File.ReadLines(file))

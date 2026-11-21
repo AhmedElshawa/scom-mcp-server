@@ -6,9 +6,9 @@ This document helps an operator diagnose the SCOM MCP receiver, the collection w
 
 | # | Check | How | What it tells you |
 |---|---|---|---|
-| 1 | Receiver is up | `GET https://<FQDN>/healthz` (anonymous). Expect HTTP 200 and `{"service":"ScomReadOnlyMcp","version":"1.0.0"}` | Site, TLS binding and app pool are working. It says nothing about data freshness; call `get_source_status` for that. |
+| 1 | Receiver is up | `GET https://<FQDN>/healthz` (anonymous). Expect HTTP 200 and `{"service":"ScomReadOnlyMcp","version":"1.0.0"}` | Site, TLS binding and app pool are working. It says nothing about data freshness; call `get_source_status`, or probe the anonymous `GET /healthz/freshness` (200 `fresh`; 503 `stale`, `expired` or `unavailable`; 404 when `ReadModel:Enabled` is false). |
 | 2 | Configuration is valid | `dotnet ScomMcp.dll --validate-setup <server-dir> <worker.json>` | `SCOM_SETUP_CONFIGURATION_READY` (0), `SCOM_SETUP_SOURCE_EVIDENCE_REQUIRED` (2) or `SCOM_SETUP_CONFIGURATION_INVALID ErrorType=<T>` (1). Receiver and worker settings that disagree are caught here. |
-| 3 | Worker task status | `Operations\DurableIndexedRefresh\Get-ScomWorkerTaskStatus.ps1` | Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `LastOutcome`, `FailureCode`, `LastFailureCode`, `RearmRequired`, `LastPublicationUtc`. `RearmRequired=true` or a prior `running` state blocks the next start until an explicit rearm (see [Worker runtime state](#worker-scheduler-and-runtime-state)). |
+| 3 | Worker task status | `Operations\DurableIndexedRefresh\Get-ScomWorkerTaskStatus.ps1` | Inspect `TaskState`, `RuntimeState`, `RuntimeConsistency`, `HeartbeatUtc`, `LastOutcome`, `FailureCode`, `LastFailureCode`, `RearmRequired`, `LastPublicationUtc`. `RearmRequired=true` (`WORKER_RECOVERY_REFUSED`) blocks the next start until an explicit rearm; a leftover `running` state from a crash or reboot recovers automatically (see [Worker runtime state](#worker-scheduler-and-runtime-state)). |
 | 4 | Receiver and worker logs | Read `server.log` and `worker.log` (see [Where logs live](#where-logs-live)). Look for `IngestionAccepted`, `IngestionRejected`, `WorkerFailed`, `CollectionDeferred` and their `Code` values | Whether publications arrive and why they are rejected or deferred. |
 | 5 | Network, DNS and certificates | From the worker host resolve `<FQDN>` and open `https://<FQDN>/healthz`; check NSG/firewall rules for the HTTPS port, and that the worker host can reach Entra (`login.microsoftonline.com`) and `<MGMT_SERVER>` | `PUBLISHER_HTTP_*`, `PUBLISHER_RETRY_EXHAUSTED` and `PUBLISHER_TOKEN_*` are usually name-resolution, firewall, TLS or clock problems. See [network-and-ports.md](network-and-ports.md). |
 
@@ -20,13 +20,13 @@ This document helps an operator diagnose the SCOM MCP receiver, the collection w
 | Worker operational log | `operationalLogging.directory` in `worker.json`: `worker.log` with the same rotation | `OperationalLogging.cs` |
 | Collector profile log | `profile.configuration.operationalLogging.directory`: `scom-collector-profile.jsonl`, `.1` … (collector budgets: file 1024–16777216 bytes, default 1048576; 1–20 files, default 5) | `ScomOperationalLogging.psm1` |
 | Directory lease | `operational.lock` in each log directory (1-byte role lease: server or worker). A directory shared by server and worker is refused. | `OperationalLogging.cs` |
-| Worker runtime state | `--runtime-state-dir`: `worker.status.json`, `worker.runtime.lock`, `worker.stop.request` | `WorkerRuntimeState.cs` |
+| Worker runtime state | `--runtime-state-dir`: `worker.status.json`, `worker.lock`, `worker.stop.request` | `WorkerRuntimeState.cs` |
 | Worker console | stderr lines such as `SCOM_WORKER_FAILED Code=...` | `Program.cs` |
 | Setup journals and receipts | Setup private directory (see [install-cli.md](install-cli.md)) | `Setup\*` |
 
-Log format: JSON lines with `Utc`, `Component` (`server` or `worker`), `Level`, `Event`, and optional `Outcome`, `DurationMs`, `Code`, `Attempt`, `MaxAttempts`, `DelaySeconds`, `LineNumber`, `BytePositionInLine`. The log is an allowlist projection: no free text, exception messages or scopes, Information level and above. Only allowlisted `Code` values are written (`WORKER_*`, `COLLECTION_ATTEMPTS_EXHAUSTED`, `SOURCE_UNAVAILABLE`, `LIVE_*`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PUBLISHER_*`, `PUBLISHER_HTTP_<100-599>`); other codes are dropped, so a missing code is not proof that none occurred. `RetainedFiles` counts the active file. Directories must exist before start (setup creates them); the runtime never creates them.
+Log format: JSON lines with `Utc`, `Component` (`server` or `worker`), `Level`, `Event`, and optional `Outcome`, `DurationMs`, `Code`, `Reason`, `Attempt`, `MaxAttempts`, `DelaySeconds`, `LineNumber`, `BytePositionInLine`. The log is an allowlist projection: no free text, exception messages or scopes, Information level and above. Only allowlisted `Code` values are written (`WORKER_*`, `COLLECTION_ATTEMPTS_EXHAUSTED`, `SOURCE_UNAVAILABLE`, `LIVE_*`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PUBLISHER_*`, `PUBLISHER_HTTP_<100-599>`); other codes are dropped, so a missing code is not proof that none occurred. `RetainedFiles` counts the active file. Directories must exist before start (setup creates them); the runtime never creates them.
 
-Event names: `WorkerStarted`, `WorkerPublished`, `WorkerCancelled`, `WorkerFailed`, `CollectionStopped`, `CollectionPublished`, `CollectionDeferred`, `LiveDeferred`, `LiveSourceUnavailable`, `LiveDeliveryDeferred`, `LiveAdmitted`, `LiveReceived`, `LiveRejected`, `LiveTransportRejected`, `LiveFailed`, `IngestionAccepted`, `IngestionRejected`, `IngestionDeadline`, `ReadModelFailed`, `ToolFailed`, `RequestFailed`, plus operational-state events `Started`, `Stopped`, `Failed`, `RequestCompleted`, `CollectionCompleted`, `Diagnostic`. Outcomes: `Succeeded`, `Deferred`, `Cancelled`, `Failed`. The worker console also prints `SCOM_WORKER_STARTED`, `SCOM_WORKER_PUBLISHED`, `SCOM_WORKER_CANCELLED`, `SCOM_WORKER_FAILED`, `SCOM_LIVE_DEFERRED`, `SCOM_COLLECTION_PUBLISHED`, `SCOM_COLLECTION_DEFERRED`, `SCOM_COLLECTION_STOPPED`; the receiver emits `SCOM_INGESTION_ACCEPTED` (event, UTC, trace id, bytes). Collector profile events: `profile.started`, `configuration.validated`, `source.connected`, `scan.completed`, `profile.failed`, `setup.started`, `setup.completed`, `setup.failed`.
+Event names: `WorkerStarted`, `WorkerPublished`, `WorkerCancelled`, `WorkerFailed`, `WorkerStaleMarkerRecovered`, `WorkerAlreadyRunning`, `WorkerRecoveryRefused`, `WorkerLockHeld`, `CollectionStopped`, `CollectionPublished`, `CollectionDeferred`, `LiveDeferred`, `LiveSourceUnavailable`, `LiveDeliveryDeferred`, `LiveAdmitted`, `LiveReceived`, `LiveRejected`, `LiveTransportRejected`, `LiveFailed`, `IngestionAccepted`, `IngestionRejected`, `IngestionDeadline`, `ReadModelFailed`, `ToolFailed`, `RequestFailed`, plus operational-state events `Started`, `Stopped`, `Failed`, `RequestCompleted`, `CollectionCompleted`, `Diagnostic`. Outcomes: `Succeeded`, `Deferred`, `Cancelled`, `Failed`. The worker console also prints `SCOM_WORKER_STARTED`, `SCOM_WORKER_PUBLISHED`, `SCOM_WORKER_CANCELLED`, `SCOM_WORKER_FAILED`, `SCOM_LIVE_DEFERRED`, `SCOM_COLLECTION_PUBLISHED`, `SCOM_COLLECTION_DEFERRED`, `SCOM_COLLECTION_STOPPED`; the receiver emits `SCOM_INGESTION_ACCEPTED` (event, UTC, trace id, bytes). Collector profile events: `profile.started`, `configuration.validated`, `source.connected`, `scan.completed`, `profile.failed`, `setup.started`, `setup.completed`, `setup.failed`.
 
 ## Reading a failure
 
@@ -34,23 +34,24 @@ Event names: `WorkerStarted`, `WorkerPublished`, `WorkerCancelled`, `WorkerFaile
 2. For ingestion rejections, the HTTP 409 body carries `reason`; the receiver log keeps only a few reasons (see [mcp-server-spec.md](mcp-server-spec.md#9-ingestion-contract-publisher-to-receiver)).
 3. The collector script only writes the umbrella `SCOM_GENERIC_PROFILE_FAILED` to stderr; the specific `SCOM_*` code is thrown inside the child process and is hidden from the log. How to surface it on demand: Not determined from source (run the preflight script, `Test-SCOMPreflight.ps1`, and the setup flow, which report check names, and capture the collector profile log).
 
-## After a server restart: agent says `READ_MODEL_EXPIRED`
+## After a server restart: worker self-recovery
 
-**Symptom.** After the host running the worker was rebooted, the agent answers every question with `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` and no data. The scheduled task looks `Ready`, but its last result is nonzero (for example `0x1`), and running it from Task Scheduler appears to do nothing.
+**Behavior.** Recovery after a reboot, crash or forced kill is **automatic**. The worker task starts 3 minutes after boot; the worker finds the stale `running` marker in `worker.status.json`, proves it is stale (process gone, PID reused, `bootId` changed, host changed, or heartbeat older than 3 × `schedule.interval`) while holding `worker.lock`, logs `WORKER_STALE_MARKER_RECOVERED`, rearms itself and resumes publishing. No operator step is needed. Manual `Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure` is required **only** if the log shows `WORKER_RECOVERY_REFUSED` (the previous stop was a terminal failure, not a crash).
 
-**Root cause.** The worker marks `worker.status.json` as `state=running` while it works. If the host reboots (or the process is killed) without a cooperative stop, that status stays `running` with the process id from before the reboot. On the next start the worker sees a prior `running` state it cannot explain, refuses to start (the task exits within about a second, return code 1) and sets the gate `RearmRequired=true`. Automatic rearm is intentionally absent, so no new dataset is published; once the last one is older than `UnavailableMinutes` the receiver reports `READ_MODEL_EXPIRED`. The data path (receiver, Entra, certificates, SCOM) is not at fault. The code `UNEXPECTED_PRIOR_RUNNING_STATE` identifies this case.
+**Symptom (if it does not recover).** After the host was rebooted the agent answers with `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` and no data. Check `GET https://<FQDN>/healthz/freshness` (`stale` or `expired` → 503) and the worker status.
 
 **Confirm.** On the worker host, in an elevated PowerShell:
 
 ```powershell
 cd <package>\Operations\DurableIndexedRefresh
-.\Get-ScomWorkerTaskStatus.ps1 | Format-List TaskState,LastTaskResult,RuntimeState,RuntimeConsistency,LastOutcome,LastPublicationUtc,RearmRequired,LastFailureCode
+.\Get-ScomWorkerTaskStatus.ps1 | Format-List TaskState,LastTaskResult,RuntimeState,RuntimeConsistency,HeartbeatUtc,LastOutcome,LastPublicationUtc,RearmRequired,LastFailureCode
 Get-CimInstance Win32_Process | Where-Object CommandLine -match '--worker'
+Get-WinEvent -FilterHashtable @{ LogName='Application'; ProviderName='ScomMcpWorker' } -MaxEvents 10
 ```
 
-The gated case shows `RearmRequired=True` (often `RuntimeConsistency=unknown-outcome-inspect-required`), `LastFailureCode=UNEXPECTED_PRIOR_RUNNING_STATE`, a `LastPublicationUtc` older than the reboot, and no worker process.
+A healthy recovery shows `TaskState=Running`, `RuntimeState=running`, a recent `HeartbeatUtc`, event `1001` (started) and `2001` (recovered) after the boot, `LastFailureCode=UNEXPECTED_PRIOR_RUNNING_STATE` kept as history, `RearmRequired=False`, and a new `LastPublicationUtc` after the first collection. `LastTaskResult` can show an older nonzero value from an earlier restart attempt.
 
-**Fix** (only when no worker process is running):
+**Only if `WORKER_RECOVERY_REFUSED` (or `RearmRequired=True`)** and no worker process is running:
 
 ```powershell
 .\Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure -Confirm:$false
@@ -59,18 +60,20 @@ Start-Sleep 60
 .\Get-ScomWorkerTaskStatus.ps1 | Format-List TaskState,RuntimeState,LastOutcome,LastPublicationUtc,RearmRequired
 ```
 
-Expected: `TaskState=Running`, `RuntimeState=running`, `LastOutcome=published`, a new `LastPublicationUtc` and `RearmRequired=False`. `LastFailureCode` keeps showing `UNEXPECTED_PRIOR_RUNNING_STATE` as retained history; it no longer gates. Then ask the agent again (for example "Give me the inventory summary") and confirm with `get_source_status`, because task liveness is not data freshness.
+Expected: `TaskState=Running`, `RuntimeState=running`, `LastOutcome=published`, a new `LastPublicationUtc` and `RearmRequired=False`. Then ask the agent again and confirm with `get_source_status`, because task liveness is not data freshness.
+
+**Other start refusals.** `WORKER_LOCK_HELD_UNVERIFIED` or `WORKER_HEARTBEAT_STALE_LOCK_HELD` (exit 1) mean another process holds `worker.lock` but cannot be shown to be a healthy worker. Find that process (`Get-CimInstance Win32_Process | Where-Object CommandLine -match '--worker'`) and stop it cooperatively; the worker does not take over a held lock.
 
 **Do not**
 
-- delete or edit `worker.status.json`, the checkpoint or other state files to "clear" the problem;
+- delete or edit `worker.status.json`, `worker.lock`, the checkpoint or other state files to "clear" the problem;
 - run the worker as `SYSTEM` or any account other than the registered worker account (use the task, not a manual launch);
 - run `Rearm-` or `Start-` through a non-interactive channel such as Azure VM Run Command without `-Confirm:$false`: both scripts use `ConfirmImpact=High`, wait for a prompt nobody can answer, and the hung execution blocks further Run Command calls (`Conflict: Run command extension execution is in progress`) until it is ended;
 - rearm while a worker process is running (the script refuses).
 
-**Prevent.** Before a planned reboot or patching, run `Stop-ScomWorkerTask.ps1` (cooperative stop), reboot, then start the task with `Start-ScomWorkerTask.ps1`. A clean stop followed by a reboot has not been lab-tested, and unattended recovery after an unclean reboot is not provided: after any unplanned restart, check `Get-ScomWorkerTaskStatus.ps1` and rearm as above. Consider alerting on `get_source_status` freshness so an expired read model is noticed before users ask.
+**Prevent.** A cooperative stop (`Stop-ScomWorkerTask.ps1`) before planned reboots is still the cleanest path but is no longer required. Consider alerting on `GET /healthz/freshness` returning 503 so an expired read model is noticed before users ask.
 
-*Lab evidence (sanitized):* a VM restarted without a cooperative stop was down for about six and a half hours. The startup task exited with return code 1 on each launch; the status file still said `running` with the preboot process id. One operator rearm followed by a start restored `published` publications and the agent answered again. The exact reason the worker process exited was not independently captured beyond the documented status codes.
+*Lab evidence (sanitized):* before this feature, a VM restarted without a cooperative stop was down for about six and a half hours; the task exited with return code 1 on each launch and one operator rearm was needed to resume publication. The automatic recovery described above is covered by synthetic tests; see the pull request for the lab reboot result.
 
 ## Receiver startup and configuration
 
@@ -99,7 +102,7 @@ Details and wire formats are in [mcp-server-spec.md](mcp-server-spec.md#7-error-
 | `INVALID_CURSOR` | Cursor expired (default 300 s), from another caller/filter/page size, or issued before an app-pool recycle | Restart paging from the first page |
 | `CURSOR_DATASET_CHANGED` | A new dataset was committed while paging | Restart paging |
 | `NOT_FOUND` | Entity or object id not in the current dataset | Check id; the dataset may not contain it |
-| `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` | Oldest domain `asOfUtc` older than `UnavailableMinutes` | Check the worker (`Get-ScomWorkerTaskStatus.ps1`), then network and publisher codes. If the host was just restarted, see [After a server restart](#after-a-server-restart-agent-says-read_model_expired) |
+| `SOURCE_UNAVAILABLE` / `READ_MODEL_EXPIRED` | Oldest domain `asOfUtc` older than `UnavailableMinutes` | Check the worker (`Get-ScomWorkerTaskStatus.ps1`), then network and publisher codes. If the host was just restarted, see [After a server restart](#after-a-server-restart-worker-self-recovery) |
 | `SOURCE_UNAVAILABLE` / `READ_MODEL_LATEST_COLLECTION_UNAVAILABLE` | No committed dataset, or a new ingestion session began and has not committed | Wait for commit; check worker logs |
 | `SOURCE_UNAVAILABLE` / `READ_MODEL_DISABLED`, `INDEXED_WINDOWS_DISABLED` | `ReadModel.Enabled` or `WindowsToolsEnabled` is false | Enable per [configuration-reference.md](configuration-reference.md) |
 | `SOURCE_UNAVAILABLE` / `WINDOWS_PROJECTION_MISSING` | Dataset has no Windows projection (worker not `supportedWindows`) | Check `inventoryKind` and `windowsMapping` |
@@ -159,7 +162,12 @@ Receiver event `IngestionAccepted` / `SCOM_INGESTION_ACCEPTED` means a request w
 | `COLLECTION_ATTEMPTS_EXHAUSTED` | `CollectionScheduler.cs` | `maxConsecutiveDeferredAttempts` (default 5) reached | Resolve the underlying deferral code, then rearm |
 | `WORKER_CANCELLED` | `CollectionWorkerHost.cs` | Clean stop (stop request or service stop) | Normal; does not require rearm |
 | `WORKER_STOP_REQUEST_INVALID` | `WorkerRuntimeState.cs` | Malformed stop-request marker (`SCOM_WORKER_STOP_REQUEST` expected) | Use the supplied stop script |
-| `UNEXPECTED_PRIOR_RUNNING_STATE` | `WorkerRuntimeState.cs` | Previous run left status `running` (host reboot, crash, forced kill); the next start is blocked ("requires explicit operator rearm") | Review the cause, then `Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure` (or `--worker-rearm <dir>`). Request a cooperative stop before planned reboots. Do not edit or delete status or checkpoint files. The exact cause of a given unclean exit may be "not independently established". |
+| `UNEXPECTED_PRIOR_RUNNING_STATE` | `WorkerRuntimeState.cs` | Previous run left status `running` (host reboot, crash, forced kill). Informational: it is recorded as `LastFailureCode` when the worker recovers the stale marker | None; recovery is automatic. Do not edit or delete status or checkpoint files. |
+| `WORKER_STALE_MARKER_RECOVERED` | `CollectionWorkerHost.cs` | Start found a stale `running` marker and recovered it; `Reason` is one of `HOST_CHANGED`, `BOOT_ID_CHANGED`, `PROCESS_NOT_RUNNING`, `PID_REUSED`, `IDENTITY_UNAVAILABLE`, `HEARTBEAT_STALE`, `LOCK_FREE_NO_OWNER` | Normal; Event Log `2001` |
+| `WORKER_ALREADY_RUNNING` | `CollectionWorkerHost.cs` | A live worker with a fresh heartbeat holds `worker.lock`; this start exits `0` without changing anything | Normal |
+| `WORKER_RECOVERY_REFUSED` | `CollectionWorkerHost.cs` | Previous stop was terminal (`Reason=PRIOR_TERMINAL_FAILURE`); exit `2`, Event Log `3001` | Fix the cause, then `Rearm-ScomWorkerTask.ps1 -AcknowledgeFailure` |
+| `WORKER_LOCK_HELD_UNVERIFIED`, `WORKER_HEARTBEAT_STALE_LOCK_HELD` | `CollectionWorkerHost.cs` | `worker.lock` is held by a process that is not a verifiable healthy worker; exit `1`, state untouched | Identify and cooperatively stop that process |
+| `WORKER_TRANSIENT_FAILURE` | `CollectionWorkerHost.cs` | Network, timeout or I/O failure; exit `1`, restartable, does not gate | Task Scheduler restarts (3 × 5 min); check connectivity |
 | "Worker runtime status is invalid / contains an unknown property / missing required properties / empty or exceeds its byte budget" | `WorkerRuntimeState.cs` | `worker.status.json` damaged or from another version | Do not hand-edit; capture and open an issue |
 | Checkpoint errors: "version, profile policy, settings or byte budget differs"; "digest mismatch"; "policy changed"; "integrity check failed"; "belongs to another database"; "exceeds its physical storage budget"; "encoded-byte budget exceeded" | `SourceCheckpointStore.cs` | Pinned worker policy or settings changed, checkpoint paired with another database, or budget too small | [Policy-change procedure](configuration-reference.md#4-policy-changes) |
 | `SOURCE_SCOPE_CHANGED_REQUIRES_RESTART`, `SOURCE_DISCOVERY_MEMBERSHIP_INVALID`, `SOURCE_RELATIONSHIP_PARENT_INVALID`, `SOURCE_TOTAL_RECORD_BUDGET`, `SOURCE_NORMALIZED_SCAN_INVALID` | `ReconciledCollectionSource.cs` | Scope or membership changed during a scan, relationship parent missing, or `reconciliation.maxRecords` exceeded | Re-run; raise budgets or narrow scope |

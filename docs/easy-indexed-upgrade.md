@@ -312,7 +312,7 @@ if ([string]$task.State -eq 'Running' -or @($task.Actions).Count -ne 1 -or
     $task.Actions[0].WorkingDirectory -ne (Split-Path -Parent $dll) -or
     [string]$task.Principal.LogonType -ne 'Password' -or
     [string]$task.Settings.MultipleInstances -ne 'IgnoreNew' -or
-    [int]$task.Settings.RestartCount -ne 0) { throw 'Stopped owned task contract does not match; rearm refused.' }
+    [int]$task.Settings.RestartCount -ne 3 -or [string]$task.Settings.RestartInterval -ne 'PT5M') { throw 'Stopped owned task contract does not match; rearm refused.' }
 $workers = @(Get-CimInstance Win32_Process -ErrorAction Stop | Where-Object {
     $_.CommandLine -and $_.CommandLine.IndexOf($dll, [StringComparison]::OrdinalIgnoreCase) -ge 0 -and
         $_.CommandLine -match '(^|\s)--worker(\s|$)'
@@ -324,9 +324,9 @@ $status = Get-Content -LiteralPath $statusPath -Raw | ConvertFrom-Json
 $expectedStatusProperties = @('state', 'startedUtc', 'updatedUtc', 'lastAttemptUtc', 'lastPublicationUtc',
     'lastOutcome', 'consecutiveDeferredAttempts', 'failureCode', 'processId', 'rearmRequired',
     'lastFailureCode', 'rearmedUtc')
+$optionalStatusProperties = @('processStartTimeUtc', 'bootId', 'hostName', 'heartbeatUtc')
 $statusProperties = @($status.PSObject.Properties | ForEach-Object { $_.Name })
-if ($statusProperties.Count -ne $expectedStatusProperties.Count -or
-    @($statusProperties | Where-Object { $_ -notin $expectedStatusProperties }).Count -or
+if (@($statusProperties | Where-Object { $_ -notin ($expectedStatusProperties + $optionalStatusProperties) }).Count -or
     @($expectedStatusProperties | Where-Object { $_ -notin $statusProperties }).Count) {
     throw 'Worker status schema is malformed or unknown; preserve it and investigate.'
 }
@@ -346,9 +346,12 @@ if ((Read-Host 'After diagnosis, type REARM to acknowledge this exact stopped ta
 if ($LASTEXITCODE -ne 0) { throw 'Rearm refused; preserve state and diagnose.' }
 ```
 
-The pasted guard validates the exact task marker, worker identity/action, stopped
-state, absence of the matching worker process, and either a stale preboot
-`running` status or a structurally known terminal-failure status. The native
+The pasted guard validates the exact task marker, worker identity/action/restart
+contract, stopped state, absence of the matching worker process, and either a stale
+preboot `running` status or a structurally known terminal-failure status. A stale
+`running` status is normally recovered by the worker itself at its next start and
+needs no rearm; this guard is for the terminal-failure case (`WORKER_RECOVERY_REFUSED`).
+The native
 control takes the exclusive worker lease and independently validates its state.
 Verify no remaining worker/source children before acknowledging. Prefer
 `Rearm-ScomWorkerTask.ps1` where approved script execution is available:
@@ -360,9 +363,12 @@ in the runtime directory. Require `state=running`, `failureCode=null`,
 `rearmRequired=false` and a new `lastPublicationUtc`. Call authenticated agent
 tools and record dataset ID, domain coverage and freshness. Wait the configured
 interval **plus collection duration**, then require another dataset/publication
-from the same worker without another manual Run. Verify an actual logoff and
-reboot separately before claiming unattended recovery. A terminal failure stays
-gated across reboot; there is no automatic process restart.
+from the same worker without another manual Run. After a reboot the worker
+recovers a stale `running` marker on its own (`WORKER_STALE_MARKER_RECOVERED`);
+verify an actual logoff and reboot separately before claiming unattended
+recovery in your environment. A terminal failure stays gated across reboot;
+Task Scheduler restarts the task up to 3 times, 5 minutes apart, and restarted
+instances refuse with `WORKER_RECOVERY_REFUSED` until rearmed.
 
 **Expected availability gaps:** each new Begin invalidates the previous result;
 readers report `READ_MODEL_LATEST_COLLECTION_UNAVAILABLE` until commit, even if

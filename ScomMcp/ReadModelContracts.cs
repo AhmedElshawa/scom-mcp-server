@@ -129,3 +129,5 @@ public sealed record ReadModelProvenance(string ManagementGroupId, string ScopeK
     DomainObservation Alerts, DomainObservation Metrics, DateTimeOffset AlertHistoryStartUtc);
 public sealed record ReadModelPage(string DatasetId, string Status, ReadModelProvenance Manifest,
     int TotalCount, int PageSize, string? NextCursor, object[] Rows);
+// State is fresh, stale, expired or unavailable. Carries no dataset, scope or object identifiers.
+public sealed record ReadModelFreshness(string Status, long? AgeSeconds);

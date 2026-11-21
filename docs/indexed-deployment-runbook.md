@@ -380,14 +380,16 @@ cannot guarantee cancellation of work already accepted by a remote/backend
 system. `Unregister-ScomWorkerTask.ps1` and
 `Start-ScomWorkerTask.ps1` target only the marked task; unregister preserves
 logs, status and checkpoint data. The task still gets its normal startup
-invocation after reboot, but before reading configuration or attempting any
-source work the worker checks the durable runtime status. A known clean stop
+invocation after reboot (delayed 3 minutes), but before reading configuration or attempting any
+source work the worker checks the durable runtime status and holds `worker.lock`. A known clean stop
 allows startup; a terminal failure remains gated across reboot. Power loss or
-an unexpected process exit leaves a prior `running` record, which is treated
-as an unknown outcome and gated as well. A malformed or unknown status is not
+an unexpected process exit leaves a prior `running` record, which the worker
+proves stale (process gone, PID reuse, boot-id or host change, or a heartbeat older than
+3 × `schedule.interval`) and recovers automatically (`WORKER_STALE_MARKER_RECOVERED`).
+A malformed or unknown status is not
 repaired or overwritten automatically.
 
-After diagnosis and reconciliation of any ambiguous publication, explicitly
+After diagnosing a terminal failure (`WORKER_RECOVERY_REFUSED`) and reconciliation of any ambiguous publication, explicitly
 rearm the exact stopped, owned task:
 
 ```powershell

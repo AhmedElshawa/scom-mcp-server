@@ -114,12 +114,13 @@ try {
         $global:capturedRefreshAction = [pscustomobject]@{ Execute = $Execute; Arguments = $Argument; WorkingDirectory = $WorkingDirectory }
         return $global:capturedRefreshAction
     }
-    function New-ScheduledTaskTrigger { param([switch]$AtStartup) return [pscustomobject]@{ AtStartup = $AtStartup } }
+    function New-ScheduledTaskTrigger { param([switch]$AtStartup) $global:capturedRefreshTrigger = [pscustomobject]@{ AtStartup = $AtStartup; Delay = $null }; return $global:capturedRefreshTrigger }
     function New-ScheduledTaskSettingsSet {
-        param([string]$MultipleInstances, [switch]$StartWhenAvailable, [TimeSpan]$ExecutionTimeLimit, [int]$RestartCount)
+        param([string]$MultipleInstances, [switch]$StartWhenAvailable, [TimeSpan]$ExecutionTimeLimit, [int]$RestartCount, [TimeSpan]$RestartInterval)
         $global:capturedRefreshSettings = [pscustomobject]@{
             MultipleInstances = $MultipleInstances; StartWhenAvailable = $StartWhenAvailable
             ExecutionTimeLimit = $ExecutionTimeLimit; RestartCount = $RestartCount
+            RestartInterval = [Xml.XmlConvert]::ToString($RestartInterval)
         }
         return $global:capturedRefreshSettings
     }
@@ -142,7 +143,9 @@ try {
         -StateDirectory (Join-Path $testRoot 'state') -Credential $credential `
         -TaskName 'Synthetic Refresh' -TaskPath '\' -WhatIf | Out-Null
     if ($global:capturedRefreshSettings.MultipleInstances -ne 'IgnoreNew' -or
-        $global:capturedRefreshSettings.RestartCount -ne 0 -or
+        $global:capturedRefreshSettings.RestartCount -ne 3 -or
+        $global:capturedRefreshSettings.RestartInterval -ne 'PT5M' -or
+        $global:capturedRefreshTrigger.Delay -ne 'PT3M' -or
         -not $global:capturedRefreshSettings.StartWhenAvailable -or
         $global:capturedRefreshDefinition.Principal.UserId -ne $currentIdentity -or
         $global:capturedRefreshDefinition.Principal.LogonType -ne 'Password' -or
@@ -180,7 +183,7 @@ try {
             WorkingDirectory = (Split-Path -Parent $workerAssembly)
         })
         Principal = [pscustomobject]@{ UserId = $currentIdentity; LogonType = 'Password' }
-        Settings = [pscustomobject]@{ MultipleInstances = 'IgnoreNew'; RestartCount = 0 }
+        Settings = [pscustomobject]@{ MultipleInstances = 'IgnoreNew'; RestartCount = 3; RestartInterval = 'PT5M' }
         State = 'Running'
     }
     $statusScript = Join-Path $scriptRoot 'Get-ScomWorkerTaskStatus.ps1'
@@ -222,6 +225,32 @@ try {
     $assertions++
     $global:mockRefreshTask.State = 'Ready'
     $global:mockRefreshStatusData.state = 'stopped'
+    $global:mockRefreshStatusData.failureCode = $null
+    $global:mockRefreshStatusData.rearmRequired = $false
+    $global:mockRefreshStatusData.processId = 0
+    $global:mockRefreshStatusData.lastFailureCode = $null
+    Write-SyntheticRuntimeStatus -Path $global:mockRefreshStatusPath -Status $global:mockRefreshStatusData
+    # A crashed worker leaves a running marker with no live task; it must not require a manual rearm.
+    $global:mockRefreshStatusData.state = 'running'
+    $global:mockRefreshStatusData.processId = 4321
+    $global:mockRefreshStatusData['processStartTimeUtc'] = [DateTimeOffset]::UtcNow.ToString('O')
+    $global:mockRefreshStatusData['bootId'] = '2026-01-01T00:00:00Z'
+    $global:mockRefreshStatusData['hostName'] = 'SYNTHETIC-HOST'
+    $global:mockRefreshStatusData['heartbeatUtc'] = [DateTimeOffset]::UtcNow.AddHours(-2).ToString('O')
+    Write-SyntheticRuntimeStatus -Path $global:mockRefreshStatusPath -Status $global:mockRefreshStatusData
+    $staleRuntime = Read-RefreshRuntimeStatus -StateDirectory $statusDirectory
+    $staleStatus = & $statusScript -TaskName 'Synthetic Refresh' -TaskPath '\' -StateDirectory $statusDirectory
+    if ($staleRuntime.NeedsRearm -or -not $staleRuntime.StaleMarker -or $staleStatus.RearmRequired -or
+        $staleStatus.HostName -ne 'SYNTHETIC-HOST' -or
+        $staleStatus.RuntimeConsistency -notmatch 'recovers-automatically') {
+        throw 'A stale running marker still demanded a manual rearm or hid the new identity fields.'
+    }
+    & (Join-Path $scriptRoot 'Start-ScomWorkerTask.ps1') -TaskName 'Synthetic Refresh' -TaskPath '\' -Confirm:$false | Out-Null
+    if ($global:mockRefreshTask.State -ne 'Running') { throw 'Start refused a stale running marker.' }
+    $assertions += 2
+    $global:mockRefreshTask.State = 'Ready'
+    $global:mockRefreshStatusData.state = 'stopped'
+    $global:mockRefreshStatusData.processId = 0
     $global:mockRefreshStatusData.failureCode = 'SYNTHETIC_TERMINAL_FAILURE'
     $global:mockRefreshStatusData.rearmRequired = $true
     $global:mockRefreshStatusData.lastFailureCode = 'SYNTHETIC_TERMINAL_FAILURE'
@@ -286,4 +315,4 @@ finally {
     Remove-Item -LiteralPath $testRoot -Recurse -Force
 }
 
-Write-Output "PASS: $assertions durable-refresh PowerShell assertions; syntax, explicit identity, task contract, no restart storm and WhatIf isolation."
+Write-Output "PASS: $assertions durable-refresh PowerShell assertions; syntax, explicit identity, task contract, bounded restarts, stale-marker auto-recovery and WhatIf isolation."

@@ -32,8 +32,9 @@ $arguments = '{0} --worker {1} --runtime-state-dir {2}' -f `
     (Quote-RefreshArgument -Value $state)
 $action = New-ScheduledTaskAction -Execute $dotnet -Argument $arguments -WorkingDirectory (Split-Path -Parent $dll)
 $trigger = New-ScheduledTaskTrigger -AtStartup
+$trigger.Delay = 'PT3M'
 $settings = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable `
-    -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 0
+    -ExecutionTimeLimit ([TimeSpan]::Zero) -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 5)
 $principal = New-ScheduledTaskPrincipal -UserId $identity.Account -LogonType Password -RunLevel Limited
 $definition = New-ScheduledTask -Action $action -Trigger $trigger -Settings $settings `
     -Principal $principal -Description $description
@@ -43,6 +44,7 @@ if ($PSCmdlet.ShouldProcess("$TaskPath$TaskName", 'Provision a protected runtime
         $null = New-Item -ItemType Directory -Path $state
     }
     Set-RefreshStateDirectoryAcl -Path $state -WorkerSid $identity.Sid
+    Register-RefreshEventSource
     $password = $Credential.GetNetworkCredential().Password
     try {
         Register-ScheduledTask -TaskName $TaskName -TaskPath $TaskPath -InputObject $definition `
@@ -58,8 +60,11 @@ if ($PSCmdlet.ShouldProcess("$TaskPath$TaskName", 'Provision a protected runtime
         WorkerIdentity = $identity.Account
         State = if ($StartNow) { 'start-requested' } else { 'registered-not-started' }
         StartupTrigger = 'AtStartup'
+        StartupDelay = 'PT3M'
         DuplicateInstancePolicy = 'IgnoreNew'
-        AutomaticRestartCount = 0
+        AutomaticRestartCount = 3
+        AutomaticRestartInterval = 'PT5M'
+        EventLogSource = 'ScomMcpWorker'
         RuntimeStateDirectory = $state
     }
 }

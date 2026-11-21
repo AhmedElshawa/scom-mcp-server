@@ -15,7 +15,7 @@ $taskState = [string]$task.State
 $runtimeState = if ($null -eq $runtime) { 'missing' } else { [string]$runtime.state }
 $consistency = if ($null -eq $runtime) { 'status-missing' }
     elseif (($taskState -eq 'Running') -eq ($runtimeState -eq 'running')) { 'consistent' }
-    else { 'unknown-outcome-inspect-required' }
+    else { 'stale-marker-recovers-automatically-on-next-start' }
 [pscustomobject]@{
     TaskName = $TaskName
     TaskPath = $TaskPath
@@ -23,14 +23,14 @@ $consistency = if ($null -eq $runtime) { 'status-missing' }
     LastTaskResult = $taskInfo.LastTaskResult
     RuntimeState = $runtimeState
     RuntimeConsistency = $consistency
+    HeartbeatUtc = if ($null -eq $runtime) { $null } else { $runtime.heartbeatUtc }
+    HostName = if ($null -eq $runtime) { $null } else { $runtime.hostName }
     LastOutcome = if ($null -eq $runtime) { $null } else { $runtime.lastOutcome }
     LastAttemptUtc = if ($null -eq $runtime) { $null } else { $runtime.lastAttemptUtc }
     LastPublicationUtc = if ($null -eq $runtime) { $null } else { $runtime.lastPublicationUtc }
     ConsecutiveDeferredAttempts = if ($null -eq $runtime) { $null } else { $runtime.consecutiveDeferredAttempts }
     FailureCode = if ($null -eq $runtime) { $null } else { $runtime.failureCode }
-    LastFailureCode = if ($null -eq $runtime) { $null }
-        elseif ($runtime.state -eq 'running' -and -not $runtime.lastFailureCode) { 'UNEXPECTED_PRIOR_RUNNING_STATE' }
-        else { $runtime.lastFailureCode }
+    LastFailureCode = if ($null -eq $runtime) { $null } else { $runtime.lastFailureCode }
     RearmRequired = if ($null -eq $runtime) { $true } else { $runtime.NeedsRearm }
     FreshnessAuthority = 'Authenticated get_source_status; task liveness is not data freshness.'
 }

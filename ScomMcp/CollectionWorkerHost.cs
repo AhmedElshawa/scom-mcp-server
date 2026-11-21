@@ -20,6 +20,68 @@ public sealed class CollectionWorkerHostSettings
 
 public static class CollectionWorkerHost
 {
+    // Exit codes: 0 published, cancelled or already running; 1 transient failure (restartable);
+    // 2 configuration, attestation or refused-recovery failure (not restartable).
+    public const int ExitTransient = 1;
+    public const int ExitNotRestartable = 2;
+
+    private static async Task<CollectionWorkerHostSettings> ReadSettingsAsync(string configurationPath,
+        CancellationToken cancellationToken)
+    {
+        if (!Path.IsPathFullyQualified(configurationPath))
+            throw new InvalidOperationException("Worker configuration path must be absolute.");
+        var info = new FileInfo(configurationPath);
+        if (!info.Exists || info.Length > 1024 * 1024)
+            throw new InvalidOperationException("Worker configuration is missing or exceeds its byte budget.");
+        using var stream = info.OpenRead();
+        using var bytes = new MemoryStream();
+        var buffer = new byte[8192];
+        int read;
+        while ((read = await stream.ReadAsync(buffer, cancellationToken)) != 0)
+        {
+            if (bytes.Length + read > 1024 * 1024)
+                throw new InvalidOperationException("Worker configuration exceeds its byte budget.");
+            bytes.Write(buffer, 0, read);
+        }
+        ReadOnlyMemory<byte> configurationBytes = bytes.ToArray();
+        if (configurationBytes.Span.StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }))
+            configurationBytes = configurationBytes[3..];
+        using var document = JsonDocument.Parse(configurationBytes);
+        SnapshotReader.RejectDuplicateProperties(document.RootElement);
+        return document.RootElement.Deserialize<CollectionWorkerHostSettings>(Wire.Json) ??
+            throw new InvalidOperationException("Worker configuration is empty.");
+    }
+
+    private static void LogRecovery(ILogger logger, LogLevel level, string code, string? reason) =>
+        logger.Log(level, "Worker recovery. Event={Event} Code={Code} Reason={Reason}",
+            "SCOM_WORKER_RECOVERY", code, reason);
+
+    // A failure is restartable unless retrying cannot succeed without operator action: configuration,
+    // script-hash attestation, publisher identity or authorization.
+    private static (string Code, bool Terminal) Classify(Exception error)
+    {
+        switch (error)
+        {
+            case CollectionAttemptsExhaustedException:
+                return ("COLLECTION_ATTEMPTS_EXHAUSTED", false);
+            case IngestionPublicationException publication:
+                var terminalPublication = publication.Code.StartsWith("PUBLISHER_CERTIFICATE_", StringComparison.Ordinal) ||
+                    publication.Code is "PUBLISHER_SCOPE_UNVERIFIED" or "PUBLISHER_TOKEN_INVALID" or
+                        "PUBLISHER_HTTP_401" or "PUBLISHER_HTTP_403";
+                return (publication.Code, terminalPublication);
+            case QueryFault fault:
+                return (fault.Code, fault.Code == "INVALID_ARGUMENT");
+            case JsonException:
+                return ("WORKER_CONFIGURATION_JSON_INVALID", true);
+            case HttpRequestException or TimeoutException:
+                return ("WORKER_TRANSIENT_FAILURE", false);
+            case IOException when error is not (FileNotFoundException or DirectoryNotFoundException or PathTooLongException):
+                return ("WORKER_TRANSIENT_FAILURE", false);
+            default:
+                return ("WORKER_CONFIGURATION_OR_EXECUTION_FAILED", true);
+        }
+    }
+
     public static async Task<int> RunAsync(string configurationPath, bool once, CancellationToken cancellationToken,
         string? runtimeStateDirectory = null)
     {
@@ -29,6 +91,7 @@ public static class CollectionWorkerHost
         WorkerRuntimeState? runtimeState = null;
         CancellationTokenSource? runtimeShutdown = null;
         Task? stopRequestWatcher = null;
+        Task? heartbeat = null;
         var workerCancellationToken = cancellationToken;
         var loadingConfiguration = true;
         try
@@ -41,36 +104,26 @@ public static class CollectionWorkerHost
                 runtimeShutdown = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 workerCancellationToken = runtimeShutdown.Token;
                 stopRequestWatcher = runtimeState.WatchStopRequestsAsync(runtimeShutdown, workerCancellationToken);
+                heartbeat = runtimeState.RunHeartbeatAsync(workerCancellationToken);
                 logger.LogInformation("Worker runtime logging initialized. Event={Event}", "SCOM_WORKER_STARTED");
+                WorkerEventLog.Write(WorkerEventLog.Started, "WORKER_STARTED");
+                if (runtimeState.Recovery is { } recovery)
+                {
+                    LogRecovery(logger, LogLevel.Warning, "WORKER_STALE_MARKER_RECOVERED", recovery.Reason);
+                    WorkerEventLog.Write(WorkerEventLog.Recovered,
+                        "WORKER_STALE_MARKER_RECOVERED Reason=" + recovery.Reason);
+                }
             }
-            if (!Path.IsPathFullyQualified(configurationPath))
-                throw new InvalidOperationException("Worker configuration path must be absolute.");
-            var info = new FileInfo(configurationPath);
-            if (!info.Exists || info.Length > 1024 * 1024)
-                throw new InvalidOperationException("Worker configuration is missing or exceeds its byte budget.");
-            using var stream = info.OpenRead();
-            using var bytes = new MemoryStream();
-            var buffer = new byte[8192];
-            int read;
-            while ((read = await stream.ReadAsync(buffer, workerCancellationToken)) != 0)
-            {
-                if (bytes.Length + read > 1024 * 1024)
-                    throw new InvalidOperationException("Worker configuration exceeds its byte budget.");
-                bytes.Write(buffer, 0, read);
-            }
-            ReadOnlyMemory<byte> configurationBytes = bytes.ToArray();
-            if (configurationBytes.Span.StartsWith(new byte[] { 0xEF, 0xBB, 0xBF }))
-                configurationBytes = configurationBytes[3..];
-            using var document = JsonDocument.Parse(configurationBytes);
-            SnapshotReader.RejectDuplicateProperties(document.RootElement);
-            var settings = document.RootElement.Deserialize<CollectionWorkerHostSettings>(Wire.Json) ??
-                throw new InvalidOperationException("Worker configuration is empty.");
+            var settings = await ReadSettingsAsync(configurationPath, workerCancellationToken);
             loadingConfiguration = false;
             logging.AddProvider(new OperationalFileLoggerProvider(settings.OperationalLogging,
                 OperationalComponent.Worker));
             OperationalLog.Write(logger, OperationalEvent.Started, OperationalOutcome.Succeeded);
+            if (runtimeState?.Recovery is { } recoveredMarker)
+                LogRecovery(logger, LogLevel.Warning, "WORKER_STALE_MARKER_RECOVERED", recoveredMarker.Reason);
             settings.Reconciliation.Validate();
             settings.Schedule.Validate();
+            if (runtimeState is not null) runtimeState.ScheduleInterval = settings.Schedule.Interval;
             settings.Publisher.Validate();
             settings.Identity.Validate();
             settings.LiveChecks.Validate();
@@ -182,12 +235,41 @@ public static class CollectionWorkerHost
             OperationalLog.Write(logger, OperationalEvent.Stopped, OperationalOutcome.Succeeded);
             return 0;
         }
+        catch (WorkerAlreadyRunningException)
+        {
+            LogRecovery(logger, LogLevel.Information, "WORKER_ALREADY_RUNNING", null);
+            return 0;
+        }
+        catch (WorkerLockHeldException held)
+        {
+            LogRecovery(logger, LogLevel.Warning, held.Code, null);
+            WorkerEventLog.Write(WorkerEventLog.Recovered, held.Code);
+            return ExitTransient;
+        }
+        catch (WorkerRearmRequiredException)
+        {
+            // Best effort: persist the refusal in the operational log. No source or publisher is touched.
+            try
+            {
+                var refused = await ReadSettingsAsync(configurationPath, CancellationToken.None);
+                logging.AddProvider(new OperationalFileLoggerProvider(refused.OperationalLogging,
+                    OperationalComponent.Worker));
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+                InvalidOperationException or JsonException)
+            {
+            }
+            LogRecovery(logger, LogLevel.Error, "WORKER_RECOVERY_REFUSED", "PRIOR_TERMINAL_FAILURE");
+            WorkerEventLog.Write(WorkerEventLog.Failed, "WORKER_RECOVERY_REFUSED Reason=PRIOR_TERMINAL_FAILURE");
+            return ExitNotRestartable;
+        }
         catch (OperationCanceledException) when (runtimeState?.StopRequestInvalid == true)
         {
             runtimeState.Stop("WORKER_STOP_REQUEST_INVALID");
             logger.LogError("Worker stopped. Event={Event} ErrorType={ErrorType} Code={Code}",
                 "SCOM_WORKER_FAILED", runtimeState.StopRequestErrorType, "WORKER_STOP_REQUEST_INVALID");
-            return 1;
+            WorkerEventLog.Write(WorkerEventLog.Failed, "WORKER_STOP_REQUEST_INVALID");
+            return ExitNotRestartable;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested ||
             runtimeState?.StopRequested == true)
@@ -201,24 +283,22 @@ public static class CollectionWorkerHost
             runtimeState?.Stop("WORKER_CONFIGURATION_JSON_INVALID");
             logger.LogError("Worker stopped. Event={Event} Code={Code} LineNumber={LineNumber} BytePositionInLine={BytePositionInLine}",
                 "SCOM_WORKER_FAILED", "WORKER_CONFIGURATION_JSON_INVALID", error.LineNumber, error.BytePositionInLine);
-            return 1;
+            if (runtimeState is not null)
+                WorkerEventLog.Write(WorkerEventLog.Failed, "WORKER_CONFIGURATION_JSON_INVALID");
+            return ExitNotRestartable;
         }
         catch (Exception error)
         {
-            runtimeState?.Stop(error is CollectionAttemptsExhaustedException
-                ? "COLLECTION_ATTEMPTS_EXHAUSTED"
-                : error is IngestionPublicationException publicationFailure ? publicationFailure.Code :
-                error is QueryFault queryFailure ? queryFailure.Code :
-                error is JsonException ? "WORKER_CONFIGURATION_JSON_INVALID" :
-                "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
+            var (code, terminal) = Classify(error);
+            if (terminal) runtimeState?.Stop(code);
+            else runtimeState?.StopTransient(code);
             // Never log paths, source records, configuration, credentials or
             // arbitrary exception messages from a source-profile subprocess.
             logger.LogError("Worker stopped. Event={Event} ErrorType={ErrorType} Code={Code}",
-                "SCOM_WORKER_FAILED", error.GetType().Name,
-                error is CollectionAttemptsExhaustedException ? "COLLECTION_ATTEMPTS_EXHAUSTED" :
-                error is IngestionPublicationException publication ? publication.Code :
-                error is QueryFault query ? query.Code : "WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
-            return 1;
+                "SCOM_WORKER_FAILED", error.GetType().Name, code);
+            if (runtimeState is not null)
+                WorkerEventLog.Write(terminal ? WorkerEventLog.Failed : WorkerEventLog.Recovered, code);
+            return terminal ? ExitNotRestartable : ExitTransient;
         }
         finally
         {
@@ -227,6 +307,11 @@ public static class CollectionWorkerHost
             {
                 try { await stopRequestWatcher; }
                 catch (OperationCanceledException) when (runtimeShutdown?.IsCancellationRequested == true) { }
+            }
+            if (heartbeat is not null)
+            {
+                try { await heartbeat; }
+                catch (OperationCanceledException) { }
             }
             runtimeShutdown?.Dispose();
             runtimeState?.Dispose();

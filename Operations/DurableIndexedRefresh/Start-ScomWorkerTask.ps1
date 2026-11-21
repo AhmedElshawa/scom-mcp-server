@@ -11,7 +11,7 @@ $state = Get-RefreshStateDirectory -Task $task
 $runtime = Read-RefreshRuntimeStatus -StateDirectory $state -AllowMissing `
     -TaskRunning:([string]$task.State -eq 'Running')
 if ($null -ne $runtime -and $runtime.NeedsRearm) {
-    throw 'Worker is gated by a terminal failure or unknown prior-running state. Diagnose and use Rearm-ScomWorkerTask.ps1 explicitly.'
+    throw 'Worker is gated by a terminal failure (WORKER_RECOVERY_REFUSED). Diagnose and use Rearm-ScomWorkerTask.ps1 explicitly.'
 }
 if ([string]$task.State -eq 'Running') {
     throw 'The owned worker task is already running; no second instance was requested.'
