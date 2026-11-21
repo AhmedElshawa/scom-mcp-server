@@ -56,7 +56,7 @@ You need the following. People and roles differ per organization; one person may
 |---|---|---|
 | Local administrator on the Windows Server that will host the receiver and worker (Windows PowerShell 5.1, elevated) | Install, IIS, certificates, scheduled task | Steps 1, 2, 4, 7, 9, 10 |
 | A DNS name for the server (`<FQDN>`) that resolves to it, **including from the server itself** | HTTPS binding, token audience checks, Activate health check | Steps 2, 6, 7, 8 |
-| A TLS certificate for `<FQDN>` trusted by the server and by Copilot Studio (public or enterprise CA) | HTTPS endpoint | Step 2 |
+| A TLS certificate for `<FQDN>` trusted by the server and by Copilot Studio (in practice a public-CA certificate, unless a gateway with a public certificate fronts the server) | HTTPS endpoint | Step 2 |
 | IIS and the .NET 8 ASP.NET Core Hosting Bundle (install after IIS) | Hosts the receiver | Steps 2, 7 |
 | A SCOM management group, a reachable management server and the Operations Manager console or PowerShell module on the collector host | The data source | Steps 3, 6, 7 |
 | A dedicated read-only domain account with Allow log on locally and Log on as a batch job | Runs the worker | Steps 3, 4, 7, 10 |
@@ -106,13 +106,15 @@ Config-file mapping for these values: [entra-setup, where each value lands](entr
 
 ## Step 1. Download and verify the package
 
-1. Download `scom-mcp-v0.1.0-lab.zip` and its `.sha256` from the
-   [latest release](https://github.com/AhmedElshawa/scom-mcp-server/releases/latest) into an empty folder.
+1. Download `scom-mcp-<RELEASE>.zip` and its `.sha256` from the
+   [Releases page](https://github.com/AhmedElshawa/scom-mcp-server/releases) into an empty folder.
+   Use the latest pre-release from the Releases page (v0.2.1-lab at the time of writing) and
+   substitute its tag for `<RELEASE>` in the commands below.
 2. Verify the download (PowerShell prints `True` when the hash matches):
 
    ```powershell
-   (Get-Content .\scom-mcp-v0.1.0-lab.zip.sha256) -match (Get-FileHash .\scom-mcp-v0.1.0-lab.zip).Hash
-   gh attestation verify .\scom-mcp-v0.1.0-lab.zip --repo AhmedElshawa/scom-mcp-server
+   (Get-Content .\scom-mcp-<RELEASE>.zip.sha256) -match (Get-FileHash .\scom-mcp-<RELEASE>.zip).Hash
+   gh attestation verify .\scom-mcp-<RELEASE>.zip --repo AhmedElshawa/scom-mcp-server
    ```
 
 3. Extract it and place the extracted folder at `C:\ScomMcp\package` (the folder that
@@ -120,7 +122,7 @@ Config-file mapping for these values: [entra-setup, where each value lands](entr
 
    ```powershell
    New-Item -ItemType Directory C:\ScomMcp -Force | Out-Null
-   Expand-Archive .\scom-mcp-v0.1.0-lab.zip -DestinationPath C:\ScomMcp\_extract
+   Expand-Archive .\scom-mcp-<RELEASE>.zip -DestinationPath C:\ScomMcp\_extract
    Move-Item (Get-ChildItem C:\ScomMcp\_extract -Directory).FullName C:\ScomMcp\package
    Remove-Item C:\ScomMcp\_extract
    ```
@@ -137,8 +139,9 @@ At this point you should have: `<pkg>` with `setup\Start-ScomSetup.ps1` inside i
    (`Resolve-DnsName <FQDN>`). Step 7's Activate fails if it cannot, and the failure is hard
    to undo ([install-cli failure notes](install-cli.md#failure-notes)).
 2. **TLS certificate.** Install a certificate whose subject or SAN is `<FQDN>` in
-   `LocalMachine\My`, issued by a CA trusted by the server and by Copilot Studio. Record its
-   thumbprint:
+   `LocalMachine\My`, issued by a CA trusted by the server and by Copilot Studio. In practice
+   a certificate from a public CA is required unless a gateway that presents a public
+   certificate fronts the server. Record its thumbprint:
 
    ```powershell
    Get-ChildItem Cert:\LocalMachine\My | Where-Object Subject -like '*<FQDN>*' |
@@ -166,7 +169,9 @@ At this point you should have: `<pkg>` with `setup\Start-ScomSetup.ps1` inside i
    monitored objects. On the collector host grant **Allow log on locally** and
    **Log on as a batch job**. The full rights table is in
    [service-accounts](service-accounts.md).
-2. **Gather SCOM facts** on the collector host (console or PowerShell module installed):
+2. **Gather SCOM facts** on the collector host (console or PowerShell module installed).
+   Prefer a non-primary management server for `<MGMT_SERVER_FQDN>`; if the first server
+   returned below is the primary, use another one's name instead:
 
    ```powershell
    Import-Module OperationsManager
@@ -348,7 +353,7 @@ Start from [`worker.example.json`](../examples/worker.example.json); field notes
 | `profile.configuration.operationsManagerModule` | `<OM_MODULE_PATH>` (from Step 3); must equal the plan's value in 6d |
 | `schedule.interval` | `01:00:00` (default). The receiver's `Source.FreshMinutes` must exceed it |
 | `profile.configuration.windowsMapping`, `allowedPropertiesByClass`, `additionalRelationshipNames` | Generated from your SCOM by `New-ScomMappingProfile.ps1` (below); do not hand-edit |
-| Verification flags (six) | Set to `true` by `Approve-ScomMappingProfile.ps1` (below) after you review the evidence |
+| Verification flags (six) | All six set to `true` by `Approve-ScomMappingProfile.ps1` (below), in either scope, after you review the evidence. `wholeManagementGroupApproved` is not one of the six: the generator sets it from `-ScopeKind` |
 
 Setup's Configure step supplies the script path and hash, state paths and some identity
 fields while merging ([worker.example.md](../examples/worker.example.md)); still fill in the
@@ -391,7 +396,11 @@ classes are the most-derived classes for your management packs. Copy the printed
 
 **Approve.** This prints the evidence again, refuses if the file no longer matches it, asks for
 one `APPROVE`, sets exactly the six flags to `true` and writes `worker.json.attestation.txt`
-(operator, UTC date, SHA-256 of the evidence file). It changes nothing else:
+(operator, UTC date, SHA-256 of the evidence file). It sets all six regardless of scope: the
+collector enforces only the flags that apply to your scope (group: `membershipQueryContractVerified`;
+whole management group: `enumerationQueryContractVerified` plus `wholeManagementGroupApproved`),
+so the other scope's flag is set but not enforced. It changes nothing else, including
+`wholeManagementGroupApproved` and `liveChecks.queryContractVerified`:
 
 ```powershell
 .\setup\Approve-ScomMappingProfile.ps1 -WorkerPath C:\ScomMcp\worker-draft\worker.json
@@ -466,14 +475,15 @@ column; it is not measured by the software. Never set one to make a check pass.
 | `enumerationQueryContractVerified` | **Whole-management-group scope only.** Enumerating all instances of the Windows classes returns what you expect | Instance counts from `Get-SCOMClassInstance -Class <class>` equal the console's Discovered Inventory counts |
 | `additionalRelationshipContractVerified` | Both names in `additionalRelationshipNames` exist and return edges | The relationship probe in 6f |
 
-What to set:
+What to set by hand (the generator path in 6c sets all six, so this is the same outcome):
 
-- **Group scope:** set five flags to `true` (all except `enumerationQueryContractVerified`,
-  which stays `false`).
-- **Whole management group:** set five flags to `true` (all except
-  `membershipQueryContractVerified`, which stays `false`), set `wholeManagementGroupApproved`
-  to `true` in both `worker.json` and the plan (6d), and leave `groupId` as `null`.
-  Validated on 3 servers only.
+- **Group scope:** the five flags that apply are everything except
+  `enumerationQueryContractVerified`. The collector does not check the enumeration flag in
+  group scope, so it may be `false` (by hand) or `true` (after Approve).
+- **Whole management group:** the five flags that apply are everything except
+  `membershipQueryContractVerified`, which the collector does not check in this scope (`false`
+  by hand, `true` after Approve). Also set `wholeManagementGroupApproved` to `true` in both
+  `worker.json` and the plan (6d), and leave `groupId` as `null`. Validated on 3 servers only.
 - `liveChecks.queryContractVerified` stays `false` in every case.
 
 When they are enforced: Configure (command 4) only validates that the JSON is well-formed and
@@ -508,9 +518,15 @@ New-SCOMManagementGroupConnection -ComputerName '<MGMT_SERVER_FQDN>'
 
 **Fact 1: the classes and relationships exist, and which disk relationship applies.** The
 example uses `Microsoft.Windows.Computer`, `Microsoft.Windows.OperatingSystem` and
-`Microsoft.Windows.Server.LogicalDisk` (the collector requires the Server logical-disk class),
-with `Microsoft.Windows.ComputerHostsOperatingSystem` and
-`Microsoft.Windows.ComputerHostsLogicalDevice`. Use that direct computer-to-device edge **or**
+`Microsoft.Windows.Server.LogicalDisk` as `computerClassName`, `operatingSystemClassName` and
+`volumeClassName` (the generator copies them from the template), with
+`Microsoft.Windows.ComputerHostsOperatingSystem` and
+`Microsoft.Windows.ComputerHostsLogicalDevice`. These are base classes: the collector only
+requires that each configured name is an existing class that the observed objects are
+instances of, while the allow-list in Fact 3 uses the most-derived classes. For disks the chain
+is `Microsoft.Windows.Server.10.0.LogicalDisk` > `Microsoft.Windows.Server.LogicalDisk` >
+`Microsoft.Windows.LogicalDisk`; only `Microsoft.Windows.Server.LogicalDisk` was validated in the lab.
+Use the direct computer-to-device edge **or**
 `osHostsVolumeRelationship`, never both, and list each relationship in
 `additionalRelationshipNames`.
 
@@ -581,7 +597,7 @@ When all three facts hold, set `windowsMapping.verified` and
 `additionalRelationshipContractVerified` as described in 6e.
 
 At this point you should have `identity.json`, `receiver.json` and `worker.json` in
-`C:\ScomMcp\config` (with the six flags `true`, from Approve in 6c or from 6e, and a recorded
+`C:\ScomMcp\config` (with the attestation flags `true`: all six from Approve in 6c, or the five that apply to your scope from 6e, and a recorded
 decision: `worker.json.attestation.txt` or the 6e template), and `plan-input.json` in
 `C:\ScomMcp`. Reference for every setting: [configuration-reference](configuration-reference.md).
 
@@ -751,6 +767,8 @@ The agent's **Tools** page lists the server's tools with their toggles on (the l
 exposes 13 read-only tools):
 
 ![Copilot Studio Tools page listing the SCOM MCP tools, all enabled](screenshots/copilot-studio-tools.png)
+
+The Tools page shows 13 tools but only six are the documented inventory and lifecycle tools; the other seven (read-model, metrics and targeted-live) are also listed, and because metrics and targeted-live checks are disabled in this deployment they return an empty result or a "not enabled" style error (for example `LIVE_NOT_ENABLED`) instead of data.
 
 At this point you should have a working connection: the agent lists the server's tools and
 `<CALLBACK_URI>` is saved on the reader app. If sign-in fails with a redirect mismatch,
