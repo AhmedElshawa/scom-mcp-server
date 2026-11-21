@@ -237,7 +237,7 @@ Assert-Fault { Read-Set } 'SCOM_RELATIONSHIP_ROW_INVALID'
 $manager.Mode = 'valid'
 
 # --- Reader: IsDeleted absent from the SDK row type is tolerated (separate process, type compiled without it) ---
-$powerShell = Join-Path $PSHOME 'powershell.exe'
+$powerShell = (Get-Process -Id $PID).Path
 $childOutput = & $powerShell -NoProfile -ExecutionPolicy Bypass -File $PSCommandPath -NoIsDeleted 2>&1
 Check ($LASTEXITCODE -eq 0 -and (($childOutput | Out-String) -match 'IsDeleted absent')) "IsDeleted-absent run failed: $($childOutput | Out-String)"
 
