@@ -27,7 +27,7 @@ packs. Verify each against your own probe output before setting any `*Verified` 
 |---|---|---|
 | `computerClassName` | `Microsoft.Windows.Computer` | |
 | `operatingSystemClassName` | `Microsoft.Windows.OperatingSystem` | |
-| `volumeClassName` | `Microsoft.Windows.Server.LogicalDisk` | The collector requires the Server logical-disk class. |
+| `volumeClassName` | `Microsoft.Windows.Server.LogicalDisk` | A base class of the observed disk class. The collector requires that the observed disks are instances of it, not that it is the most-derived class. |
 | `computerHostsOsRelationship` | `Microsoft.Windows.ComputerHostsOperatingSystem` | Must also appear in `additionalRelationshipNames`. |
 | `computerHostsVolumeRelationship` | `Microsoft.Windows.ComputerHostsLogicalDevice` | Direct computer-to-device edge, includes non-disk devices; non-volume targets are filtered. Use this **or** `osHostsVolumeRelationship`, never both. Must also appear in `additionalRelationshipNames`. |
 | `hostnameProperty` | `PrincipalName` | |
