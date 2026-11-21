@@ -699,7 +699,7 @@ Host-lane commands fail with `SETUP_ADMINISTRATOR_REQUIRED_FOR_HOST_LANE` if the
 elevated. Setup never enables recurrence; that is Step 10. The same sequence is also
 documented in the [install-cli runbook](install-cli.md#commands) for depth.
 
-📷 *Screenshot pending: `readme-wizard.png` (GUI alternative); see
+📷 *Wizard screenshots (`wizard-prerequisites.png`, `wizard-configuration.png`) are evaluation: pending; see
 [install-wizard](install-wizard.md) and [screenshots/README.md](screenshots/README.md).*
 
 At this point you should have the receiver running at `https://<FQDN>` with one published
