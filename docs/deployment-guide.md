@@ -730,8 +730,12 @@ Model Context Protocol** and fill in:
 4. Paste [`examples/agent-instructions.md`](../examples/agent-instructions.md) verbatim into the
    agent's Instructions.
 
-📷 *Screenshots pending: `copilot-studio-connector.png`, `copilot-studio-connection.png`;
-see [screenshots/README.md](screenshots/README.md).*
+The connection appears as **Connected** under Copilot Studio's **Manage your connections**:
+
+![Copilot Studio connections page showing the SCOM MCP connection as Connected](screenshots/copilot-studio-connection.png)
+
+📷 *Screenshot pending: `copilot-studio-connector.png`; see
+[screenshots/README.md](screenshots/README.md).*
 
 At this point you should have a working connection: the agent lists the server's tools and
 `<CALLBACK_URI>` is saved on the reader app. If sign-in fails with a redirect mismatch,

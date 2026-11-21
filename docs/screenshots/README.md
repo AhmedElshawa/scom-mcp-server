@@ -1,6 +1,6 @@
 # Screenshots
 
-Committed so far: the five `entra-setup-*.png` files
+Committed so far: the five `entra-setup-*.png` files and `copilot-studio-connection.png`
 (real captures from the lab tenant with the tenant, account and all identifiers redacted).
 The others in the table below are still to be captured. Screenshots show lab or customer
 identifiers (hostnames, tenant, app and object GUIDs, IP addresses, thumbprints, user
