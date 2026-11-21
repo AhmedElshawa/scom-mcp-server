@@ -271,8 +271,11 @@ Either way you also need to:
 
 ![App roles: the Scom.Ingest application role](screenshots/entra-setup-api-approles.png)
 
-📷 *Screenshots pending: `entra-setup-publisher-cert.png`, `entra-setup-publisher-permissions.png`,
-`entra-setup-reader-permissions.png`; see [screenshots/README.md](screenshots/README.md).*
+![Publisher app, Certificates: one uploaded certificate and no client secrets (identifiers redacted)](screenshots/entra-setup-publisher-cert.png)
+
+![Publisher app, API permissions: Scom.Ingest (Application) with admin consent granted](screenshots/entra-setup-publisher-permissions.png)
+
+![Reader app, API permissions: delegated Scom.Read with admin consent granted](screenshots/entra-setup-reader-permissions.png)
 
 At this point you should have these values:
 

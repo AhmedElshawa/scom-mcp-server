@@ -59,6 +59,12 @@ connector's redirect URI are still handled separately (below).
 
 ![App roles: the Scom.Ingest application role (identifiers redacted)](screenshots/entra-setup-api-approles.png)
 
+![Publisher app, Certificates: one uploaded certificate and no client secrets (identifiers redacted)](screenshots/entra-setup-publisher-cert.png)
+
+![Publisher app, API permissions: Scom.Ingest (Application) with admin consent granted](screenshots/entra-setup-publisher-permissions.png)
+
+![Reader app, API permissions: delegated Scom.Read with admin consent granted](screenshots/entra-setup-reader-permissions.png)
+
 More portal screenshots: see [screenshots/README.md](screenshots/README.md).
 
 ## Where each value lands
