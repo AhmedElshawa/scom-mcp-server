@@ -148,7 +148,9 @@ At this point you should have: `<pkg>` with `setup\Start-ScomSetup.ps1` inside i
    443 to `login.microsoftonline.com` and the worker's path to the management server.
    Rule examples (NSG and Windows Firewall): [network-and-ports](network-and-ports.md).
 
-📷 *Screenshot pending: IIS HTTPS binding; see [screenshots/README.md](screenshots/README.md).*
+![IIS Manager Edit Site Binding dialog: https, port 443, Require Server Name Indication selected (hostname, site and certificate redacted)](screenshots/iis-https-binding.png)
+
+*The HTTPS binding that setup creates: port 443 with Require Server Name Indication ticked (identifiers redacted).*
 
 **Record these values:** `<FQDN>`, `<TLS_THUMBPRINT>` (40 hex characters, no spaces).
 
@@ -891,6 +893,10 @@ certification." Type `APPROVE`; any other answer cancels.
 
 At this point you should have all eight checks recorded as passed (or skipped by you, by
 name), the check app deleted, and setup at the `accepted` stage.
+
+![Elevated PowerShell on the host printing SETUP_STAGE=accepted read from setup-state.json](screenshots/terminal-accept.png)
+
+*The recorded setup stage, read from `setup-state.json` in the state directory after Accept (the Accept step itself was not re-run).*
 
 ## Step 10. Register recurrence
 
