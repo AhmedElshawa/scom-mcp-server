@@ -27,6 +27,14 @@ try {
         $inventoryKind=$config.inventoryKind
         if ($inventoryKind -cnotin @('generic','supportedWindows')) { throw 'SCOM_PROFILE_INVENTORY_KIND_INVALID' }
     }
+    $readMode='perSource'
+    if ($null -ne $config.PSObject.Properties['relationshipReadMode']) {
+        $readMode=$config.relationshipReadMode
+        if ($readMode -isnot [string] -or $readMode -cnotin @('perSource','set') -or
+            ($readMode -ceq 'set' -and ($lab -or $inventoryKind -cne 'supportedWindows'))) {
+            throw 'SCOM_SET_READ_MODE_INVALID'
+        }
+    }
     if ($null -ne $config.PSObject.Properties['operationalLogging'] -and $null -ne $config.operationalLogging) {
         Import-Module (Join-Path $PSScriptRoot 'ScomOperationalLogging.psm1') -ErrorAction Stop | Out-Null
         $operationalLog=New-SCOMOperationalLog -Configuration $config.operationalLogging
@@ -151,6 +159,7 @@ try {
         AdditionalRelationshipClasses = $graphClasses
         AdditionalRelationshipContractVerified = $graphVerified
         HostingLabPreview = $lab
+        RelationshipReadMode = $readMode
         MaxGraphQueries = $maxGraphQueries
         MaxSeriesSamples = $maxSeriesSamples
         MaxMetricSamples = $maxMetricSamples
@@ -161,8 +170,7 @@ try {
         PageSize = [int]$config.pageSize
         DeadlineSeconds = [int]$config.deadlineSeconds
         ReadActiveAlerts = {
-            param($object)
-            Get-SCOMAlert -Instance $object -ResolutionState (0..254) -ErrorAction Stop
+            Get-SCOMAlert -Criteria 'ResolutionState < 255' -ErrorAction Stop
         }
         ReadAlertById = {
             param($id)
@@ -210,10 +218,22 @@ try {
             $parameters.WindowsManagementServerClass=$types.managementServerClassName
         }
     }
+    $graph = @{}
+    $parameters.GraphCounters = $graph
     $scan = Get-SCOMGenericScan @parameters
     $output = @{ protocolVersion=1; scan=$scan } | ConvertTo-Json -Depth 24 -Compress
     if ([Text.Encoding]::UTF8.GetByteCount($output) -gt 33554432) { throw 'SCOM_PROFILE_OUTPUT_BUDGET' }
-    if ($null -ne $operationalLog) { Write-SCOMOperationalEvent -Log $operationalLog -Event 'scan.completed' }
+    if ($null -ne $operationalLog) {
+        if ($graph.setReadFallback) { Write-SCOMOperationalEvent -Log $operationalLog -Event 'scan.setReadFallback' }
+        Write-SCOMOperationalEvent -Log $operationalLog -Event 'scan.completed' -Counters @{
+            graphQueries=[int]$graph.graphQueries
+            setRead=[bool]($graph.readMode -ceq 'set')
+            setReadFallback=[bool]$graph.setReadFallback
+            skippedNonVolumeTargets=[int]$graph.skippedNonVolumeTargets
+            skippedNonOsTargets=[int]$graph.skippedNonOsTargets
+            skippedOutsideScopeSources=[int]$graph.skippedOutsideScopeSources
+        }
+    }
     [Console]::Out.Write($output)
 }
 catch {

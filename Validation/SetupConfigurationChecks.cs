@@ -75,6 +75,20 @@ static class SetupConfigurationChecks
         worker["profile"]!["configuration"]!["enumerationQueryContractVerified"] = true;
         Save();
         Check(SetupConfigurationValidation.Validate(directory, workerPath));
+        worker["profile"]!["configuration"]!["relationshipReadMode"] = "perSource";
+        Save();
+        Check(SetupConfigurationValidation.Validate(directory, workerPath));
+        worker["profile"]!["configuration"]!["relationshipReadMode"] = "set";
+        Save();
+        Check(SetupConfigurationValidation.Validate(directory, workerPath));
+        Reject(() => worker["profile"]!["configuration"]!["relationshipReadMode"] = "Set");
+        Reject(() => worker["profile"]!["configuration"]!["relationshipReadMode"] = "bogus");
+        Reject(() => worker["profile"]!["configuration"]!["relationshipReadMode"] = 1);
+        Reject(() => worker["profile"]!["configuration"]!["relationshipReadMode"] = null);
+        Reject(() => worker["profile"]!["configuration"]!["windowsMapping"] = null);
+        ((JsonObject)worker["profile"]!["configuration"]!).Remove("relationshipReadMode");
+        Save();
+        Check(SetupConfigurationValidation.Validate(directory, workerPath));
         Reject(() => worker["profile"]!["configuration"]!["groupId"] = "");
         Reject(() => worker["profile"]!["configuration"]!["wholeManagementGroupApproved"] = false);
         Reject(() => receiver["ReadModel"]!["WindowsToolsEnabled"] = false);
@@ -87,6 +101,7 @@ static class SetupConfigurationChecks
             "Microsoft.Windows.OperatingSystemHostsLogicalDisk");
         Save();
         Check(SetupConfigurationValidation.Validate(directory, workerPath));
+        Reject(() => worker["profile"]!["configuration"]!["relationshipReadMode"] = "set");
         Reject(() => worker["profile"]!["configuration"]!["additionalRelationshipContractVerified"] = true);
         Reject(() => worker["profile"]!["configuration"]!["additionalRelationshipNames"]![1] = "Synthetic.Unrelated");
         worker["profile"]!["configuration"]!["enumerationQueryContractVerified"] = false;

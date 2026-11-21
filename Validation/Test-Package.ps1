@@ -30,7 +30,7 @@ $required = @(
     'collector\Get-SCOMMetricCompatibilityReport.ps1',
     'collector\Invoke-SCOMGenericGroupProfile.ps1', 'collector\ScomSdkReader.psm1',
     'collector\ScomNormalization.psm1', 'collector\ScomMetricProfile.psm1',
-    'collector\ScomWindowsProjection.psm1', 'collector\ScomOperationalLogging.psm1', 'docs\indexed-deployment-runbook.md',
+    'collector\ScomWindowsProjection.psm1', 'collector\ScomOperationalLogging.psm1', 'collector\ScomSetRelationshipReader.psm1', 'docs\indexed-deployment-runbook.md',
     'docs\deployment-issue-log.md', 'docs\customer-evaluation.md',
     'docs\enterprise-readiness-roadmap.md',
     'docs\os-lifecycle-assessment.md',
