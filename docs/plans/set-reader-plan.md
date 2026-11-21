@@ -71,3 +71,23 @@ No changes outside `Collector/`, `ScomMcp/SetupConfigurationValidation.cs`, `Set
 4. The cap is `expectedTargets + 1` over all rows of the relationship. A hosting relationship that also carries
    targets we do not read (for example network adapters under the logical-device relationship) can reach the cap
    and fail closed. This is implemented literally, with no extra configuration knob; Phase 4 must measure it.
+5. Counters travel through the optional `-GraphCounters` hashtable and the operational log (`-Counters`, event
+   `scan.setReadFallback`), not the scan object, because the strict wire contract has no `graph` member.
+6. Bulk alerts: one whole-management-group `Get-SCOMAlert -Criteria 'ResolutionState < 255'` call, used by both
+   modes. `MaxAlerts` applies to in-scope alerts only. This may be heavier than per-object reads for small groups.
+7. Set mode requires `supportedWindows` plus `windowsMapping` and is invalid with the lab preview.
+8. Set mode reads only the mapped OS and volume hosting relationships as sets; other relationships stay per-source.
+9. Set-call skips are counted and never abort. Targets outside the served set count as outside edges.
+10. `CapHit` on a returned dataset is always false, because reaching the cap throws `SCOM_SET_READ_CAP_HIT`.
+11. A served set that is empty on either side means no call is made.
+12. In per-source mode the skip counters are 0 and `graphQueries` counts the per-source calls.
+13. The cap risk with non-disk rows is implemented literally with no knob and flagged for Phase 4.
+14. "Missing OS edge: computer listed" means the computer stays in `windowsInventory.devices` and
+    `expectedComputerIds`; "missing disk edge: disk listed" means the volume is in scan `objects` but not in
+    `windowsInventory.volumes`, with `inventory.complete` false.
+15. `docs/supported-configuration.md` does not exist; the "implemented, lab validation pending" note is in
+    `docs/limitations.md`.
+16. `verify-docs.ps1` does not exist; `Test-Package.ps1`, `Test-UpgradeGuide.ps1`, the other doc checks and the
+    full `validate.ps1` serve as the docs verification.
+17. The generator writes `set` only if both relationships were observed AND no non-disk device shares the disk
+    relationship; otherwise it writes `perSource` and records the reason in `evidence.json`.

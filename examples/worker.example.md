@@ -44,6 +44,18 @@ packs. Verify each against your own probe output before setting any `*Verified` 
 `…Server.10.0.Full.OperatingSystem`, `…Server.10.0.LogicalDisk`). It must be identical
 in the receiver's `AllowedPropertiesByClass`.
 
+## `relationshipReadMode`
+
+`perSource` (default, and the only mode lab-validated) reads the configured
+relationships once per source object. `set` reads the OS and disk hosting relationships
+once each for the whole scope; it is implemented but **lab validation is pending**, and it
+requires the reviewed `windowsMapping` and no `hostingLabPreview`. The mapping generator
+writes `set` only when both relationships were observed on at least one sampled computer
+and no non-disk device shares the disk relationship; the choice and its reason are recorded
+in the evidence file. Any other value is rejected (`SCOM_SET_READ_MODE_INVALID`). The result
+count of a set read is never evidence of completeness; completeness is always decided by
+reconciling the expected computers and disks.
+
 ## Verification flags
 
 `verified`, `agentMonitoringVerified`, `scopeVisibilityVerified`,

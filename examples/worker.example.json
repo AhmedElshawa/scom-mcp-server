@@ -56,6 +56,7 @@
         "volumeSizeToMiB": 1
       },
       "maxGraphQueries": 10000,
+      "relationshipReadMode": "perSource",
       "includeAlertDescriptions": false,
       "maxObjects": 1000,
       "maxGroups": 100,
