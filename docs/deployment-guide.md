@@ -939,7 +939,9 @@ Ask the nine prompts in [copilot-studio-integration, Agent acceptance test](copi
 and compare against the pass criteria. A transient "source unavailable" answer while a
 collection commits is correct behaviour, not a failure.
 
-📷 *Screenshot pending: `readme-agent-answer.png`; see [screenshots/README.md](screenshots/README.md).*
+![Test pane answer to "Which servers are nearest end of support?" with the lifecycle table and "Not in the lifecycle catalog." for the unmapped server; server names redacted](screenshots/readme-agent-answer.png)
+
+*The agent's answer to "Which servers are nearest end of support?" (server names redacted; the Data status block follows below the visible area).*
 
 You are done. Day-two operation (logs, policy changes, recovery, lifecycle catalog):
 [operations](operations.md).

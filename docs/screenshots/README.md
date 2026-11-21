@@ -1,7 +1,7 @@
 # Screenshots
 
-Committed so far: the five `entra-setup-*.png` files, `copilot-studio-connection.png` and
-`copilot-studio-tools.png` (real captures from the lab tenant with the tenant, account and
+Committed so far: the five `entra-setup-*.png` files, `copilot-studio-connection.png`,
+`copilot-studio-tools.png` and `readme-agent-answer.png` (real captures from the lab tenant with the tenant, account and
 all identifiers redacted). The others in the table below are still **pending**; the reason
 for each is in the Status column. Screenshots show lab or customer identifiers (hostnames,
 tenant, app and object GUIDs, IP addresses, thumbprints, user names), so each one is
@@ -12,7 +12,11 @@ IPs, thumbprints, accounts), save as PNG at 1 MB or less and 1280 px wide or les
 stripped, and name by documentation section. `copilot-studio-tools.png` shows 13 tools, not
 six.
 
-Status of the files not yet committed: `copilot-studio-connector.png`, `readme-agent-answer.png`,
+`readme-agent-answer.png` is a partial capture: the question, the lifecycle table, the
+"Not in the lifecycle catalog." line and Key Findings are visible; the Data status block is
+below the visible area of the Test pane.
+
+Status of the files not yet committed: `copilot-studio-connector.png`,
 `readme-agent-count.png`, `iis-https-binding.png`, `wizard-prerequisites.png`,
 `wizard-configuration.png` and `terminal-accept.png` were not captured. The Copilot Studio tool
 detail page shows no server URL, transport or OAuth fields (those live in the Power Apps custom
@@ -21,7 +25,7 @@ captures need interactive Bastion or Test-pane sessions that were not completed.
 
 | File name | Shows | Used in |
 |---|---|---|
-| `readme-agent-answer.png` | Copilot Studio agent answering "Give me the inventory summary" with collected_at, coverage and freshness | [README](../../README.md#7-screenshots), [copilot-studio-integration.md](../copilot-studio-integration.md) |
+| `readme-agent-answer.png` | Copilot Studio agent answering "Which servers are nearest end of support?" (partial; server names redacted) | [deployment-guide.md](../deployment-guide.md), [README](../../README.md#7-screenshots), [copilot-studio-integration.md](../copilot-studio-integration.md) |
 | `readme-wizard.png` | Setup wizard main page | [README](../../README.md#7-screenshots), [install-wizard.md](../install-wizard.md) |
 | `install-wizard-plan.png`, `install-wizard-activate.png`, `install-wizard-accept.png` | Wizard plan, activate and accept pages | [install-wizard.md](../install-wizard.md) |
 | `entra-setup-api-expose.png` | API app, Expose an API (scope `Scom.Read`) | [entra-setup.md](../entra-setup.md) |
