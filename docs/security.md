@@ -4,7 +4,7 @@
 
 | Threat | Control |
 |---|---|
-| Anonymous access to inventory | `/mcp` requires an Entra delegated token (tenant, audience, scope `Scom.Read`) **and** the caller's `oid` in `Auth.Callers`; `/healthz` is the only anonymous endpoint and returns no inventory. |
+| Anonymous access to inventory | `/mcp` requires an Entra delegated token (tenant, audience, scope `Scom.Read`) **and** the caller's `oid` in `Auth.Callers`; `/healthz` and `/healthz/freshness` are the only anonymous endpoints; neither returns inventory. `/healthz/freshness` discloses only a coarse status (`fresh`/`stale`/`expired`/`unavailable`) and the dataset age in seconds, and exists only when the read model is enabled. |
 | Forged or rogue publisher | `/ingestion` accepts only app-only tokens with the `Scom.Ingest` role from an approved publisher object ID; reader tokens are refused (403). |
 | Credential theft | No secrets in configuration. The publisher uses a certificate (private key readable only by the worker); SCOM access uses the worker's Windows identity; the reader secret lives only in the connector. |
 | Privilege escalation via SCOM | Worker is Read-Only Operator; the receiver has no SCOM credentials and never connects to SCOM. The collector script is hash-pinned, and the worker refuses to start unless the collector directory and script are writable only by SYSTEM and Administrators. The child executable must be an absolute path (no PATH search). |

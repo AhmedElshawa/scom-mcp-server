@@ -9,6 +9,7 @@ This document specifies the wire-level behavior of the SCOM MCP receiver (`ScomR
 
 | Route | Method | Authorization | Purpose |
 |---|---|---|---|
+| `/healthz/freshness` | GET | Anonymous | Returns only `{"status","ageSeconds"}`: 200 when the committed dataset is fresh, 503 when `stale`, `expired` or `unavailable`. Mapped only when `ReadModel:Enabled` is true (404 otherwise). Intended for external monitors. |
 | `/healthz` | GET | Anonymous | Returns `{"service":"ScomReadOnlyMcp","version":"1.0.0"}`. Liveness only; it does not prove that data is fresh. |
 | `/mcp` | MCP Streamable HTTP | Policy `ScomRead` | All MCP tools in section 4. |
 | `/ingestion/sessions/{sessionId}` | POST | Policy `ScomIngest` | Begin an ingestion session. Mapped only when `ReadModel.Enabled` is true. |
@@ -32,7 +33,7 @@ Unhandled exceptions return HTTP 500 `{"error":"REQUEST_FAILED"}`; the operation
 
 Tokens are Microsoft Entra ID v2 access tokens validated by the ASP.NET Core JWT bearer handler.
 
-### 2.1 Token validation (all routes except `/healthz`)
+### 2.1 Token validation (all routes except `/healthz` and `/healthz/freshness`)
 
 | Rule | Value |
 |---|---|

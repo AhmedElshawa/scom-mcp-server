@@ -51,10 +51,53 @@ static class CollectionWorkerHostChecks
             Path.Combine(terminalRuntimeState, "worker.status.json"));
         var gatedResult = await CollectionWorkerHost.RunAsync(Path.Combine(root, "invalid-before-source.json"),
             false, CancellationToken.None, terminalRuntimeState);
-        if (gatedResult != 1 || !priorFailureStatus.SequenceEqual(await File.ReadAllBytesAsync(
+        if (gatedResult != CollectionWorkerHost.ExitNotRestartable || !priorFailureStatus.SequenceEqual(await File.ReadAllBytesAsync(
             Path.Combine(terminalRuntimeState, "worker.status.json"))))
             throw new InvalidOperationException("Gated startup changed failure state or continued toward source configuration.");
         count++;
+
+        var events = new List<(int Id, string Message)>();
+        WorkerEventLog.Sink = (id, message) => { lock (events) events.Add((id, message)); };
+        try
+        {
+            // Event 3001 for the refused recovery; the gate itself stays in place.
+            gatedResult = await CollectionWorkerHost.RunAsync(Path.Combine(root, "invalid-before-source.json"),
+                false, CancellationToken.None, terminalRuntimeState);
+            if (gatedResult != 2 || !events.Any(e => e.Id == WorkerEventLog.Failed &&
+                e.Message.StartsWith("WORKER_RECOVERY_REFUSED", StringComparison.Ordinal)))
+                throw new InvalidOperationException("Refused recovery did not exit 2 with event 3001.");
+            count++;
+
+            // A restart after an unclean exit recovers by itself: events 1001 then 2001, never a rearm gate.
+            var crashedDirectory = Path.Combine(root, "crashed-runtime-state");
+            Directory.CreateDirectory(crashedDirectory);
+            new WorkerRuntimeState(crashedDirectory).Dispose();
+            events.Clear();
+            var recoveredResult = await CollectionWorkerHost.RunAsync(Path.Combine(root, "does-not-exist.json"),
+                false, CancellationToken.None, crashedDirectory);
+            if (recoveredResult != CollectionWorkerHost.ExitNotRestartable ||
+                events.Select(e => e.Id).Take(2).SequenceEqual([WorkerEventLog.Started, WorkerEventLog.Recovered]) is false ||
+                !events.Any(e => e.Id == WorkerEventLog.Recovered &&
+                    e.Message.Contains("WORKER_STALE_MARKER_RECOVERED", StringComparison.Ordinal)) ||
+                !events.Any(e => e.Id == WorkerEventLog.Failed))
+                throw new InvalidOperationException("Unclean-exit recovery did not emit events 1001, 2001 and 3001.");
+            count++;
+
+            // A second instance while a live worker holds the lock exits 0 without touching it.
+            var liveDirectory = Path.Combine(root, "live-runtime-state");
+            Directory.CreateDirectory(liveDirectory);
+            using (var liveWorker = new WorkerRuntimeState(liveDirectory))
+            {
+                var liveStatus = await File.ReadAllBytesAsync(Path.Combine(liveDirectory, "worker.status.json"));
+                var alreadyRunning = await CollectionWorkerHost.RunAsync(Path.Combine(root, "does-not-exist.json"),
+                    false, CancellationToken.None, liveDirectory);
+                if (alreadyRunning != 0 ||
+                    !liveStatus.SequenceEqual(await File.ReadAllBytesAsync(Path.Combine(liveDirectory, "worker.status.json"))))
+                    throw new InvalidOperationException("Concurrent worker instance did not exit 0 and leave the owner untouched.");
+                count++;
+            }
+        }
+        finally { WorkerEventLog.Sink = null; }
         var rearmOutput = await Accept(["--worker-rearm", terminalRuntimeState]);
         using (var status = JsonDocument.Parse(await File.ReadAllBytesAsync(
             Path.Combine(terminalRuntimeState, "worker.status.json"))))
@@ -117,7 +160,8 @@ static class CollectionWorkerHostChecks
             {
                 await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(15));
                 var output = await stdout + await stderr;
-                if (process.ExitCode != 1 || output.Length > 4096 ||
+                var expectedExit = args[0] is "--worker" or "--worker-once" ? CollectionWorkerHost.ExitNotRestartable : 1;
+                if (process.ExitCode != expectedExit || output.Length > 4096 ||
                     output.Contains("Now listening", StringComparison.OrdinalIgnoreCase) ||
                     output.Contains("private-sensitive-marker", StringComparison.Ordinal) ||
                     forbiddenCode is not null && output.Contains(forbiddenCode, StringComparison.Ordinal) ||

@@ -955,7 +955,7 @@ $c = Get-Credential '<WORKER_ACCOUNT>'
 | `State` | `start-requested` |
 | `StartupTrigger` | `AtStartup` |
 | `DuplicateInstancePolicy` | `IgnoreNew` |
-| `AutomaticRestartCount` | `0` |
+| `AutomaticRestartCount` | `3` (`AutomaticRestartInterval` `PT5M`, `StartupDelay` `PT3M`) |
 | `RuntimeStateDirectory` | `C:\ScomMcp\worker-runtime` |
 
 Day-two commands (status, start, stop, re-arm, unregister) are in

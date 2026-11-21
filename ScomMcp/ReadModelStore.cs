@@ -483,6 +483,28 @@ public sealed class ReadModelStore
         }
     }
 
+    // Reports the age of the oldest dataset section without caller authorization or record access,
+    // so an external monitor can tell whether the worker is still publishing.
+    public ReadModelFreshness GetFreshness()
+    {
+        lock (gate)
+        {
+            using var db = Open();
+            using var tx = db.BeginTransaction();
+            var datasetId = Scalar(db, tx, """
+                SELECT runs.id FROM current JOIN runs ON runs.id=current.run
+                WHERE current.available=1 AND runs.state='committed'
+                """) as string;
+            if (datasetId is null) return new("unavailable", null);
+            var manifest = ReadManifest(db, tx, datasetId);
+            var oldest = new[] { manifest.Inventory.AsOfUtc, manifest.Alerts.AsOfUtc, manifest.Metrics.AsOfUtc }.Min();
+            var age = clock.GetUtcNow() - oldest;
+            var state = age <= TimeSpan.FromMinutes(settings.FreshMinutes) ? "fresh"
+                : age <= TimeSpan.FromMinutes(settings.UnavailableMinutes) ? "stale" : "expired";
+            return new(state, (long)Math.Max(0, Math.Floor(age.TotalSeconds)));
+        }
+    }
+
     public Dataset ReadWindowsDataset()
     {
         lock (gate)

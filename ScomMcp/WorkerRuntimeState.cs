@@ -17,56 +17,112 @@ public sealed record WorkerRuntimeStatus(
     int ProcessId,
     bool RearmRequired,
     string? LastFailureCode,
-    DateTimeOffset? RearmedUtc);
+    DateTimeOffset? RearmedUtc,
+    DateTimeOffset? ProcessStartTimeUtc = null,
+    string? BootId = null,
+    string? HostName = null,
+    DateTimeOffset? HeartbeatUtc = null);
 
+// Terminal failure recorded earlier; automatic recovery is deliberately refused.
 public sealed class WorkerRearmRequiredException() :
     InvalidOperationException("Worker runtime state requires explicit operator rearm before collection can resume.");
+
+// Another live worker verifiably owns the lock. Not an error: the caller exits 0.
+public sealed class WorkerAlreadyRunningException() :
+    InvalidOperationException("Worker is already running.");
+
+// The lock is held but the owner cannot be confirmed healthy. Never kills the owner; restartable.
+public sealed class WorkerLockHeldException(string code) :
+    InvalidOperationException("Worker lock is held by a process that could not be verified.")
+{
+    public string Code { get; } = code;
+}
+
+// Why an unclean-exit marker was recovered automatically.
+public sealed record WorkerRecovery(string Reason);
 
 public sealed class WorkerRuntimeState : IDisposable
 {
     private const int MaxStatusBytes = 8192;
     private const string StatusFileName = "worker.status.json";
-    private const string LeaseFileName = "worker.runtime.lock";
+    private const string LockFileName = "worker.lock";
+    private const string LegacyLeaseFileName = "worker.runtime.lock";
     private const string StopRequestFileName = "worker.stop.request";
     private const string StopRequestContent = "SCOM_WORKER_STOP_REQUEST";
+    private const int HeartbeatMissFactor = 3;
+    public static readonly TimeSpan DefaultScheduleInterval = TimeSpan.FromMinutes(5);
+    public static readonly TimeSpan DefaultHeartbeatInterval = TimeSpan.FromSeconds(30);
+    private static readonly TimeSpan StartTimeTolerance = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan BootTimeTolerance = TimeSpan.FromSeconds(60);
+    private readonly object gate = new();
     private readonly string statusPath;
     private readonly string stopRequestPath;
     private readonly FileStream lease;
+    private readonly IWorkerProcessProbe probe;
+    private readonly TimeProvider clock;
+    private readonly TimeSpan heartbeatInterval;
+    private TimeSpan scheduleInterval;
     private WorkerRuntimeStatus status;
     private bool disposed;
     private int stopRequested;
     private int stopRequestInvalid;
     private string? stopRequestErrorType;
 
-    public WorkerRuntimeState(string directory)
+    public WorkerRuntimeState(string directory, TimeSpan? scheduleInterval = null,
+        IWorkerProcessProbe? probe = null, TimeProvider? clock = null, TimeSpan? heartbeatInterval = null)
     {
         directory = ValidateDirectory(directory);
+        this.probe = probe ?? WorkerProcessProbe.Default;
+        this.clock = clock ?? TimeProvider.System;
+        this.scheduleInterval = scheduleInterval ?? DefaultScheduleInterval;
+        this.heartbeatInterval = heartbeatInterval ?? DefaultHeartbeatInterval;
+        if (this.scheduleInterval <= TimeSpan.Zero || this.heartbeatInterval <= TimeSpan.Zero)
+            throw new InvalidOperationException("Worker runtime intervals must be positive.");
         statusPath = Path.Combine(directory, StatusFileName);
-        var leasePath = Path.Combine(directory, LeaseFileName);
+        var lockPath = Path.Combine(directory, LockFileName);
+        var legacyLeasePath = Path.Combine(directory, LegacyLeaseFileName);
         stopRequestPath = Path.Combine(directory, StopRequestFileName);
         RejectReparsePoint(statusPath);
-        RejectReparsePoint(leasePath);
+        RejectReparsePoint(lockPath);
+        RejectReparsePoint(legacyLeasePath);
         RejectReparsePoint(stopRequestPath);
-        lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        // Lock acquisition is the authoritative "am I alone" check; the marker only explains it.
+        lease = TryAcquire(lockPath) ?? throw DescribeHeldLock();
         try
         {
-            var now = DateTimeOffset.UtcNow;
-            status = File.Exists(statusPath)
-                ? ReadStatus()
+            // A worker from before the lock was renamed would not hold worker.lock.
+            RefuseLiveLegacyWorker(legacyLeasePath);
+            var now = this.clock.GetUtcNow();
+            var prior = File.Exists(statusPath)
+                ? ReadStatus(statusPath)
                 : new WorkerRuntimeStatus("stopped", now, now, null, null, null, 0, null, 0,
                     false, null, null);
-            if (status.RearmRequired || status.State == "running")
+            if (prior.RearmRequired)
                 throw new WorkerRearmRequiredException();
+            if (prior.State == "running")
+            {
+                // We own the lock, so the recorded owner is gone by definition.
+                Recovery = new WorkerRecovery(ClassifyStaleMarker(prior, now));
+                prior = prior with
+                {
+                    LastFailureCode = "UNEXPECTED_PRIOR_RUNNING_STATE",
+                    RearmedUtc = now
+                };
+            }
             if (File.Exists(stopRequestPath))
                 File.Delete(stopRequestPath);
-            status = status with
+            status = prior with
             {
                 State = "running",
                 StartedUtc = now,
                 UpdatedUtc = now,
                 FailureCode = null,
                 RearmRequired = false,
-                ProcessId = Environment.ProcessId
+                ProcessId = Environment.ProcessId,
+                ProcessStartTimeUtc = this.probe.OwnStartTimeUtc,
+                BootId = this.probe.BootId,
+                HostName = this.probe.HostName,
+                HeartbeatUtc = now
             };
             WriteStatus();
         }
@@ -77,46 +133,191 @@ public sealed class WorkerRuntimeState : IDisposable
         }
     }
 
+    public WorkerRecovery? Recovery { get; }
+
+    // Set once the schedule is known; the heartbeat-staleness threshold is a multiple of it.
+    public TimeSpan ScheduleInterval
+    {
+        get { lock (gate) return scheduleInterval; }
+        set
+        {
+            if (value <= TimeSpan.Zero) throw new InvalidOperationException("Worker schedule interval must be positive.");
+            lock (gate) scheduleInterval = value;
+        }
+    }
+
     public void RecordAttempt(CollectionAttemptOutcome outcome, int consecutiveDeferredAttempts)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
         if (outcome is not (CollectionAttemptOutcome.Published or CollectionAttemptOutcome.Deferred) ||
             consecutiveDeferredAttempts < 0 ||
             outcome == CollectionAttemptOutcome.Published && consecutiveDeferredAttempts != 0 ||
             outcome == CollectionAttemptOutcome.Deferred && consecutiveDeferredAttempts < 1)
             throw new InvalidOperationException("Worker runtime attempt status is inconsistent.");
-        var now = DateTimeOffset.UtcNow;
-        status = status with
+        lock (gate)
         {
-            State = "running",
-            UpdatedUtc = now,
-            LastAttemptUtc = now,
-            LastPublicationUtc = outcome == CollectionAttemptOutcome.Published ? now : status.LastPublicationUtc,
-            LastOutcome = outcome == CollectionAttemptOutcome.Published ? "published" : "deferred",
-            ConsecutiveDeferredAttempts = consecutiveDeferredAttempts,
-            FailureCode = null
-        };
-        WriteStatus();
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var now = clock.GetUtcNow();
+            status = status with
+            {
+                State = "running",
+                UpdatedUtc = now,
+                HeartbeatUtc = now,
+                LastAttemptUtc = now,
+                LastPublicationUtc = outcome == CollectionAttemptOutcome.Published ? now : status.LastPublicationUtc,
+                LastOutcome = outcome == CollectionAttemptOutcome.Published ? "published" : "deferred",
+                ConsecutiveDeferredAttempts = consecutiveDeferredAttempts,
+                FailureCode = null
+            };
+            WriteStatus();
+        }
     }
 
-    public void Stop(string failureCode)
+    // Terminal stop: any code other than WORKER_CANCELLED gates the next start behind an operator rearm.
+    public void Stop(string failureCode) => Stop(failureCode, terminal: true);
+
+    // Restartable stop: records the cause as evidence but does not gate the next start.
+    public void StopTransient(string failureCode) => Stop(failureCode, terminal: false);
+
+    private void Stop(string failureCode, bool terminal)
     {
-        ObjectDisposedException.ThrowIf(disposed, this);
-        if (string.IsNullOrWhiteSpace(failureCode) || failureCode.Length > 80 ||
-            failureCode.Any(character => !char.IsAsciiLetterOrDigit(character) && character != '_'))
+        if (!ValidCode(failureCode) || failureCode is null)
             throw new InvalidOperationException("Worker runtime failure code is invalid.");
-        var cancelled = failureCode == "WORKER_CANCELLED";
-        status = status with
+        lock (gate)
         {
-            State = "stopped",
-            UpdatedUtc = DateTimeOffset.UtcNow,
-            FailureCode = cancelled ? null : failureCode,
-            RearmRequired = !cancelled,
-            LastFailureCode = cancelled ? status.LastFailureCode : failureCode,
-            ProcessId = 0
-        };
-        WriteStatus();
+            ObjectDisposedException.ThrowIf(disposed, this);
+            var cancelled = failureCode == "WORKER_CANCELLED";
+            var gated = terminal && !cancelled;
+            status = status with
+            {
+                State = "stopped",
+                UpdatedUtc = clock.GetUtcNow(),
+                FailureCode = gated ? failureCode : null,
+                RearmRequired = gated,
+                LastFailureCode = cancelled ? status.LastFailureCode : failureCode,
+                ProcessId = 0,
+                ProcessStartTimeUtc = null
+            };
+            WriteStatus();
+        }
     }
+
+    // Refreshes heartbeatUtc. A stopped or disposed state never writes a running heartbeat.
+    public void Heartbeat()
+    {
+        lock (gate)
+        {
+            if (disposed || status.State != "running") return;
+            status = status with { HeartbeatUtc = clock.GetUtcNow() };
+            WriteStatus();
+        }
+    }
+
+    public async Task RunHeartbeatAsync(CancellationToken cancellationToken)
+    {
+        using var timer = new PeriodicTimer(heartbeatInterval);
+        try
+        {
+            while (await timer.WaitForNextTickAsync(cancellationToken))
+            {
+                try { Heartbeat(); }
+                // A missed heartbeat is retried on the next tick; only a sustained gap marks the worker stale.
+                catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+        }
+    }
+
+    private static FileStream? TryAcquire(string path)
+    {
+        try
+        {
+            return new FileStream(path, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException error) when (IsSharingViolation(error))
+        {
+            return null;
+        }
+    }
+
+    private static bool IsSharingViolation(IOException error) =>
+        (error.HResult & 0xFFFF) is 32 or 33;
+
+    private static void RefuseLiveLegacyWorker(string legacyLeasePath)
+    {
+        if (!File.Exists(legacyLeasePath)) return;
+        try
+        {
+            using var legacy = new FileStream(legacyLeasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
+        }
+        catch (IOException error) when (IsSharingViolation(error))
+        {
+            throw new WorkerLockHeldException("WORKER_LOCK_HELD_UNVERIFIED");
+        }
+    }
+
+    // The lock is held by someone else. Decide whether that is a healthy worker already running.
+    private Exception DescribeHeldLock()
+    {
+        WorkerRuntimeStatus? marker = null;
+        try
+        {
+            if (File.Exists(statusPath)) marker = ReadStatus(statusPath);
+        }
+        catch (Exception error) when (error is IOException or UnauthorizedAccessException or
+            InvalidOperationException or JsonException)
+        {
+        }
+        var now = clock.GetUtcNow();
+        if (marker is { State: "running" } && MarkerIdentifiesLiveProcess(marker))
+            return HeartbeatStale(marker, now)
+                ? new WorkerLockHeldException("WORKER_HEARTBEAT_STALE_LOCK_HELD")
+                : new WorkerAlreadyRunningException();
+        return new WorkerLockHeldException("WORKER_LOCK_HELD_UNVERIFIED");
+    }
+
+    private bool MarkerIdentifiesLiveProcess(WorkerRuntimeStatus marker) =>
+        marker.ProcessStartTimeUtc is { } recordedStart &&
+        string.Equals(marker.HostName, probe.HostName, StringComparison.OrdinalIgnoreCase) &&
+        SameBoot(marker.BootId) &&
+        probe.ProcessStartTimeUtc(marker.ProcessId) is { } actualStart &&
+        (actualStart - recordedStart).Duration() <= StartTimeTolerance;
+
+    private bool SameBoot(string? recordedBootId)
+    {
+        var current = probe.BootId;
+        if (string.Equals(recordedBootId, current, StringComparison.Ordinal)) return true;
+        return WorkerProcessProbe.TryParseBootId(recordedBootId, out var recorded) &&
+            WorkerProcessProbe.TryParseBootId(current, out var actual) &&
+            (recorded - actual).Duration() <= BootTimeTolerance;
+    }
+
+    private bool HeartbeatStale(WorkerRuntimeStatus marker, DateTimeOffset now) =>
+        marker.HeartbeatUtc is not { } heartbeat ||
+        now - heartbeat > HeartbeatMissFactor * ScheduleInterval;
+
+    private string ClassifyStaleMarker(WorkerRuntimeStatus marker, DateTimeOffset now)
+    {
+        if (marker.HostName is not null &&
+            !string.Equals(marker.HostName, probe.HostName, StringComparison.OrdinalIgnoreCase))
+            return "HOST_CHANGED";
+        if (marker.BootId is not null && !SameBoot(marker.BootId))
+            return "BOOT_ID_CHANGED";
+        if (probe.ProcessStartTimeUtc(marker.ProcessId) is not { } actualStart)
+            return "PROCESS_NOT_RUNNING";
+        if (marker.ProcessStartTimeUtc is { } recordedStart &&
+            (actualStart - recordedStart).Duration() > StartTimeTolerance)
+            return "PID_REUSED";
+        if (marker.ProcessStartTimeUtc is null)
+            return "IDENTITY_UNAVAILABLE";
+        return HeartbeatStale(marker, now) ? "HEARTBEAT_STALE" : "LOCK_FREE_NO_OWNER";
+    }
+
+    internal static WorkerRuntimeStatus ReadStatusFile(string directory) =>
+        ReadStatus(Path.Combine(ValidateDirectory(directory), StatusFileName));
 
     public bool StopRequested => Volatile.Read(ref stopRequested) != 0;
     public bool StopRequestInvalid => Volatile.Read(ref stopRequestInvalid) != 0;
@@ -178,34 +379,11 @@ public sealed class WorkerRuntimeState : IDisposable
         stream.Flush(true);
     }
 
-    private WorkerRuntimeStatus ReadStatus()
-    {
-        var prior = ReadStatus(statusPath);
-        if (prior.State is not ("running" or "stopped") || prior.StartedUtc == default ||
-            prior.UpdatedUtc == default || prior.ConsecutiveDeferredAttempts < 0 ||
-            prior.ProcessId < 0 || prior.LastOutcome is not (null or "published" or "deferred") ||
-            !ValidCode(prior.FailureCode) || !ValidCode(prior.LastFailureCode) ||
-            prior.RearmRequired && prior.State != "stopped" ||
-            prior.State == "running" && (prior.ProcessId == 0 || prior.FailureCode is not null) ||
-            prior.State == "stopped" && (prior.ProcessId != 0 ||
-                prior.RearmRequired != (prior.FailureCode is not null) ||
-                prior.RearmRequired && prior.LastFailureCode != prior.FailureCode))
-            throw new InvalidOperationException("Worker runtime status is invalid.");
-        var rearmRequired = prior.RearmRequired || prior.State == "running" ||
-            prior.FailureCode is not null && prior.FailureCode != "WORKER_CANCELLED";
-        return prior with
-        {
-            RearmRequired = rearmRequired,
-            LastFailureCode = prior.LastFailureCode ?? (rearmRequired ? prior.FailureCode ??
-                "UNEXPECTED_PRIOR_RUNNING_STATE" : null)
-        };
-    }
-
     public static void Rearm(string directory)
     {
         directory = ValidateDirectory(directory);
         var statusPath = Path.Combine(directory, StatusFileName);
-        var leasePath = Path.Combine(directory, LeaseFileName);
+        var leasePath = Path.Combine(directory, LockFileName);
         RejectReparsePoint(statusPath);
         RejectReparsePoint(leasePath);
         using var lease = new FileStream(leasePath, FileMode.OpenOrCreate, FileAccess.ReadWrite, FileShare.None);
@@ -226,17 +404,20 @@ public sealed class WorkerRuntimeState : IDisposable
                 ? "UNEXPECTED_PRIOR_RUNNING_STATE"
                 : status.LastFailureCode ?? status.FailureCode,
             RearmedUtc = DateTimeOffset.UtcNow,
-            ProcessId = 0
+            ProcessId = 0,
+            ProcessStartTimeUtc = null
         };
         WriteStatus(statusPath, rearmed);
     }
 
     private static WorkerRuntimeStatus ReadStatus(string path)
     {
-        var info = new FileInfo(path);
-        if (info.Length is 0 or > MaxStatusBytes)
+        // Readers share the file so a heartbeat replace never fails a concurrent status read, and a
+        // read never blocks the worker's atomic replace.
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read,
+            FileShare.ReadWrite | FileShare.Delete);
+        if (stream.Length is 0 or > MaxStatusBytes)
             throw new InvalidOperationException("Worker runtime status is empty or exceeds its byte budget.");
-        using var stream = info.OpenRead();
         using var document = JsonDocument.Parse(stream);
         SnapshotReader.RejectDuplicateProperties(document.RootElement);
         if (document.RootElement.ValueKind != JsonValueKind.Object)
@@ -247,8 +428,13 @@ public sealed class WorkerRuntimeState : IDisposable
             "lastOutcome", "consecutiveDeferredAttempts", "failureCode", "processId",
             "rearmRequired", "lastFailureCode", "rearmedUtc"
         };
+        // Written by workers from this release on; absent in status files from earlier releases.
+        var optionalProperties = new HashSet<string>(StringComparer.Ordinal)
+        {
+            "processStartTimeUtc", "bootId", "hostName", "heartbeatUtc"
+        };
         foreach (var property in document.RootElement.EnumerateObject())
-            if (!expectedProperties.Remove(property.Name))
+            if (!expectedProperties.Remove(property.Name) && !optionalProperties.Contains(property.Name))
                 throw new InvalidOperationException("Worker runtime status contains an unknown property.");
         if (expectedProperties.Count != 0)
             throw new InvalidOperationException("Worker runtime status is missing required properties.");
@@ -258,6 +444,7 @@ public sealed class WorkerRuntimeState : IDisposable
             status.UpdatedUtc == default || status.ConsecutiveDeferredAttempts < 0 ||
             status.ProcessId < 0 || status.LastOutcome is not (null or "published" or "deferred") ||
             !ValidCode(status.FailureCode) || !ValidCode(status.LastFailureCode) ||
+            !ValidIdentityText(status.BootId, 64) || !ValidIdentityText(status.HostName, 255) ||
             status.RearmRequired && status.State != "stopped" ||
             status.State == "running" && (status.ProcessId == 0 || status.FailureCode is not null) ||
             status.State == "stopped" && (status.ProcessId != 0 ||
@@ -270,6 +457,9 @@ public sealed class WorkerRuntimeState : IDisposable
     private static bool ValidCode(string? code) => code is null ||
         code.Length is > 0 and <= 80 && code.All(character =>
             char.IsAsciiLetterOrDigit(character) || character == '_');
+
+    private static bool ValidIdentityText(string? value, int maxLength) => value is null ||
+        value.Length is > 0 && value.Length <= maxLength && value.All(character => !char.IsControl(character));
 
     private static string ValidateDirectory(string directory)
     {
@@ -303,7 +493,20 @@ public sealed class WorkerRuntimeState : IDisposable
                 stream.Write(bytes);
                 stream.Flush(true);
             }
-            File.Move(temporary, statusPath, true);
+            // An operator tool or scanner can briefly hold the status file open without delete sharing.
+            for (var attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    File.Move(temporary, statusPath, true);
+                    break;
+                }
+                catch (Exception error) when (attempt < 5 &&
+                    error is IOException or UnauthorizedAccessException)
+                {
+                    Thread.Sleep(50 * attempt);
+                }
+            }
         }
         finally
         {
@@ -319,9 +522,12 @@ public sealed class WorkerRuntimeState : IDisposable
 
     public void Dispose()
     {
-        if (disposed) return;
-        disposed = true;
-        lease.Dispose();
+        lock (gate)
+        {
+            if (disposed) return;
+            disposed = true;
+            lease.Dispose();
+        }
     }
 }
 

@@ -3,6 +3,13 @@ Set-StrictMode -Version 2
 
 function Get-RefreshTaskMarker { return 'SCOM-MCP-DURABLE-INDEXED-REFRESH-V1' }
 
+function Register-RefreshEventSource {
+    # Source creation needs elevation; the worker account only writes events to an existing source.
+    if (-not [Diagnostics.EventLog]::SourceExists('ScomMcpWorker')) {
+        [Diagnostics.EventLog]::CreateEventSource('ScomMcpWorker', 'Application')
+    }
+}
+
 function Resolve-RefreshLocalPath {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
@@ -88,7 +95,8 @@ function Get-OwnedRefreshTask {
         $task.Principal.UserId -match '^(NT AUTHORITY\\)?(SYSTEM|LOCAL SERVICE|NETWORK SERVICE)$' -or
         [string]$task.Principal.LogonType -ne 'Password' -or
         [string]$task.Settings.MultipleInstances -ne 'IgnoreNew' -or
-        [int]$task.Settings.RestartCount -ne 0) {
+        [int]$task.Settings.RestartCount -ne 3 -or
+        [string]$task.Settings.RestartInterval -ne 'PT5M') {
         throw 'The selected task no longer matches the durable indexed-refresh task contract.'
     }
     $action = Get-RefreshTaskActionInfo -Task $task
@@ -181,11 +189,14 @@ function Read-RefreshRuntimeStatus {
     $expected = @('state', 'startedUtc', 'updatedUtc', 'lastAttemptUtc', 'lastPublicationUtc',
         'lastOutcome', 'consecutiveDeferredAttempts', 'failureCode', 'processId', 'rearmRequired',
         'lastFailureCode', 'rearmedUtc')
+    $optional = @('processStartTimeUtc', 'bootId', 'hostName', 'heartbeatUtc')
     $names = @($runtime.PSObject.Properties | ForEach-Object { $_.Name })
-    if ($names.Count -ne $expected.Count -or
-        @($names | Where-Object { $_ -notin $expected }).Count -ne 0 -or
+    if (@($names | Where-Object { $_ -notin $expected -and $_ -notin $optional }).Count -ne 0 -or
         @($expected | Where-Object { $_ -notin $names }).Count -ne 0) {
         throw 'Worker status properties are unknown or incomplete; inspect protected state.'
+    }
+    foreach ($name in $optional) {
+        if ($name -notin $names) { $runtime | Add-Member -NotePropertyName $name -NotePropertyValue $null }
     }
     $parsedTimestamp = [DateTimeOffset]::MinValue
     foreach ($timestamp in @('startedUtc', 'updatedUtc')) {
@@ -195,7 +206,7 @@ function Read-RefreshRuntimeStatus {
             throw 'Worker status timestamps are malformed; inspect protected state.'
         }
     }
-    foreach ($timestamp in @('lastAttemptUtc', 'lastPublicationUtc', 'rearmedUtc')) {
+    foreach ($timestamp in @('lastAttemptUtc', 'lastPublicationUtc', 'rearmedUtc', 'processStartTimeUtc', 'heartbeatUtc')) {
         if ($null -ne $runtime.$timestamp -and -not [DateTimeOffset]::TryParse(
             [string]$runtime.$timestamp, [Globalization.CultureInfo]::InvariantCulture,
             [Globalization.DateTimeStyles]::RoundtripKind, [ref]$parsedTimestamp)) {
@@ -219,9 +230,12 @@ function Read-RefreshRuntimeStatus {
     if ($invalidStatus) {
         throw 'Worker status is inconsistent; inspect protected state before starting or rearming.'
     }
+    # A leftover running marker is no longer a gate: the worker proves it is stale and recovers on start.
     $runtime | Add-Member -NotePropertyName NeedsRearm -NotePropertyValue (
-        [bool]($runtime.rearmRequired -or ($runtime.state -eq 'running' -and -not $TaskRunning) -or
+        [bool]($runtime.rearmRequired -or
             ($runtime.failureCode -and $runtime.failureCode -ne 'WORKER_CANCELLED')))
+    $runtime | Add-Member -NotePropertyName StaleMarker -NotePropertyValue (
+        [bool]($runtime.state -eq 'running' -and -not $TaskRunning))
     return $runtime
 }
 

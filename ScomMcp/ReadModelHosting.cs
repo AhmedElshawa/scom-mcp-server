@@ -1,4 +1,6 @@
 using System.Security.Claims;
+using System.Text.Json;
+using Microsoft.Data.Sqlite;
 
 namespace ScomMcp;
 
@@ -29,6 +31,19 @@ public static class ReadModelHosting
         var settings = app.Services.GetRequiredService<ReadModelSettings>();
         if (!settings.Enabled) return;
         _ = app.Services.GetRequiredService<ReadModelStore>();
+        // Anonymous like /healthz, but reports only a state word and an age in seconds.
+        app.MapGet("/healthz/freshness", (ReadModelStore store) =>
+        {
+            ReadModelFreshness result;
+            try { result = store.GetFreshness(); }
+            catch (Exception error) when (error is SqliteException or InvalidOperationException or
+                JsonException or QueryFault)
+            {
+                result = new("unavailable", null);
+            }
+            return Results.Json(result, Wire.Json,
+                statusCode: result.Status == "fresh" ? StatusCodes.Status200OK : StatusCodes.Status503ServiceUnavailable);
+        }).AllowAnonymous();
         var ingestion = app.MapGroup("/ingestion").RequireAuthorization("ScomIngest").RequireRateLimiting("ScomIngestion");
         ingestion.MapPost("/sessions/{sessionId}", (string sessionId, HttpContext context, ReadModelStore store) =>
             Handle(context, () => new { sessionId = store.Begin(Publisher(context), sessionId) }));

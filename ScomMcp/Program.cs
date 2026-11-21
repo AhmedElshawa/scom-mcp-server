@@ -77,7 +77,7 @@ if (args.Length > 0 && args[0] is "--worker" or "--worker-once")
     if (!validArguments)
     {
         Console.Error.WriteLine("Worker mode requires an absolute configuration path and optional runtime state directory.");
-        Environment.ExitCode = 1;
+        Environment.ExitCode = CollectionWorkerHost.ExitNotRestartable;
         return;
     }
     using var shutdown = new CancellationTokenSource();
@@ -91,7 +91,7 @@ if (args.Length > 0 && args[0] is "--worker" or "--worker-once")
     catch (Exception)
     {
         Console.Error.WriteLine("SCOM_WORKER_FAILED Code=WORKER_CONFIGURATION_OR_EXECUTION_FAILED");
-        Environment.ExitCode = 1;
+        Environment.ExitCode = CollectionWorkerHost.ExitNotRestartable;
     }
     finally { Console.CancelKeyPress -= stop; }
     return;

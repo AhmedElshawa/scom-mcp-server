@@ -16,10 +16,10 @@ provisioning are part of this flow. New installations must complete the
 indexed reads unavailable until commit (about 35 seconds in the observed lab,
 not a duration guarantee). A failed attempt can leave them unavailable until
 recovery. Repeated scheduled publications and an operator-rearmed postboot
-publication were observed, but automatic recovery after an unclean reboot was
-not: a startup attempt exited while status still showed the preboot running
-state, consistent with the persisted fail-closed gate (the exit cause was not
-independently proven). The planned cooperative-stop/reboot path remains
+publication were observed. That reboot predates the self-healing worker, which
+now recovers a stale `running` marker automatically (synthetic tests; see the
+introducing pull request for the lab reboot result). The planned
+cooperative-stop/reboot path remains
 untested. See the [sanitized lab evidence and operator procedure](../Operations/DurableIndexedRefresh/README.md).
 This evaluation release is not continuous-availability or production
 certification.
@@ -1697,7 +1697,8 @@ dotnet run --configuration Release
 ```
 
 The MCP endpoint is `/mcp`; `/healthz` is an unauthenticated process-health
-endpoint. For remote use, provide TLS, restrict network access, configure the
+endpoint, and the receiver also serves an anonymous, minimal `/healthz/freshness`
+(`{"status","ageSeconds"}`; 200 fresh, 503 stale/expired/unavailable; 404 when the read model is disabled). For remote use, provide TLS, restrict network access, configure the
 correct host, and independently review your reverse proxy or IIS deployment.
 Do not expose the local HTTP example to an untrusted network. A client must
 obtain a valid, signed delegated token with the configured audience, tenant,

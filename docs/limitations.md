@@ -30,5 +30,5 @@ hidden. Details: [mcp-server-spec.md](mcp-server-spec.md).
   UNIX/Linux and application metrics are out of scope.
 - Class, property and relationship names are management-pack dependent; the examples are candidates, not guarantees.
 - Disk-size and memory units depend on the property metadata and must be verified ([examples/worker.example.md](../examples/worker.example.md)).
-- Lab validation covers a three-server Windows Server 2022 environment only; the hourly cadence, larger sizes, certificate-rotation and clean-stop-then-reboot paths are not lab-verified.
+- Lab validation covers a three-server Windows Server 2022 environment only; the hourly cadence, larger sizes, certificate-rotation and clean-stop-then-reboot paths are not lab-verified. Automatic worker self-recovery after a reboot is covered by synthetic tests; see the pull request that introduced it for the lab reboot result.
 - Unsigned community release; no warranty ([../LICENSE](../LICENSE)).

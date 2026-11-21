@@ -258,7 +258,7 @@ All values are part of the checkpoint settings hash (Policy: **Yes**).
 | `--worker-stop-request <dir>` / `--worker-rearm <dir>` | Cooperative stop; operator rearm after a gated stop |
 | `--validate-setup <serverDir> <workerPath>` / `--validate-setup-json <path>` | Offline configuration checks |
 
-`--runtime-state-dir` is a separate local, non-network, non-reparse directory holding `worker.status.json` (≤ 8192 bytes), `worker.runtime.lock` and `worker.stop.request`. It is not configuration, but a prior `running` state or `rearmRequired=true` blocks the next start until an explicit rearm (see [operations.md](operations.md) and `Operations\DurableIndexedRefresh\README.md`).
+`--runtime-state-dir` is a separate local, non-network, non-reparse directory holding `worker.status.json` (≤ 8192 bytes), `worker.lock` (held exclusively for the process lifetime) and `worker.stop.request`. It is not configuration. A stale `running` state left by a crash or reboot is recovered automatically at the next start; only `rearmRequired=true` after a terminal failure (`WORKER_RECOVERY_REFUSED`, exit 2) blocks the start until an explicit rearm (see [operations.md](operations.md) and `Operations\DurableIndexedRefresh\README.md`). Worker exit codes: `0` published or already running, `1` transient failure (restartable), `2` configuration or attestation failure.
 
 ## 3. Settings that must match between receiver and worker
 
