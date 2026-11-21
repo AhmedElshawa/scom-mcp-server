@@ -1,14 +1,23 @@
 # Screenshots
 
-Committed so far: the five `entra-setup-*.png` files and `copilot-studio-connection.png`
-(real captures from the lab tenant with the tenant, account and all identifiers redacted).
-The others in the table below are still to be captured. Screenshots show lab or customer
-identifiers (hostnames, tenant, app and object GUIDs, IP addresses, thumbprints, user
-names), and capturing them needs an interactive Entra, Copilot Studio or RDP session, so
-each one is redacted by hand before it is committed.
+Committed so far: the five `entra-setup-*.png` files, `copilot-studio-connection.png` and
+`copilot-studio-tools.png` (real captures from the lab tenant with the tenant, account and
+all identifiers redacted). The others in the table below are still **pending**; the reason
+for each is in the Status column. Screenshots show lab or customer identifiers (hostnames,
+tenant, app and object GUIDs, IP addresses, thumbprints, user names), so each one is
+redacted before it is committed.
 
-Capture, **redact** (blur or replace hostnames, GUIDs, IPs, thumbprints, accounts), save as PNG
-at 1 MB or less, and name by documentation section:
+Capture, **redact** (opaque filled rectangles only; never blur or pixelate hostnames, GUIDs,
+IPs, thumbprints, accounts), save as PNG at 1 MB or less and 1280 px wide or less with EXIF
+stripped, and name by documentation section. `copilot-studio-tools.png` shows 13 tools, not
+six.
+
+Status of the files not yet committed: `copilot-studio-connector.png`, `readme-agent-answer.png`,
+`readme-agent-count.png`, `iis-https-binding.png`, `wizard-prerequisites.png`,
+`wizard-configuration.png` and `terminal-accept.png` were not captured. The Copilot Studio tool
+detail page shows no server URL, transport or OAuth fields (those live in the Power Apps custom
+connector, which was not reachable in the automated browser session), and the remaining
+captures need interactive Bastion or Test-pane sessions that were not completed.
 
 | File name | Shows | Used in |
 |---|---|---|
@@ -22,5 +31,10 @@ at 1 MB or less, and name by documentation section:
 | `entra-setup-reader-permissions.png` | Reader app, delegated `Scom.Read` | [entra-setup.md](../entra-setup.md) |
 | `copilot-studio-connector.png` | Custom MCP connector settings (no secret visible) | [copilot-studio-integration.md](../copilot-studio-integration.md) |
 | `copilot-studio-connection.png` | Connection created and tool added to the agent | [copilot-studio-integration.md](../copilot-studio-integration.md) |
+| `copilot-studio-tools.png` | Agent Tools page, all tools enabled (13 tools) | [deployment-guide.md](../deployment-guide.md) |
+| `readme-agent-count.png` | Agent answering "How many servers do we have?" (pending) | [deployment-guide.md](../deployment-guide.md) |
+| `iis-https-binding.png` | IIS Manager https binding edit dialog (pending) | [deployment-guide.md](../deployment-guide.md) |
+| `wizard-prerequisites.png`, `wizard-configuration.png` | Setup wizard prerequisites and configuration screens (pending) | [install-wizard.md](../install-wizard.md) |
+| `terminal-accept.png` | Terminal showing `SETUP_STAGE=accepted` (pending) | [deployment-guide.md](../deployment-guide.md) |
 
 After adding a file, embed it with a normal relative image link in the section named above.

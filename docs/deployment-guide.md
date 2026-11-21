@@ -737,6 +737,11 @@ The connection appears as **Connected** under Copilot Studio's **Manage your con
 📷 *Screenshot pending: `copilot-studio-connector.png`; see
 [screenshots/README.md](screenshots/README.md).*
 
+The agent's **Tools** page lists the server's tools with their toggles on (the lab server
+exposes 13 read-only tools):
+
+![Copilot Studio Tools page listing the SCOM MCP tools, all enabled](screenshots/copilot-studio-tools.png)
+
 At this point you should have a working connection: the agent lists the server's tools and
 `<CALLBACK_URI>` is saved on the reader app. If sign-in fails with a redirect mismatch,
 `<CALLBACK_URI>` was not saved on the reader app exactly as shown; see
