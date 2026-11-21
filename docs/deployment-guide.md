@@ -949,9 +949,9 @@ collection commits is correct behaviour, not a failure.
 
 *The agent's answer to "How many servers do we have?", including the Data status block (server names redacted).*
 
-![Test pane answer to "Which servers are nearest end of support?" with the lifecycle table and "Not in the lifecycle catalog." for the unmapped server; server names redacted](screenshots/readme-agent-answer.png)
+![Test pane answer to "Which servers are nearest end of support?" with the lifecycle table, "Not in the lifecycle catalog." for the unmapped server, and the Data Status block; server names redacted](screenshots/readme-agent-answer.png)
 
-*The agent's answer to "Which servers are nearest end of support?" (server names redacted; the Data status block follows below the visible area).*
+*The agent's answer to "Which servers are nearest end of support?" (server names redacted), including the Data Status block.*
 
 You are done. Day-two operation (logs, policy changes, recovery, lifecycle catalog):
 [operations](operations.md).
